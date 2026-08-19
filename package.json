@@ -1,10 +1,25 @@
 {
-  "name": "dsh-prompt-library",
-  "version": "0.2.0",
+  "name": "@sunjuntao/dsh-prompt-library",
+  "version": "0.2.1-rc",
   "description": "DSH web 插件：在 composer 工具栏注入一个「提示词库」按钮，管理可复用 prompt 片段，点击插入当前输入框。host 侧用文件持久化到 ~/.dsh/prompt-library.json。",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/types/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/master1Sun/dsh-prompt-library.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "dsh",
+    "plugin",
+    "prompt",
+    "prompt-library",
+    "提示词"
+  ],
+  "author": "master1Sun",
   "exports": {
     ".": {
       "types": "./lib/types/index.d.ts",
@@ -37,7 +52,10 @@
   "scripts": {
     "link-dsh-deps": "node scripts/link-dsh-deps.mjs",
     "build": "node scripts/build.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepare": "node scripts/build.mjs",
+    "prepublishOnly": "node scripts/build.mjs",
+    "publish": "npm publish --access public"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1-rc.1",
@@ -45,9 +63,15 @@
     "react-dom": "^18.2.0"
   },
   "peerDependenciesMeta": {
-    "@deepseek-ai/cordis": { "optional": false },
-    "react": { "optional": false },
-    "react-dom": { "optional": true }
+    "@deepseek-ai/cordis": {
+      "optional": false
+    },
+    "react": {
+      "optional": false
+    },
+    "react-dom": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
@@ -55,9 +79,8 @@
     "esbuild": "^0.23.0",
     "typescript": "^5.6.0"
   },
+  "license": "MIT",
   "engines": {
     "node": ">=22.19"
-  },
-  "license": "MIT",
-  "private": true
+  }
 }

@@ -67,13 +67,26 @@ function transaction<T>(fn: (store: PromptStoreFile) => Promise<T> | T): Promise
 }
 
 /**
- * 按更新时间降序排序（新增的在最前面），更新时间相同的按使用次数降序。
+ * 排序规则：
+ * 1. 使用次数最高的前 3 个提示词固定置顶（常用优先）；
+ * 2. 其余提示词按更新时间降序（新增的在最前面），更新时间相同的按使用次数降序。
  */
 function sortPrompts(prompts: Prompt[]): Prompt[] {
-  return prompts.sort((a, b) => {
-    if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt;
-    return b.usageCount - a.usageCount;
+  // 使用次数最高的前 3 个（使用次数相同时，更新时间新的在前）
+  const byUsage = [...prompts].sort((a, b) => {
+    if (b.usageCount !== a.usageCount) return b.usageCount - a.usageCount;
+    return b.updatedAt - a.updatedAt;
   });
+  const topUsed = byUsage.slice(0, 3);
+  const topUsedIds = new Set(topUsed.map((p) => p.id));
+  // 其余按更新时间降序
+  const rest = prompts
+    .filter((p) => !topUsedIds.has(p.id))
+    .sort((a, b) => {
+      if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt;
+      return b.usageCount - a.usageCount;
+    });
+  return [...topUsed, ...rest];
 }
 
 /**

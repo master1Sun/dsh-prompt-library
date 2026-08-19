@@ -28,6 +28,7 @@ import {
   usePrompt as apiUse,
 } from "./api.js";
 import { SidebarPromptLibrary } from "./SidebarPromptLibrary.js";
+import { isRecent, markRecent } from "./recent-created.js";
 
 
 /**
@@ -98,7 +99,8 @@ function useAutoLearn(
     timerRef.current = setTimeout(async () => {
       submittedRef.current.add(normalized);
       try {
-        await apiLearn(text, settings.autoLearnTag);
+        const learned = await apiLearn(text, settings.autoLearnTag);
+        markRecent(learned.id);
         onLearned();
       } catch {
         // 静默失败
@@ -117,9 +119,44 @@ function useAutoLearn(
   }, []);
 }
 
-// ── ~ 键触发 ────────────────────────────────────────────────────────────────
+// ── # 键触发 ────────────────────────────────────────────────────────────────
 
 let lastPromptsForSelect: Prompt[] = [];
+
+/**
+ * 获取可编辑元素的当前文本。
+ * 兼容 textarea / input（取 value）与 contenteditable（取 textContent）。
+ */
+function getEditableText(el: HTMLElement): string | null {
+  if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
+    return el.value;
+  }
+  if (el.isContentEditable) {
+    return el.textContent ?? "";
+  }
+  return null;
+}
+
+/**
+ * 获取光标在文本中的位置。
+ * textarea / input 用 selectionStart；contenteditable 用 Selection + Range 计算。
+ */
+function getCaretPosition(el: HTMLElement): number {
+  if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
+    const text = getEditableText(el);
+    return el.selectionStart ?? text?.length ?? 0;
+  }
+  if (el.isContentEditable) {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return 0;
+    const range = sel.getRangeAt(0);
+    const pre = range.cloneRange();
+    pre.selectNodeContents(el);
+    pre.setEnd(range.endContainer, range.endOffset);
+    return pre.toString().length;
+  }
+  return 0;
+}
 
 function useTildaTrigger(
   settings: PluginSettings,
@@ -136,6 +173,22 @@ function useTildaTrigger(
 
   useEffect(() => {
     if (!settings.tildaTriggerEnabled) return;
+
+    // 检测光标前一个字符是否为「#」（且前面是空格/换行/开头），是则弹出词库选择
+    const tryShowOverlay = (target: EventTarget | null): void => {
+      if (activeRef.current) return;
+      const el = target as HTMLElement | null;
+      if (!el || !(el instanceof HTMLElement)) return;
+      const value = getEditableText(el);
+      if (value === null) return;
+      const selStart = getCaretPosition(el);
+      if (selStart <= 0) return;
+      if (value[selStart - 1] !== "#") return;
+      const prevChar = selStart > 1 ? value[selStart - 2] : " ";
+      if (prevChar !== " " && prevChar !== "\n") return;
+      activeRef.current = true;
+      showOverlay(el, lastPromptsForSelect, inputActionsRef.current, draftRef.current);
+    };
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (activeRef.current) {
@@ -162,27 +215,59 @@ function useTildaTrigger(
       }
     };
 
-    const onInput = (e: Event) => {
-      if (!settings.tildaTriggerEnabled) return;
-      const target = e.target as HTMLTextAreaElement | HTMLInputElement | null;
-      if (!target) return;
-      const value = target.value;
-      const selStart = target.selectionStart ?? 0;
-
-      if (selStart > 0 && value[selStart - 1] === "~" && !activeRef.current) {
-        const prevChar = selStart > 1 ? value[selStart - 2] : " ";
-        if (prevChar === " " || prevChar === "\n" || selStart === 1) {
-          activeRef.current = true;
-          showOverlay(target, lastPromptsForSelect, inputActionsRef.current, draftRef.current);
-        }
+    // keyup 事件：按键抬起时内容已更新，IME（中文输入法）下比 input 更可靠
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "#" || e.key === "3" || e.key === "Dead" || e.key === "Process") {
+        tryShowOverlay(e.target);
       }
     };
 
+    // input 事件：正常输入时触发
+    const onInput = (e: Event) => {
+      // 已激活浮层时：若光标前已不是「#」（用户继续打字/删除），关闭浮层，允许下次再触发
+      if (activeRef.current) {
+        const el = e.target as HTMLElement | null;
+        if (el instanceof HTMLElement) {
+          const value = getEditableText(el);
+          const selStart = getCaretPosition(el);
+          if (value === null || selStart <= 0 || value[selStart - 1] !== "#") {
+            activeRef.current = false;
+            removeOverlay();
+          }
+        }
+        return;
+      }
+      tryShowOverlay(e.target);
+    };
+
+    // compositionend 事件：中文输入法组合结束后内容才真正更新
+    const onCompositionEnd = (e: Event) => tryShowOverlay(e.target);
+
+    // 点击浮层外部空白处 → 隐藏浮层（捕获阶段，避免被 stopPropagation 拦截）
+    const onDocClick = (e: MouseEvent) => {
+      if (!activeRef.current) return;
+      const target = e.target as HTMLElement | null;
+      if (!(target instanceof HTMLElement)) return;
+      const overlay = document.querySelector<HTMLDivElement>("[data-prompt-library-overlay]");
+      // 点击浮层内部 → 不关闭（浮层内点击项自带处理）
+      if (overlay && overlay.contains(target)) return;
+      // 点击输入框本身 → 不关闭（保持浮层，方便继续操作）
+      if (target.closest("textarea, input, [contenteditable='true']")) return;
+      activeRef.current = false;
+      removeOverlay();
+    };
+
     document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("keyup", onKeyUp);
     document.addEventListener("input", onInput);
+    document.addEventListener("compositionend", onCompositionEnd);
+    document.addEventListener("click", onDocClick, true);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("keyup", onKeyUp);
       document.removeEventListener("input", onInput);
+      document.removeEventListener("compositionend", onCompositionEnd);
+      document.removeEventListener("click", onDocClick, true);
       removeOverlay();
     };
   }, [settings.tildaTriggerEnabled]);
@@ -273,7 +358,7 @@ function getSelectedPrompt(): Prompt | null {
 }
 
 function applyPrompt(prompt: Prompt, inputActions: { setDraft: (text: string) => void }, draft: string): void {
-  const idx = draft.lastIndexOf("~");
+  const idx = draft.lastIndexOf("#");
   if (idx >= 0) {
     inputActions.setDraft(`${draft.slice(0, idx)}${prompt.body}${draft.slice(idx + 1)}`);
   } else {
@@ -326,7 +411,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   });
   const [toast, setToast] = useState<{ visible: boolean }>({ visible: false });
 
-  const [settings, settingsReady] = useSettings();
+  const [settings] = useSettings();
   const panelId = useId();
   const refreshController = useRef<AbortController | null>(null);
 
@@ -363,9 +448,10 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   // ~ 键触发
   useTildaTrigger(settings, prompts, inputActions, draft);
 
+  // 组件挂载即加载提示词列表（供 # 触发 / 自动学习使用，不依赖面板是否打开）
   useEffect(() => {
-    if (open && phase === "idle") refresh();
-  }, [open, phase, refresh]);
+    if (phase === "idle") refresh();
+  }, [phase, refresh]);
 
   useEffect(() => {
     if (!open) return;
@@ -427,7 +513,10 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
       refresh();
     };
     if (editor.mode === "create") {
-      apiCreate({ title, body, tags }).then(done, (e: unknown) =>
+      apiCreate({ title, body, tags }).then((p) => {
+        markRecent(p.id);
+        done();
+      }, (e: unknown) =>
         setError(e instanceof Error ? e.message : String(e)),
       );
     } else if (editor.mode === "edit" && editor.id) {
@@ -476,6 +565,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
 
   return (
     <span data-prompt-library style={containerStyle}>
+      <style>{`@keyframes pl-refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
       <button
         type="button"
         onClick={handleButtonClick}
@@ -562,24 +652,46 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
               }}
             >
               <strong style={{ fontSize: 14, fontWeight: 470 }}>提示词库</strong>
-              <button
-                type="button"
-                onClick={startCreate}
-                disabled={editing}
-                style={{
-                  color: TONE.accent,
-                  background: "transparent",
-                  border: `1px solid ${TONE.border}`,
-                  borderRadius: 6,
-                  padding: "3px 8px",
-                  fontSize: 12,
-                  cursor: editing ? "not-allowed" : "pointer",
-                  opacity: editing ? 0.5 : 1,
-                  fontFamily: MONO,
-                }}
-              >
-                + 新建
-              </button>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <button
+                  type="button"
+                  onClick={refresh}
+                  disabled={phase === "loading"}
+                  style={{
+                    ...ghostBtnStyle,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    cursor: phase === "loading" ? "not-allowed" : "pointer",
+                    opacity: phase === "loading" ? 0.7 : 1,
+                  }}
+                  title={phase === "loading" ? "刷新中…" : "刷新提示词列表"}
+                >
+                  <svg
+                    width="13" height="13" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" strokeWidth="2"
+                    strokeLinecap="round" strokeLinejoin="round"
+                    style={{ animation: phase === "loading" ? "pl-refresh-spin 0.9s linear infinite" : "none" }}
+                  >
+                    <path d="M23 4v6h-6M1 20v-6h6" />
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                  </svg>
+                  {phase === "loading" ? "刷新中…" : "刷新"}
+                </button>
+                <button
+                  type="button"
+                  onClick={startCreate}
+                  disabled={editing}
+                  style={{
+                    ...ghostBtnStyle,
+                    color: TONE.accent,
+                    cursor: editing ? "not-allowed" : "pointer",
+                    opacity: editing ? 0.5 : 1,
+                  }}
+                >
+                  + 新建
+                </button>
+              </div>
             </header>
 
             {!editing && (
@@ -667,10 +779,20 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                         display: "flex",
                         flexDirection: "column",
                         gap: 6,
+                        ...(isRecent(p.id)
+                          ? { background: "rgba(142, 197, 255, 0.10)", borderLeft: `3px solid ${TONE.accent}` }
+                          : {}),
                       }}
                     >
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>
-                        <strong style={{ fontSize: 13, fontWeight: 460 }}>{p.title}</strong>
+                        <strong style={{
+                          fontSize: 13,
+                          fontWeight: 460,
+                          ...(isRecent(p.id) ? { color: TONE.accent } : {}),
+                        }}>{p.title}</strong>
+                        {isRecent(p.id) && (
+                          <span style={{ color: TONE.accent, fontSize: 10 }}>新增</span>
+                        )}
                         {p.tags && p.tags.length > 0 && (
                           <span style={{ color: TONE.quiet, fontSize: 11 }}>
                             {p.tags.map((t) => `#${t}`).join(" ")}
@@ -699,19 +821,6 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                 </ul>
               )}
             </div>
-
-            <footer
-              style={{
-                display: "flex",
-                justifyContent: "flex-end",
-                alignItems: "center",
-                padding: "10px 16px",
-                borderTop: `1px solid ${TONE.border}`,
-                flexShrink: 0,
-              }}
-            >
-              <button type="button" onClick={refresh} style={ghostBtnStyle}>刷新</button>
-            </footer>
           </section>
         </>
       )}

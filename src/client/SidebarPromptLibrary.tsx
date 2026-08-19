@@ -1,15 +1,16 @@
 /**
  * 提示词库侧边栏面板。
  *
- * 注册到 `workspace.right.sidebar` 插槽，在右侧以浮动面板形式展示。
- * 使用本地状态控制展开/折叠，默认折叠显示展开按钮。
+ * 以浮动面板形式展示在右侧（position: fixed），使用本地状态控制展开/折叠，
+ * 默认折叠时在右侧边缘显示展开标签。
  *
  * 特性：
  * - 默认显示搜索框，搜索所有提示词
  * - 展开时自动聚焦搜索框
- * - 最高 z-index 避免被其他插件覆盖
- * - 支持折叠/展开
+ * - 支持分组折叠（状态持久化到 localStorage）
  * - 使用次数排序，最常用的在前面
+ * - 刷新按钮位于头部（带刷新图标与刷新状态）
+ * - 新建/自动学习的提示词高亮显示「新增」标记
  */
 import {
   useCallback,
@@ -30,6 +31,7 @@ import {
   updatePrompt as apiUpdate,
   usePrompt as apiUse,
 } from "./api.js";
+import { isRecent, markRecent } from "./recent-created.js";
 
 const MONO =
   '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "SimHei", "黑体", sans-serif';
@@ -46,13 +48,16 @@ const TONE = {
   red: "var(--dsw-alias-state-error-primary, #ff8592)",
 } as const;
 
-type Editor =
+type Editor = { title: string; body: string; tags: string } & (
   | { mode: "none" }
   | { mode: "create" }
   | { mode: "edit"; id: string }
-  & { title: string; body: string; tags: string };
+);
 
 const NO_EDITOR: Editor = { mode: "none", title: "", body: "", tags: "" };
+
+/** 分组折叠状态在 localStorage 中的存储键。 */
+const COLLAPSED_GROUPS_KEY = "pl:collapsed-groups";
 
 function useSettings(): PluginSettings {
   const [settings, setSettings] = useState<PluginSettings>(DEFAULT_SETTINGS);
@@ -90,22 +95,34 @@ export function SidebarPromptLibrary(props?: {
   const [phase, setPhase] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const [editor, setEditor] = useState<Editor>(NO_EDITOR);
-  // 每个分组的折叠状态
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  // 每个分组的折叠状态（持久化到 localStorage，刷新后保持）
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(COLLAPSED_GROUPS_KEY);
+      if (raw) return new Set(JSON.parse(raw) as string[]);
+    } catch {
+      // 读取失败时使用默认（全部展开）
+    }
+    return new Set();
+  });
 
   const toggleGroup = useCallback((tag: string) => {
     setCollapsedGroups((prev) => {
       const next = new Set(prev);
       if (next.has(tag)) next.delete(tag);
       else next.add(tag);
+      // 同步保存到 localStorage
+      try {
+        localStorage.setItem(COLLAPSED_GROUPS_KEY, JSON.stringify(Array.from(next)));
+      } catch {
+        // 忽略存储失败
+      }
       return next;
     });
   }, []);
 
   const searchRef = useRef<HTMLInputElement | null>(null);
   const refreshController = useRef<AbortController | null>(null);
-
-  // ★ 所有 hooks 必须放在条件返回之前 ★
 
   const refresh = useCallback(() => {
     refreshController.current?.abort();
@@ -209,7 +226,10 @@ export function SidebarPromptLibrary(props?: {
       refresh();
     };
     if (editor.mode === "create") {
-      apiCreate({ title, body, tags }).then(done, (e: unknown) =>
+      apiCreate({ title, body, tags }).then((p) => {
+        markRecent(p.id);
+        done();
+      }, (e: unknown) =>
         setError(e instanceof Error ? e.message : String(e)),
       );
     } else if (editor.mode === "edit") {
@@ -230,6 +250,7 @@ export function SidebarPromptLibrary(props?: {
 
   return (
     <>
+      <style>{`@keyframes pl-refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
       {/* 折叠状态：右侧展开标签 — 带缺口的标签样式 */}
       {collapsed ? (
         <button
@@ -243,7 +264,7 @@ export function SidebarPromptLibrary(props?: {
             top: "50%",
             transform: "translateY(-50%)",
             zIndex: 2147483646,
-            width: 20,
+            width: 15,
             height: 80,
             padding: 0,
             border: 0,
@@ -251,7 +272,7 @@ export function SidebarPromptLibrary(props?: {
             cursor: "pointer",
           }}
         >
-          <svg width="20" height="80" viewBox="0 0 20 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <svg width="15" height="80" viewBox="0 0 20 80" fill="none" xmlns="http://www.w3.org/2000/svg">
             {/* 标签形状：右侧贴边，上下有缺口 — 无边框 */}
             <path
               d="M0 0 L12 0 L20 12 L20 68 L12 80 L0 80 Z"
@@ -301,7 +322,7 @@ export function SidebarPromptLibrary(props?: {
               top: "50%",
               transform: "translateY(-50%)",
               zIndex: 2147483647,
-              width: 20,
+              width: 15,
               height: 80,
               padding: 0,
               border: 0,
@@ -309,7 +330,7 @@ export function SidebarPromptLibrary(props?: {
               cursor: "pointer",
             }}
           >
-            <svg width="20" height="80" viewBox="0 0 20 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <svg width="15" height="80" viewBox="0 0 20 80" fill="none" xmlns="http://www.w3.org/2000/svg">
               {/* 标签形状：左侧贴面板，右侧有缺口 — 无边框 */}
               <path
                 d="M20 0 L8 0 L0 12 L0 68 L8 80 L20 80 Z"
@@ -343,18 +364,38 @@ export function SidebarPromptLibrary(props?: {
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <button
                 type="button"
+                onClick={refresh}
+                disabled={phase === "loading"}
+                style={{
+                  ...ghostBtnStyle,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  cursor: phase === "loading" ? "not-allowed" : "pointer",
+                  opacity: phase === "loading" ? 0.7 : 1,
+                }}
+                title={phase === "loading" ? "刷新中…" : "刷新提示词列表"}
+              >
+                <svg
+                  width="13" height="13" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" strokeWidth="2"
+                  strokeLinecap="round" strokeLinejoin="round"
+                  style={{ animation: phase === "loading" ? "pl-refresh-spin 0.9s linear infinite" : "none" }}
+                >
+                  <path d="M23 4v6h-6M1 20v-6h6" />
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                </svg>
+                {phase === "loading" ? "刷新中…" : "刷新"}
+              </button>
+              <button
+                type="button"
                 onClick={startCreate}
                 disabled={editing}
                 style={{
+                  ...ghostBtnStyle,
                   color: TONE.accent,
-                  background: "transparent",
-                  border: `1px solid ${TONE.border}`,
-                  borderRadius: 6,
-                  padding: "3px 8px",
-                  fontSize: 12,
                   cursor: editing ? "not-allowed" : "pointer",
                   opacity: editing ? 0.5 : 1,
-                  fontFamily: MONO,
                 }}
               >
                 + 新建
@@ -478,11 +519,21 @@ export function SidebarPromptLibrary(props?: {
                           display: "flex",
                           flexDirection: "column",
                           gap: 6,
+                          ...(isRecent(p.id)
+                            ? { background: "rgba(142, 197, 255, 0.10)", borderLeft: `3px solid ${TONE.accent}` }
+                            : {}),
                         }}
                       >
                         <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>
-                          <strong style={{ fontSize: 13, fontWeight: 460 }}>{p.title}</strong>
+                          <strong style={{
+                            fontSize: 13,
+                            fontWeight: 460,
+                            ...(isRecent(p.id) ? { color: TONE.accent } : {}),
+                          }}>{p.title}</strong>
                           <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                            {isRecent(p.id) && (
+                              <span style={{ color: TONE.accent, fontSize: 10 }}>新增</span>
+                            )}
                             {p.usageCount > 0 && (
                               <span style={{ color: TONE.quiet, fontSize: 10 }}>
                                 {p.usageCount}次
@@ -520,20 +571,6 @@ export function SidebarPromptLibrary(props?: {
               </div>
             )}
           </div>
-
-          {/* 底部 */}
-          <footer
-            style={{
-              display: "flex",
-              justifyContent: "flex-end",
-              alignItems: "center",
-              padding: "10px 16px",
-              borderTop: `1px solid ${TONE.border}`,
-              flexShrink: 0,
-            }}
-          >
-            <button type="button" onClick={refresh} style={ghostBtnStyle}>刷新</button>
-          </footer>
         </section>
       )}
     </>

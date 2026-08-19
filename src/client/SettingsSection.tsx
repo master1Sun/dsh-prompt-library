@@ -11,7 +11,7 @@
  *
  * 修改后立即生效，无需保存按钮。
  */
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { PluginSettings } from "../types.js";
 import { DEFAULT_SETTINGS } from "../types.js";
 import { getSettings, updateSettings as apiUpdateSettings } from "./api.js";
@@ -283,10 +283,10 @@ export function SettingsSection(): ReactNode {
 
         <div style={{ height: 1, background: TONE.border, margin: "8px 0" }} />
 
-        {/* ~ 触发开关 */}
+        {/* # 触发开关 */}
         <ToggleRow
-          label="输入 ~ 触发词库选择"
-          desc="在输入框中输入 ~ 时弹出词库选择"
+          label="输入 # 触发词库选择"
+          desc="在输入框中输入 # 时弹出词库选择"
           checked={draft.tildaTriggerEnabled}
           onChange={(v) => updateAndSave({ tildaTriggerEnabled: v })}
         />
@@ -295,7 +295,7 @@ export function SettingsSection(): ReactNode {
 
         {/* 提示词最大存储数量 */}
         <NumberRow
-          label="提示词最大存储数量"
+          label="提示词最大存储数量(10-1000)"
           value={draft.maxPromptCount}
           min={10}
           max={1000}
@@ -326,7 +326,7 @@ export function SettingsSection(): ReactNode {
           rel="noopener noreferrer"
           style={{ color: TONE.accent, textDecoration: "none" }}
         >
-          github.com/master1Sun/dsh-prompt-library
+          GitHub:https://github.com/master1Sun/dsh-prompt-library
         </a>
       </footer>
     </div>

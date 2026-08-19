@@ -17,6 +17,11 @@
 import type { ReactNode } from "react";
 import { PromptLibraryButton } from "./PromptLibraryButton.js";
 import { SettingsSection } from "./SettingsSection.js";
+import {
+  registerSettingsNavIcon,
+  SETTINGS_NAV_CSS,
+  SETTINGS_NAV_MARKER,
+} from "./settings-nav-icon.js";
 
 const NS = "prompt-library";
 
@@ -84,6 +89,27 @@ export function apply(ctx: ClientCtx): void {
       },
       PromptLibraryButton as (props: unknown) => ReactNode,
     ),
+  );
+
+  // 设置导航图标：与聊天栏提示词按钮保持一致
+  ctx.effect(
+    () => {
+      // 注入一次样式（幂等，重复 apply 时复用同一个 style 元素）
+      let style = document.getElementById("pl-settings-nav-style") as HTMLStyleElement | null;
+      if (!style) {
+        style = document.createElement("style");
+        style.id = "pl-settings-nav-style";
+        style.textContent = SETTINGS_NAV_CSS;
+        document.head.appendChild(style);
+      }
+      // 给设置导航中文本为「提示词库」的按钮打标记，替换为提示词图标
+      const disposeMarker = registerSettingsNavIcon(() => "提示词库");
+      return () => {
+        disposeMarker();
+        style?.remove();
+      };
+    },
+    "prompt-library: settings navigation icon",
   );
 
   // 注册设置面板到 harness 原生设置界面

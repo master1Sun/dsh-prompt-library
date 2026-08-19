@@ -66,7 +66,7 @@ DSH（DeepSeek Harness）Web 插件：在 composer 工具栏注入一个「提�
 - 设置数据保存在 `~/.dsh/prompt-library-settings.json`
 
 
-## 安装方式
+## deepseek harness 插件安装方式
 
 ```
 dsh plugin --profile web add @sunjuntao/dsh-prompt-library

@@ -182,12 +182,6 @@ export function PromptLibraryButton(props: PanelProps): ReactNode {
     setTimeout(() => setToast({ title: "", visible: false }), AUTO_LEARN_TOAST_MS);
   }, []);
 
-  // 自动学习：监听草稿中适合作为提示词的内容
-  useAutoLearn(draft, prompts, useCallback(() => {
-    refresh();
-    showToast("已自动学习");
-  }, [refresh, showToast]));
-
   const refresh = useCallback(() => {
     refreshController.current?.abort();
     const ctrl = new AbortController();
@@ -206,6 +200,12 @@ export function PromptLibraryButton(props: PanelProps): ReactNode {
         setPhase("error");
       });
   }, []);
+
+  // 自动学习：监听草稿中适合作为提示词的内容
+  useAutoLearn(draft, prompts, useCallback(() => {
+    refresh();
+    showToast("已自动学习");
+  }, [refresh, showToast]));
 
   useEffect(() => {
     if (open && phase === "idle") refresh();

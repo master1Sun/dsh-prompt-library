@@ -53,6 +53,7 @@ const TONE = {
   border: "var(--dsw-alias-border-l2, rgba(196, 211, 232, 0.16))",
   borderStrong: "var(--dsw-alias-border-l3, rgba(196, 211, 232, 0.31))",
   accent: "var(--dsw-alias-brand-primary, #8ec5ff)",
+  accentSoft: "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 20%, transparent)",
   mint: "var(--dsw-alias-state-success-primary, #78dda0)",
   red: "var(--dsw-alias-state-error-primary, #ff8592)",
 } as const;
@@ -193,17 +194,23 @@ function useTildaTrigger(
     const onKeyDown = (e: KeyboardEvent) => {
       if (activeRef.current) {
         if (e.key === "Escape") {
+          // 阻止事件继续传播，避免与输入框自身按键处理冲突
+          e.preventDefault();
+          e.stopPropagation();
           activeRef.current = false;
           removeOverlay();
           return;
         }
         if (e.key === "ArrowDown" || e.key === "ArrowUp") {
           e.preventDefault();
+          e.stopPropagation();
           highlightNext(e.key === "ArrowDown" ? 1 : -1);
           return;
         }
         if (e.key === "Enter") {
+          // 捕获阶段拦截，阻止输入框的 Enter 发送消息
           e.preventDefault();
+          e.stopPropagation();
           const selected = getSelectedPrompt();
           if (selected) {
             applyPrompt(selected, inputActionsRef.current, draftRef.current);
@@ -257,13 +264,14 @@ function useTildaTrigger(
       removeOverlay();
     };
 
-    document.addEventListener("keydown", onKeyDown);
+    // 捕获阶段监听：在输入框自身按键处理（如 Enter 发送）之前拦截，避免冲突
+    document.addEventListener("keydown", onKeyDown, true);
     document.addEventListener("keyup", onKeyUp);
     document.addEventListener("input", onInput);
     document.addEventListener("compositionend", onCompositionEnd);
     document.addEventListener("click", onDocClick, true);
     return () => {
-      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("keydown", onKeyDown, true);
       document.removeEventListener("keyup", onKeyUp);
       document.removeEventListener("input", onInput);
       document.removeEventListener("compositionend", onCompositionEnd);
@@ -311,48 +319,133 @@ function showOverlay(
     "padding: 4px",
   ].join(";");
 
-  highlightIndex = 0;
+  /** 清除所有行的高亮背景。 */
+  const clearHighlight = () => {
+    for (const child of overlay.children) {
+      (child as HTMLElement).style.background = "transparent";
+    }
+  };
+
+  /** 高亮指定行并同步键盘选中项（Enter 确认时使用该项）。 */
+  const highlightItem = (index: number) => {
+    clearHighlight();
+    highlightIndex = index;
+    const item = overlay.children[index] as HTMLElement | undefined;
+    if (item) {
+      item.style.background = TONE.accentSoft;
+      item.scrollIntoView({ block: "nearest" });
+    }
+  };
+
   prompts.forEach((p, i) => {
     const item = document.createElement("div");
+    item.dataset.promptLibraryItem = "";
     item.dataset.index = String(i);
     item.style.cssText = [
       "padding: 6px 10px",
       "cursor: pointer",
       "border-radius: 4px",
-      `color: ${TONE.text}`,
-      i === 0 ? `background: ${TONE.accent}30` : "",
+      "display: flex",
+      "flex-direction: column",
+      "gap: 2px",
+      i === 0 ? `background: ${TONE.accentSoft}` : "",
     ].join(";");
-    item.textContent = `${p.title} — ${p.body.slice(0, 60)}${p.body.length > 60 ? "…" : ""}`;
+
+    // 标题行：加粗、主色、单行省略
+    const title = document.createElement("div");
+    title.textContent = p.title;
+    title.style.cssText = [
+      "font-size: 12px",
+      "font-weight: 600",
+      `color: ${TONE.text}`,
+      "white-space: nowrap",
+      "overflow: hidden",
+      "text-overflow: ellipsis",
+    ].join(";");
+
+    // 正文预览行：次要色、小号、单行省略，与标题区分开
+    const body = document.createElement("div");
+    const preview = p.body.replace(/\s+/g, " ").trim();
+    body.textContent = preview.length > 80 ? `${preview.slice(0, 80)}…` : preview;
+    body.style.cssText = [
+      "font-size: 11px",
+      `color: ${TONE.muted}`,
+      "white-space: nowrap",
+      "overflow: hidden",
+      "text-overflow: ellipsis",
+    ].join(";");
+
+    item.appendChild(title);
+    item.appendChild(body);
+
     item.onclick = () => {
       applyPrompt(p, inputActions, draft);
       removeOverlay();
     };
+    // 鼠标移入 → 高亮该行（同时成为键盘 Enter 的确认项）
+    item.onmouseenter = () => highlightItem(i);
+    item.onmouseleave = () => {
+      if (highlightIndex === i) item.style.background = "transparent";
+    };
+
     overlay.appendChild(item);
   });
+
+  // 底部快捷键提示
+  const hint = document.createElement("div");
+  hint.textContent = "↑↓ 选择 · Enter 确认 · Esc 关闭";
+  hint.style.cssText = [
+    "padding: 6px 10px 3px",
+    "font-size: 10px",
+    `color: ${TONE.quiet}`,
+    "border-top: 1px solid " + TONE.border,
+    "margin-top: 2px",
+    "user-select: none",
+  ].join(";");
+  overlay.appendChild(hint);
+
+  highlightIndex = 0;
   document.body.appendChild(overlay);
+
+  // 智能定位：下方空间不足时翻转到输入框上方，避免弹窗被推出屏幕底部
+  const spaceBelow = window.innerHeight - rect.bottom - 4;
+  const overlayHeight = overlay.offsetHeight;
+  if (spaceBelow < overlayHeight) {
+    const aboveTop = rect.top - overlayHeight - 4;
+    if (aboveTop >= 4) {
+      overlay.style.top = `${aboveTop}px`;
+    } else {
+      // 上下空间都不足：贴顶部显示，并收缩最大高度保证可见
+      overlay.style.top = "4px";
+      overlay.style.maxHeight = `${Math.max(120, rect.top - 8)}px`;
+    }
+  }
+}
+
+/** 获取弹窗内所有提示词行（不含底部快捷键提示）。 */
+function getOverlayItems(): HTMLElement[] {
+  const overlay = document.querySelector<HTMLDivElement>("[data-prompt-library-overlay]");
+  if (!overlay) return [];
+  return Array.from(overlay.querySelectorAll<HTMLElement>("[data-prompt-library-item]"));
 }
 
 function highlightNext(dir: number): void {
-  const overlay = document.querySelector<HTMLDivElement>("[data-prompt-library-overlay]");
-  if (!overlay) return;
-  const items = overlay.children;
+  const items = getOverlayItems();
   if (items.length === 0) return;
-  const current = items[highlightIndex] as HTMLElement;
+  const current = items[highlightIndex];
   if (current) current.style.background = "transparent";
   highlightIndex = (highlightIndex + dir + items.length) % items.length;
-  const next = items[highlightIndex] as HTMLElement;
+  const next = items[highlightIndex];
   if (next) {
-    next.style.background = `${TONE.accent}30`;
+    next.style.background = TONE.accentSoft;
     next.scrollIntoView({ block: "nearest" });
   }
 }
 
 function getSelectedPrompt(): Prompt | null {
-  const overlay = document.querySelector<HTMLDivElement>("[data-prompt-library-overlay]");
-  if (!overlay) return null;
-  const items = overlay.children;
+  const items = getOverlayItems();
   if (items.length === 0 || highlightIndex >= items.length) return null;
-  const item = items[highlightIndex] as HTMLElement;
+  const item = items[highlightIndex];
   const index = Number(item.dataset.index);
   return lastPromptsForSelect[index] ?? null;
 }

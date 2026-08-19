@@ -5,13 +5,18 @@
  * `conversation.input.left` 插槽（composer 工具栏行，紧邻已有 chrome）。
  * 注册通过 `ctx.slots.inject` 延迟，直到插槽被 conversation 包声明。
  *
+ * 同时将设置面板注册到 `settings.section` 插槽，在 harness 原生设置界面中
+ * 显示插件的配置项。
+ * 将侧边栏面板注册到 `workspace.right.sidebar` 插槽。
+ *
  * 此模块以 DSH 客户端模块格式构建到 `lib/client.js`：
  *   window.__ModuleLoader__.load({ id, factory: (require) => {...} })
  * factory 的 `require` 解析注入的运行时包
  *（@deepseek-ai/dsh-client-runtime/client 等）和 react——它们不会被打包。
  */
 import type { ReactNode } from "react";
-import { PromptLibraryButton } from "./Panel.js";
+import { PromptLibraryButton } from "./PromptLibraryButton.js";
+import { SettingsSection } from "./SettingsSection.js";
 
 const NS = "prompt-library";
 
@@ -54,6 +59,8 @@ interface ClientCtx {
         id: string;
         order?: number;
         locale?: string;
+        label?: () => string;
+        inject?: () => Record<string, unknown>;
       },
       component: (props: unknown) => ReactNode,
     ): () => void;
@@ -65,6 +72,8 @@ export function apply(ctx: ClientCtx): void {
     () => ctx.locale.register(NS, { zh, en }),
     "prompt-library: dictionaries",
   );
+
+  // 注册 composer 工具栏按钮
   ctx.slots.inject("conversation.input.left", () =>
     ctx.slots.register(
       {
@@ -74,6 +83,19 @@ export function apply(ctx: ClientCtx): void {
         locale: NS,
       },
       PromptLibraryButton as (props: unknown) => ReactNode,
+    ),
+  );
+
+  // 注册设置面板到 harness 原生设置界面
+  ctx.slots.inject("settings.section", () =>
+    ctx.slots.register(
+      {
+        name: "settings.section",
+        id: "prompt-library",
+        order: 100,
+        label: () => "提示词库",
+      },
+      SettingsSection as (props: unknown) => ReactNode,
     ),
   );
 }

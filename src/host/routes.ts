@@ -12,13 +12,16 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { WebRoute } from "@deepseek-ai/dsh-host-webserver";
-import type { ApiResponse, Prompt, PromptInput, PromptPatch } from "../types.js";
+import type { ApiResponse, PluginSettings, Prompt, PromptInput, PromptPatch } from "../types.js";
 import {
   autoLearn,
   createPrompt,
   deletePrompt,
+  getSettings,
   listPrompts,
+  recordUsage,
   updatePrompt,
+  updateSettings,
 } from "./store.js";
 
 const PREFIX = "/api/prompt-library";
@@ -109,11 +112,12 @@ export function makePromptRoutes(): WebRoute[] {
         if (typeof raw !== "object" || raw === null || typeof (raw as { body: string }).body !== "string") {
           return json(res, 400, { ok: false, error: "invalid body: {body: string}" });
         }
-        const text = (raw as { body: string }).body.trim();
+        const body = raw as { body: string; tag?: string };
+        const text = body.body.trim();
         if (text.length < 20) {
           return json(res, 400, { ok: false, error: "body too short" });
         }
-        const prompt = await autoLearn(text);
+        const prompt = await autoLearn(text, body.tag);
         return json(res, 200, { ok: true, data: prompt });
       }
 
@@ -131,6 +135,29 @@ export function makePromptRoutes(): WebRoute[] {
         const removed = await deletePrompt(id);
         if (!removed) return json(res, 404, { ok: false, error: "not found" });
         return json(res, 200, { ok: true, data: { id } });
+      }
+
+      // POST /prompts/:id/use — 记录使用次数
+      if (method === "POST" && tail === "/prompts/:id" && id) {
+        const updated = await recordUsage(id);
+        if (!updated) return json(res, 404, { ok: false, error: "not found" });
+        return json(res, 200, { ok: true, data: updated });
+      }
+
+      // GET /settings — 获取设置
+      if (method === "GET" && tail === "/settings") {
+        const settings = await getSettings();
+        return json(res, 200, { ok: true, data: settings });
+      }
+
+      // PUT /settings — 更新设置
+      if (method === "PUT" && tail === "/settings") {
+        const raw = await readJsonBody(req);
+        if (typeof raw !== "object" || raw === null) {
+          return json(res, 400, { ok: false, error: "invalid body" });
+        }
+        const settings = await updateSettings(raw as Partial<PluginSettings>);
+        return json(res, 200, { ok: true, data: settings });
       }
 
       return json(res, 404, { ok: false, error: `no route ${method} ${tail}` });

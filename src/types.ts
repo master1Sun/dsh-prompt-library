@@ -97,6 +97,8 @@ export interface PluginSettings {
   panelHeight: number;
   /** 是否启用右侧侧边栏展开/折叠。 */
   rightPanelEnabled: boolean;
+  /** 是否在聊天框工具栏显示提示词库按钮。 */
+  showComposerButton: boolean;
   /** 是否启用输入 ~ 触发词库选择。 */
   tildaTriggerEnabled: boolean;
   /** 提示词最大存储数量。 */
@@ -119,6 +121,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   panelWidth: 380,
   panelHeight: 500,
   rightPanelEnabled: false,
+  showComposerButton: true,
   tildaTriggerEnabled: true,
   maxPromptCount: 100,
   hoverDetailEnabled: false,

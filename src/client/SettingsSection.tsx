@@ -68,7 +68,7 @@ function ToggleRow({
   );
 }
 
-/** 数字输入行组件。 */
+/** 数字输入行组件。标签旁显示最小-最大范围，超出范围自动限制回限制值内。 */
 function NumberRow({
   label,
   value,
@@ -86,6 +86,14 @@ function NumberRow({
   defaultValue?: number;
   onChange: (v: number) => void;
 }): ReactNode {
+  // 把数值限制回 [min, max] 区间
+  const clamp = (v: number): number => {
+    if (Number.isNaN(v)) return defaultValue ?? min;
+    if (v < min) return min;
+    if (v > max) return max;
+    return v;
+  };
+
   return (
     <label
       style={{
@@ -96,7 +104,10 @@ function NumberRow({
         padding: "8px 0",
       }}
     >
-      <span style={{ fontSize: 13 }}>{label}</span>
+      <span style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+        <span style={{ fontSize: 13 }}>{label}</span>
+        <span style={{ fontSize: 11, color: TONE.quiet }}>{min}-{max}</span>
+      </span>
       <input
         type="number"
         value={value}
@@ -106,13 +117,16 @@ function NumberRow({
         onChange={(e) => {
           const raw = e.target.value;
           if (raw === "") {
+            // 清空时回退到默认值/最小值，避免输入框留空
             onChange(defaultValue ?? min);
-          } else {
-            let num = Number(raw);
-            if (num > max) num = max;
-            onChange(num);
+            return;
           }
+          const num = Number(raw);
+          if (Number.isNaN(num)) return; // 非法输入不更新
+          // 超过上限立即修正；低于下限留待失焦时修正（避免打断输入）
+          onChange(num > max ? max : num);
         }}
+        onBlur={() => onChange(clamp(value))}
         style={{
           width: 80,
           padding: "4px 6px",
@@ -290,7 +304,7 @@ export function SettingsSection(): ReactNode {
 
         {/* 面板宽高设置 */}
         <NumberRow
-          label="面板宽度（px）"
+          label="聊天框提示词面板宽度（px）"
           value={draft.panelWidth}
           min={280}
           max={800}
@@ -298,14 +312,26 @@ export function SettingsSection(): ReactNode {
           onChange={(v) => updateAndSave({ panelWidth: v })}
         />
         <NumberRow
-          label="面板高度（px）"
+          label="聊天框提示词面板高度（px）"
           value={draft.panelHeight}
           min={300}
           max={800}
           step={10}
           onChange={(v) => updateAndSave({ panelHeight: v })}
         />
+        <div style={{ height: 1, background: TONE.border, margin: "8px 0" }} />
 
+        {/* 提示词最大存储数量 */}
+        <NumberRow
+          label="提示词最大存储数量(10-1000)"
+          value={draft.maxPromptCount}
+          min={10}
+          max={1000}
+          step={10}
+          defaultValue={DEFAULT_SETTINGS.maxPromptCount}
+          onChange={(v) => updateAndSave({ maxPromptCount: v })}
+        />
+        
         <div style={{ height: 1, background: TONE.border, margin: "8px 0" }} />
 
         {/* 右侧展开/折叠开关 */}
@@ -314,6 +340,16 @@ export function SettingsSection(): ReactNode {
           desc="在右侧展开面板，支持折叠收起"
           checked={draft.rightPanelEnabled}
           onChange={(v) => updateAndSave({ rightPanelEnabled: v })}
+        />
+
+        <div style={{ height: 1, background: TONE.border, margin: "8px 0" }} />
+
+        {/* 聊天框按钮显隐开关 */}
+        <ToggleRow
+          label="聊天框显示提示词按钮"
+          desc="在输入框工具栏显示提示词库按钮"
+          checked={draft.showComposerButton}
+          onChange={(v) => updateAndSave({ showComposerButton: v })}
         />
 
         <div style={{ height: 1, background: TONE.border, margin: "8px 0" }} />
@@ -334,19 +370,6 @@ export function SettingsSection(): ReactNode {
           desc="鼠标移入提示词时显示完整详情"
           checked={draft.hoverDetailEnabled}
           onChange={(v) => updateAndSave({ hoverDetailEnabled: v })}
-        />
-
-        <div style={{ height: 1, background: TONE.border, margin: "8px 0" }} />
-
-        {/* 提示词最大存储数量 */}
-        <NumberRow
-          label="提示词最大存储数量(10-1000)"
-          value={draft.maxPromptCount}
-          min={10}
-          max={1000}
-          step={10}
-          defaultValue={DEFAULT_SETTINGS.maxPromptCount}
-          onChange={(v) => updateAndSave({ maxPromptCount: v })}
         />
       </div>
 

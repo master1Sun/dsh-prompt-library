@@ -622,9 +622,15 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
     fontFamily: MONO,
   };
 
+  // 聊天框按钮显隐（由设置控制，默认显示；隐藏时仅移除按钮与面板，
+  // 侧边栏、自动学习、# 触发等后台能力不受影响）
+  const showComposerButton = settings.showComposerButton;
+
   return (
     <span data-prompt-library style={containerStyle}>
       <style>{`@keyframes pl-refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      {showComposerButton && (
+        <>
       <button
         type="button"
         onClick={handleButtonClick}
@@ -886,6 +892,8 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
             </div>
           </section>
         </>
+      )}
+      </>
       )}
       {hoverEnabled && hover.overlay}
       <SidebarPromptLibrary inputActions={inputActions} draft={draft} />

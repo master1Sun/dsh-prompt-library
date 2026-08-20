@@ -13,12 +13,13 @@ import { dirname, join } from "node:path";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
-// 客户端模块 id 必须等于包的完整名：client-modules 按插件包名注册浏览器模块，
-// 与加载时校验的 id 一致。从 package.json 的 name 派生（唯一事实来源），
-// 避免硬编码导致包名变更后产物与运行时漂移（历史 bug：曾硬编码为无 scope 的
-// dsh-prompt-library，导致 __ModuleLoader__.load 未注册完整包名而报错）。
+// 客户端模块 id 必须与 DSH 加载器校验的 id 一致：loader entry 用的是无 scope 的
+// 短名（如 dsh-prompt-library），无论包名是否带 scope（@scope/name 也只取 name）。
+// 从 package.json 的 name 派生短名（唯一事实来源），避免硬编码导致包名变更后
+// 产物与运行时漂移（历史 bug：取完整包名注册，导致 __ModuleLoader__.load 未注册
+// 短名而报 "loaded without registering"）。
 const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
-const PLUGIN_ID = pkg.name;
+const PLUGIN_ID = pkg.name.split("/").pop();
 
 const libDir = join(root, "lib");
 await rm(libDir, { recursive: true, force: true });

@@ -249,3 +249,45 @@ export async function enrichLearnedPrompt(prompt: Prompt, settings: PluginSettin
   );
   logAI(`enrich: 完成 prompt=${result.title || prompt.title}（body ${changed ? "已改写" : "未改写"}）`);
 }
+
+/**
+ * AI 润色一段提示词正文（只返回结果，不写回词库）。
+ * 结合用户画像（prompt-library-user.md 的自学习积累）润色，
+ * 保持原意与关键细节，优化表达，使其更贴合用户风格、清晰通用、可直接复用。
+ * 无可用 LLM / 无法解析路由 / 调用失败时返回 undefined。
+ */
+export async function polishPromptBody(
+  body: string,
+  title: string,
+  settings: PluginSettings,
+): Promise<string | undefined> {
+  if (!llm) {
+    logAI("polish: 跳过（llm 服务未注入）");
+    return undefined;
+  }
+  const route = await resolveRoute(llm, settings);
+  if (!route) return undefined;
+  // 读取用户画像作为上下文，让润色更贴合用户写作风格（越用越准）
+  const profile = await readProfile();
+  const samples = profile.recentSamples.length
+    ? profile.recentSamples.map((s) => `- 【${s.title}】${s.body}`).join("\n")
+    : "（暂无）";
+  const system = [
+    "你是一名专业的提示词润色助手，擅长贴合用户的写作风格对提示词进行润色。",
+    "",
+    "【用户画像】这是此前积累的关于用户风格与偏好的摘要（可能为空，越用越准）：",
+    profile.summary || "（暂无）",
+    "",
+    "【用户最近学习的提示词】供你参考用户风格（可能为空）：",
+    samples,
+    "",
+    "要求：",
+    "- 保持原意与所有关键细节，不得遗漏、曲解或删减；",
+    "- 结合用户画像中的写作风格与关注领域进行润色，使表达更贴合用户习惯；",
+    "- 让提示词更清晰、通用、结构清晰、可直接复用；",
+    "- 直接输出润色后的提示词正文，不要任何解释或 Markdown 代码块。",
+  ].join("\n");
+  const content = `请润色以下提示词${title ? `（标题：${title}）` : ""}：\n\n${body}`;
+  const text = await collectText(llm, route, system, content);
+  return text || undefined;
+}

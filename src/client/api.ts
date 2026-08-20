@@ -59,6 +59,11 @@ export function usePrompt(id: string): Promise<Prompt> {
   return send<Prompt>("POST", `${BASE}/${encodeURIComponent(id)}`);
 }
 
+/** 调用 harness AI 润色提示词正文，返回润色后的文本。 */
+export function polishPrompt(body: string, title?: string): Promise<{ polished: string }> {
+  return send<{ polished: string }>("POST", "/api/prompt-library/ai/polish", { body, title });
+}
+
 const SETTINGS_BASE = "/api/prompt-library/settings";
 
 /** 获取插件设置。 */

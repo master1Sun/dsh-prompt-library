@@ -13,6 +13,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { WebRoute } from "@deepseek-ai/dsh-host-webserver";
 import type { ApiResponse, PluginSettings, Prompt, PromptInput, PromptPatch } from "../types.js";
+import { polishPromptBody } from "./ai.js";
 import {
   autoLearn,
   createPrompt,
@@ -142,6 +143,22 @@ export function makePromptRoutes(): WebRoute[] {
         const updated = await recordUsage(id);
         if (!updated) return json(res, 404, { ok: false, error: "not found" });
         return json(res, 200, { ok: true, data: updated });
+      }
+
+      // POST /ai/polish — AI 润色提示词正文（只返回结果，不写回）
+      if (method === "POST" && tail === "/ai/polish") {
+        const raw = await readJsonBody(req);
+        if (typeof raw !== "object" || raw === null || typeof (raw as { body: string }).body !== "string") {
+          return json(res, 400, { ok: false, error: "invalid body: {body: string, title?: string}" });
+        }
+        const { body, title } = raw as { body: string; title?: string };
+        if (!body.trim()) return json(res, 400, { ok: false, error: "body empty" });
+        const settings = await getSettings();
+        const polished = await polishPromptBody(body, typeof title === "string" ? title : "", settings);
+        if (polished === undefined) {
+          return json(res, 503, { ok: false, error: "AI 不可用或润色失败，请确认已连接 LLM 服务" });
+        }
+        return json(res, 200, { ok: true, data: { polished } });
       }
 
       // GET /settings — 获取设置

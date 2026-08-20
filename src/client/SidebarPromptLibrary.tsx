@@ -30,6 +30,7 @@ import {
   listPrompts as apiList,
   updatePrompt as apiUpdate,
   usePrompt as apiUse,
+  polishPrompt,
 } from "./api.js";
 import { isRecent, markRecent } from "./recent-created.js";
 import { useHoverDetail } from "./HoverDetail.js";
@@ -96,6 +97,16 @@ export function SidebarPromptLibrary(props?: {
   const [phase, setPhase] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const [editor, setEditor] = useState<Editor>(NO_EDITOR);
+  // 复制反馈：最近复制的提示词 id（用于按钮显示「已复制」）
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  // AI 润色状态：idle | loading（某条润色中） | done（展示可编辑的润色结果）
+  const [polish, setPolish] = useState<
+    | { status: "idle" }
+    | { status: "loading"; id: string }
+    | { status: "done"; id: string }
+  >({ status: "idle" });
+  // AI 润色结果（可编辑）
+  const [polishResult, setPolishResult] = useState("");
   // 每个分组的折叠状态（持久化到 localStorage，刷新后保持）
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
     try {
@@ -164,18 +175,72 @@ export function SidebarPromptLibrary(props?: {
     });
   }, [prompts, query]);
 
-  const insert = useCallback(
-    (prompt: Prompt) => {
-      apiUse(prompt.id).catch(() => {});
+  // 把文本插入当前草稿；无草稿上下文时回退为复制到剪贴板
+  const insertText = useCallback(
+    (text: string) => {
       if (inputActions) {
-        const body = prompt.body;
-        inputActions.setDraft(draft && draft.trim() ? `${draft}\n\n${body}` : body);
+        inputActions.setDraft(draft && draft.trim() ? `${draft}\n\n${text}` : text);
       } else {
-        navigator.clipboard.writeText(prompt.body).catch(() => {});
+        navigator.clipboard.writeText(text).catch(() => {});
       }
     },
     [inputActions, draft],
   );
+
+  const insert = useCallback(
+    (prompt: Prompt) => {
+      apiUse(prompt.id).catch(() => {});
+      insertText(prompt.body);
+    },
+    [insertText],
+  );
+
+  // 复制提示词正文到剪贴板，短暂显示「已复制」
+  const copy = useCallback((p: Prompt) => {
+    navigator.clipboard
+      .writeText(p.body)
+      .then(() => {
+        setCopiedId(p.id);
+        setTimeout(() => setCopiedId((cur) => (cur === p.id ? null : cur)), 1500);
+      })
+      .catch(() => {});
+  }, []);
+
+  // 调用 AI 润色提示词正文，成功后进入润色结果视图
+  const startPolish = useCallback((p: Prompt) => {
+    setPolish({ status: "loading", id: p.id });
+    polishPrompt(p.body, p.title).then(
+      (res) => {
+        setPolishResult(res.polished);
+        setPolish({ status: "done", id: p.id });
+      },
+      (e: unknown) => {
+        setError(e instanceof Error ? e.message : String(e));
+        setPolish({ status: "idle" });
+      },
+    );
+  }, []);
+
+  // 关闭润色结果视图
+  const closePolish = useCallback(() => {
+    setPolish({ status: "idle" });
+    setError(null);
+  }, []);
+
+  // 把润色结果保存回词库（更新正文，保留原标题）
+  const savePolish = useCallback(() => {
+    if (polish.status !== "done") return;
+    const id = polish.id;
+    const original = prompts.find((x) => x.id === id);
+    apiUpdate(id, {
+      body: polishResult,
+      sourceBody: original && original.body !== polishResult ? original.body : undefined,
+      aiRefined: true,
+    }).then(() => {
+      closePolish();
+      refresh();
+    }, (e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  }, [polish, polishResult, prompts, closePolish, refresh]);
 
   // 按 tag 分组（无 tag 归为"未分类"，多 tag 的提示词出现在每个 tag 分组中）
   const tagGrouped = useMemo(() => {
@@ -442,7 +507,35 @@ export function SidebarPromptLibrary(props?: {
               <div style={{ padding: "12px 16px", color: TONE.red, fontSize: 13 }}>{error}</div>
             )}
 
-            {editing ? (
+            {polish.status === "done" ? (
+              <div style={{ padding: "12px 16px", display: "flex", flexDirection: "column", gap: 9 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <strong style={{ fontSize: 13 }}>AI 润色结果</strong>
+                  <button type="button" onClick={closePolish} style={smallGhostStyle}>关闭</button>
+                </div>
+                <textarea
+                  value={polishResult}
+                  onChange={(e) => setPolishResult(e.target.value)}
+                  rows={8}
+                  style={{ ...inputStyle, resize: "vertical", minHeight: 220 }}
+                />
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    onClick={() => { navigator.clipboard.writeText(polishResult).catch(() => {}); }}
+                    style={smallGhostStyle}
+                  >
+                    复制
+                  </button>
+                  <button type="button" onClick={() => insertText(polishResult)} style={smallGhostStyle}>
+                    插入
+                  </button>
+                  <button type="button" onClick={savePolish} style={smallPrimaryStyle}>
+                    保存到词库
+                  </button>
+                </div>
+              </div>
+            ) : editing ? (
               <div style={{ padding: "12px 16px", display: "flex", flexDirection: "column", gap: 9 }}>
                 <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
                   标题
@@ -566,9 +659,25 @@ export function SidebarPromptLibrary(props?: {
                         }}>
                           {p.body}
                         </pre>
-                        <div style={{ display: "flex", gap: 6 }}>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                           <button type="button" onClick={() => insert(p)} style={smallPrimaryStyle}>插入</button>
+                          <button type="button" onClick={() => copy(p)} style={smallGhostStyle}>
+                            {copiedId === p.id ? "已复制" : "复制"}
+                          </button>
                           <button type="button" onClick={() => startEdit(p)} style={smallGhostStyle}>编辑</button>
+                          <button
+                            type="button"
+                            onClick={() => startPolish(p)}
+                            disabled={polish.status === "loading"}
+                            style={{
+                              ...smallGhostStyle,
+                              color: polish.status === "loading" ? TONE.quiet : TONE.accent,
+                              cursor: polish.status === "loading" ? "not-allowed" : "pointer",
+                              opacity: polish.status === "loading" ? 0.7 : 1,
+                            }}
+                          >
+                            {polish.status === "loading" && polish.id === p.id ? "润色中…" : "AI 润色"}
+                          </button>
                           <button type="button" onClick={() => remove(p)} style={smallGhostStyle}>删除</button>
                         </div>
                       </div>

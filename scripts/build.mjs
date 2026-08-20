@@ -13,13 +13,14 @@ import { dirname, join } from "node:path";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
-// 客户端模块 id 必须与 DSH 加载器校验的 id 一致：loader entry 用的是无 scope 的
-// 短名（如 dsh-prompt-library），无论包名是否带 scope（@scope/name 也只取 name）。
-// 从 package.json 的 name 派生短名（唯一事实来源），避免硬编码导致包名变更后
-// 产物与运行时漂移（历史 bug：取完整包名注册，导致 __ModuleLoader__.load 未注册
-// 短名而报 "loaded without registering"）。
+// 客户端模块 id 必须与 DSH 加载器校验的 id 一致。实测 dsh-client-modules：
+// loader entry 的 id 直接取自 cordis entry.options.name，而插件 name 是完整
+// 包名（如 @sunjuntao/dsh-prompt-library），boot manifest 中所有 entry id 均
+// 为完整包名（含 @deepseek-ai/*）。因此 bundle 必须注册完整包名。
+// 从 package.json 的 name 派生（唯一事实来源），避免硬编码导致包名变更后
+// 产物与运行时漂移。
 const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
-const PLUGIN_ID = pkg.name.split("/").pop();
+const PLUGIN_ID = pkg.name;
 
 const libDir = join(root, "lib");
 await rm(libDir, { recursive: true, force: true });

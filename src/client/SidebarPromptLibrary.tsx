@@ -362,44 +362,40 @@ export function SidebarPromptLibrary(props?: {
 
   return (
     <>
-      <style>{`@keyframes pl-refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      <style>{`@keyframes pl-refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.pl-collapse-expand-btn:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.pl-collapse-expand-btn:active{background:var(--dsw-alias-interactive-bg-active)}`}</style>
       <style>{PL_BUTTON_CSS}</style>
-      {/* 折叠状态：右侧展开标签 — 带缺口的标签样式 */}
+      {/* 折叠状态：右侧展开按钮 — 仅箭头图标，紧凑圆形 */}
       {collapsed ? (
         <button
           type="button"
           onClick={() => setCollapsed(false)}
           title="展开提示词库"
           aria-label="展开提示词库"
+          className="pl-collapse-expand-btn"
           style={{
             position: "fixed",
-            right: 0,
+            right: 6,
             top: "50%",
             transform: "translateY(-50%)",
             zIndex: 2147483646,
-            width: 15,
-            height: 80,
+            width: 32,
+            height: 32,
             padding: 0,
             border: 0,
+            borderRadius: "50%",
             background: "transparent",
+            color: TONE.text,
             cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            transition: "background 0.15s",
           }}
         >
-          <svg width="15" height="80" viewBox="0 0 20 80" fill="none" xmlns="http://www.w3.org/2000/svg">
-            {/* 标签形状：右侧贴边，上下有缺口 — 无边框 */}
-            <path
-              d="M0 0 L12 0 L20 12 L20 68 L12 80 L0 80 Z"
-              fill={TONE.panel}
-            />
-            {/* 左箭头 */}
-            <path
-              d="M10 34 L5 40 L10 46"
-              stroke={TONE.text}
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              fill="none"
-            />
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </button>
       ) : (
@@ -421,7 +417,7 @@ export function SidebarPromptLibrary(props?: {
             border: `1px solid ${TONE.borderStrong}`,
             borderRight: 0,
             borderRadius: "12px 0 0 12px",
-            boxShadow: "0 18px 48px rgba(3, 8, 18, 0.38)",
+            boxShadow: "rgba(3, 8, 18, 0.1) 0px 1px 4px",
             fontFamily: MONO,
           }}
         >

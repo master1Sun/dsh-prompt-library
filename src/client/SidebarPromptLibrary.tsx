@@ -35,10 +35,12 @@ import {
 } from "./api.js";
 import { isRecent, markRecent } from "./recent-created.js";
 import { useHoverDetail } from "./HoverDetail.js";
+import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { notifyDataChanged, useDataChanged } from "./data-sync.js";
+import { PL_BUTTON_CSS, plBtn } from "./button-style.js";
 
 const MONO =
-  '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "SimHei", "黑体", sans-serif';
+  'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif)';
 
 const TONE = {
   text: "var(--dsw-alias-label-primary, #f2f6fc)",
@@ -49,6 +51,8 @@ const TONE = {
   border: "var(--dsw-alias-border-l2, rgba(196, 211, 232, 0.16))",
   borderStrong: "var(--dsw-alias-border-l3, rgba(196, 211, 232, 0.31))",
   accent: "var(--dsw-alias-brand-primary, #8ec5ff)",
+  accentSoft: "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 20%, transparent)",
+  mint: "var(--dsw-alias-state-success-primary, #78dda0)",
   red: "var(--dsw-alias-state-error-primary, #ff8592)",
 } as const;
 
@@ -359,6 +363,7 @@ export function SidebarPromptLibrary(props?: {
   return (
     <>
       <style>{`@keyframes pl-refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      <style>{PL_BUTTON_CSS}</style>
       {/* 折叠状态：右侧展开标签 — 带缺口的标签样式 */}
       {collapsed ? (
         <button
@@ -413,8 +418,10 @@ export function SidebarPromptLibrary(props?: {
             flexDirection: "column",
             color: TONE.text,
             background: TONE.panel,
-            borderLeft: `1px solid ${TONE.borderStrong}`,
-            boxShadow: "0 0 48px rgba(3, 8, 18, 0.38)",
+            border: `1px solid ${TONE.borderStrong}`,
+            borderRight: 0,
+            borderRadius: "12px 0 0 12px",
+            boxShadow: "0 18px 48px rgba(3, 8, 18, 0.38)",
             fontFamily: MONO,
           }}
         >
@@ -470,44 +477,38 @@ export function SidebarPromptLibrary(props?: {
           >
             <strong style={{ fontSize: 14, fontWeight: 470 }}>提示词库</strong>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
+                className={plBtn("ghost", "sm")}
                 onClick={refresh}
                 disabled={phase === "loading"}
-                style={{
-                  ...ghostBtnStyle,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 4,
-                  cursor: phase === "loading" ? "not-allowed" : "pointer",
-                  opacity: phase === "loading" ? 0.7 : 1,
-                }}
                 title={phase === "loading" ? "刷新中…" : "刷新提示词列表"}
+                icon={
+                  <svg
+                    width="13" height="13" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" strokeWidth="2"
+                    strokeLinecap="round" strokeLinejoin="round"
+                    style={{ animation: phase === "loading" ? "pl-refresh-spin 0.9s linear infinite" : "none" }}
+                  >
+                    <path d="M23 4v6h-6M1 20v-6h6" />
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                  </svg>
+                }
               >
-                <svg
-                  width="13" height="13" viewBox="0 0 24 24" fill="none"
-                  stroke="currentColor" strokeWidth="2"
-                  strokeLinecap="round" strokeLinejoin="round"
-                  style={{ animation: phase === "loading" ? "pl-refresh-spin 0.9s linear infinite" : "none" }}
-                >
-                  <path d="M23 4v6h-6M1 20v-6h6" />
-                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-                </svg>
                 {phase === "loading" ? "刷新中…" : "刷新"}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
+                className={plBtn("ghost", "sm")}
                 onClick={startCreate}
                 disabled={editing}
-                style={{
-                  ...ghostBtnStyle,
-                  color: TONE.accent,
-                  cursor: editing ? "not-allowed" : "pointer",
-                  opacity: editing ? 0.5 : 1,
-                }}
               >
                 + 新建
-              </button>
+              </Button>
             </div>
           </header>
 
@@ -550,7 +551,7 @@ export function SidebarPromptLibrary(props?: {
               <div style={{ padding: "12px 16px", display: "flex", flexDirection: "column", gap: 9 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <strong style={{ fontSize: 13 }}>AI 润色结果</strong>
-                  <button type="button" onClick={closePolish} style={smallGhostStyle}>关闭</button>
+                  <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={closePolish}>关闭</Button>
                 </div>
                 <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5 }}>
                   {settings.aiEnrichEnabled
@@ -564,19 +565,15 @@ export function SidebarPromptLibrary(props?: {
                   style={{ ...inputStyle, resize: "vertical", minHeight: 220 }}
                 />
                 <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
-                  <button
-                    type="button"
-                    onClick={() => { navigator.clipboard.writeText(polishResult).catch(() => {}); }}
-                    style={smallGhostStyle}
-                  >
+                  <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => { navigator.clipboard.writeText(polishResult).catch(() => {}); }}>
                     复制
-                  </button>
-                  <button type="button" onClick={() => insertText(polishResult)} style={smallGhostStyle}>
+                  </Button>
+                  <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => insertText(polishResult)}>
                     插入
-                  </button>
-                  <button type="button" onClick={savePolish} style={smallPrimaryStyle}>
+                  </Button>
+                  <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={savePolish}>
                     保存到词库
-                  </button>
+                  </Button>
                   {settings.aiEnrichEnabled ? (
                     <span
                       style={{
@@ -589,19 +586,16 @@ export function SidebarPromptLibrary(props?: {
                       {polishLearned ? "已自动纳入自学习" : "自动学习中…"}
                     </span>
                   ) : (
-                    <button
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="sm"
+                      className={plBtn("ghost", "sm")}
                       onClick={confirmLearn}
                       disabled={polishLearned}
-                      style={{
-                        ...smallGhostStyle,
-                        color: polishLearned ? TONE.quiet : TONE.accent,
-                        cursor: polishLearned ? "not-allowed" : "pointer",
-                        opacity: polishLearned ? 0.7 : 1,
-                      }}
                     >
                       {polishLearned ? "已学习" : "确认学习"}
-                    </button>
+                    </Button>
                   )}
                 </div>
               </div>
@@ -634,12 +628,12 @@ export function SidebarPromptLibrary(props?: {
                 </label>
                 {error && <div style={{ color: TONE.red, fontSize: 12 }}>{error}</div>}
                 <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                  <button type="button" onClick={() => { setEditor(NO_EDITOR); setError(null); }} style={ghostBtnStyle}>
+                  <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => { setEditor(NO_EDITOR); setError(null); }}>
                     取消
-                  </button>
-                  <button type="button" onClick={saveEditor} style={primaryBtnStyle}>
+                  </Button>
+                  <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={saveEditor}>
                     保存
-                  </button>
+                  </Button>
                 </div>
               </div>
             ) : (
@@ -736,25 +730,22 @@ export function SidebarPromptLibrary(props?: {
                           {p.body}
                         </pre>
                         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                          <button type="button" onClick={() => insert(p)} style={smallPrimaryStyle}>插入</button>
-                          <button type="button" onClick={() => copy(p)} style={smallGhostStyle}>
+                          <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={() => insert(p)}>插入</Button>
+                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => copy(p)}>
                             {copiedId === p.id ? "已复制" : "复制"}
-                          </button>
-                          <button type="button" onClick={() => startEdit(p)} style={smallGhostStyle}>编辑</button>
-                          <button
+                          </Button>
+                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => startEdit(p)}>编辑</Button>
+                          <Button
                             type="button"
+                            variant="ghost"
+                            size="sm"
+                            className={plBtn("ghost", "sm")}
                             onClick={() => startPolish(p)}
                             disabled={polish.status === "loading"}
-                            style={{
-                              ...smallGhostStyle,
-                              color: polish.status === "loading" ? TONE.quiet : TONE.accent,
-                              cursor: polish.status === "loading" ? "not-allowed" : "pointer",
-                              opacity: polish.status === "loading" ? 0.7 : 1,
-                            }}
                           >
                             {polish.status === "loading" && polish.id === p.id ? "润色中…" : "AI 润色"}
-                          </button>
-                          <button type="button" onClick={() => remove(p)} style={smallGhostStyle}>删除</button>
+                          </Button>
+                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => remove(p)}>删除</Button>
                         </div>
                       </div>
                     ))}
@@ -807,28 +798,15 @@ const inputStyle: CSSProperties = {
   outline: "none",
 };
 
-const primaryBtnStyle: CSSProperties = {
-  padding: "6px 12px",
-  color: "var(--dsw-alias-bg-layer-2, #101722)",
-  background: "var(--dsw-alias-brand-primary, #8ec5ff)",
-  border: 0,
-  borderRadius: 7,
-  cursor: "pointer",
-  fontFamily: MONO,
-  fontSize: 12,
-  fontWeight: 470,
-};
-
-const ghostBtnStyle: CSSProperties = {
-  padding: "6px 12px",
+const smallGhostStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  padding: "3px 9px",
   color: "var(--dsw-alias-label-secondary, #9daabd)",
   background: "transparent",
   border: "1px solid var(--dsw-alias-border-l2, rgba(196, 211, 232, 0.16))",
   borderRadius: 7,
-  cursor: "pointer",
+  cursor: "default",
   fontFamily: MONO,
-  fontSize: 12,
+  fontSize: 11,
 };
-
-const smallPrimaryStyle: React.CSSProperties = { ...primaryBtnStyle, padding: "3px 9px", fontSize: 11 };
-const smallGhostStyle: React.CSSProperties = { ...ghostBtnStyle, padding: "3px 9px", fontSize: 11 };

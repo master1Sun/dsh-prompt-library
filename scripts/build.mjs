@@ -31,6 +31,7 @@ const external = [
   "@deepseek-ai/dsh-client-locale",
   "@deepseek-ai/dsh-client-ui-slots",
   "@deepseek-ai/dsh-client-ui-conversation",
+  "@deepseek-ai/dsh-client-ui-primitives",
 ];
 
 // --- 1) host 入口：lib/index.js（Node ESM）-------------------------------

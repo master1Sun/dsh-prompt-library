@@ -306,8 +306,8 @@ export function SettingsSection(): ReactNode {
         <NumberRow
           label="聊天框提示词面板宽度（px）"
           value={draft.panelWidth}
-          min={280}
-          max={800}
+          min={300}
+          max={700}
           step={10}
           onChange={(v) => updateAndSave({ panelWidth: v })}
         />

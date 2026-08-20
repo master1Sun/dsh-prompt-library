@@ -26,6 +26,8 @@ import {
   updatePrompt as apiUpdate,
   usePrompt as apiUse,
 } from "./api.js";
+import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
+import { PL_BUTTON_CSS, plBtn } from "./button-style.js";
 import { SidebarPromptLibrary } from "./SidebarPromptLibrary.js";
 import { useHoverDetail } from "./HoverDetail.js";
 import { AUTO_LEARN_TOAST_MS, useAutoLearn } from "./auto-learn.js";
@@ -44,7 +46,7 @@ interface ButtonProps {
 }
 
 const MONO =
-  '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "SimHei", "黑体", sans-serif';
+  'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif)';
 
 const TONE = {
   text: "var(--dsw-alias-label-primary, #f2f6fc)",
@@ -613,9 +615,9 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   const panelStyle: CSSProperties = {
     position: "absolute",
     right: 0,
-    bottom: "calc(100% + 10px)",
+    bottom: "calc(100% + 4px)",
     zIndex: 1000,
-    width: settings.panelWidth,
+    width: Math.max(300, Math.min(700, settings.panelWidth)),
     maxWidth: "calc(100vw - 24px)",
     maxHeight: `${settings.panelHeight}px`,
     overflow: "hidden",
@@ -625,7 +627,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
     background: TONE.panel,
     border: `1px solid ${TONE.borderStrong}`,
     borderRadius: 12,
-    boxShadow: "0 18px 48px rgba(3, 8, 18, 0.38)",
+    boxShadow: "0 1px 4px rgba(3, 8, 18, 0.1)",
     fontFamily: MONO,
   };
 
@@ -636,42 +638,31 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   return (
     <span data-prompt-library style={containerStyle}>
       <style>{`@keyframes pl-refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      <style>{PL_BUTTON_CSS}</style>
       {showComposerButton && (
         <>
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
+        className={plBtn("ghost", "sm")}
         onClick={handleButtonClick}
         title="提示词库"
         aria-label="提示词库"
         aria-expanded={open}
         aria-controls={panelId}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 6,
-          padding: "5px 12px 5px 8px",
-          color: "var(--dsw-alias-label-primary, #f2f6fc)",
-          background: "var(--dsw-alias-bg-layer-2, #101722)",
-          border: 0,
-          borderRadius: 8,
-          cursor: "pointer",
-          fontFamily: MONO,
-          fontSize: 13,
-          fontWeight: 430,
-          whiteSpace: "nowrap",
-          transition: "background 0.15s",
-        }}
-        onMouseEnter={(e) => { e.currentTarget.style.background = "var(--dsw-alias-bg-layer-3, #1d2735)"; }}
-        onMouseLeave={(e) => { e.currentTarget.style.background = "var(--dsw-alias-bg-layer-2, #101722)"; }}
+        icon={
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              d="M4 5h11a3 3 0 0 1 3 3v11l-3-2-3 2V8a3 3 0 0 0-3-3H4Z"
+              stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"
+            />
+            <path d="M8 9h3M8 12h3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          </svg>
+        }
       >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path
-            d="M4 5h11a3 3 0 0 1 3 3v11l-3-2-3 2V8a3 3 0 0 0-3-3H4Z"
-            stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"
-          />
-          <path d="M8 9h3M8 12h3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-        </svg>
-        <span>提示词库</span>
+        提示词库
+        {/* 上下展开/折叠指示箭头：随开关旋转，颜色随按钮文本（官方 currentColor） */}
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true" style={{
           marginLeft: 2,
           transform: open ? "rotate(180deg)" : "rotate(0deg)",
@@ -679,7 +670,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
         }}>
           <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
-      </button>
+      </Button>
 
       {/* toast */}
       {toast.visible && (
@@ -725,44 +716,39 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
             >
               <strong style={{ fontSize: 14, fontWeight: 470 }}>提示词库</strong>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="sm"
+                  className={plBtn("ghost", "sm")}
                   onClick={refresh}
                   disabled={phase === "loading"}
-                  style={{
-                    ...ghostBtnStyle,
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 4,
-                    cursor: phase === "loading" ? "not-allowed" : "pointer",
-                    opacity: phase === "loading" ? 0.7 : 1,
-                  }}
                   title={phase === "loading" ? "刷新中…" : "刷新提示词列表"}
+                  icon={
+                    <svg
+                      width="13" height="13" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" strokeWidth="2"
+                      strokeLinecap="round" strokeLinejoin="round"
+                      style={{ animation: phase === "loading" ? "pl-refresh-spin 0.9s linear infinite" : "none" }}
+                    >
+                      <path d="M23 4v6h-6M1 20v-6h6" />
+                      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                    </svg>
+                  }
                 >
-                  <svg
-                    width="13" height="13" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" strokeWidth="2"
-                    strokeLinecap="round" strokeLinejoin="round"
-                    style={{ animation: phase === "loading" ? "pl-refresh-spin 0.9s linear infinite" : "none" }}
-                  >
-                    <path d="M23 4v6h-6M1 20v-6h6" />
-                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-                  </svg>
                   {phase === "loading" ? "刷新中…" : "刷新"}
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="sm"
+                  className={plBtn("ghost", "sm")}
                   onClick={startCreate}
                   disabled={editing}
-                  style={{
-                    ...ghostBtnStyle,
-                    color: TONE.accent,
-                    cursor: editing ? "not-allowed" : "pointer",
-                    opacity: editing ? 0.5 : 1,
-                  }}
+                  style={{ color: "var(--dsw-alias-brand-primary, #8ec5ff)" }}
                 >
                   + 新建
-                </button>
+                </Button>
               </div>
             </header>
 
@@ -827,12 +813,12 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                   </label>
                   {error && <div style={{ color: TONE.red, fontSize: 12 }}>{error}</div>}
                   <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                    <button type="button" onClick={() => { setEditor(NO_EDITOR); setError(null); }} style={ghostBtnStyle}>
+                    <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => { setEditor(NO_EDITOR); setError(null); }}>
                       取消
-                    </button>
-                    <button type="button" onClick={saveEditor} style={primaryBtnStyle}>
+                    </Button>
+                    <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={saveEditor}>
                       保存
-                    </button>
+                    </Button>
                   </div>
                 </div>
               ) : (
@@ -893,9 +879,9 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                         {p.body}
                       </pre>
                       <div style={{ display: "flex", gap: 6 }}>
-                        <button type="button" onClick={() => insert(p)} style={smallPrimaryStyle}>插入</button>
-                        <button type="button" onClick={() => startEdit(p)} style={smallGhostStyle}>编辑</button>
-                        <button type="button" onClick={() => remove(p)} style={smallGhostStyle}>删除</button>
+                        <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={() => insert(p)}>插入</Button>
+                        <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => startEdit(p)}>编辑</Button>
+                        <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => remove(p)}>删除</Button>
                       </div>
                     </li>
                   ))}
@@ -925,29 +911,3 @@ const inputStyle: CSSProperties = {
   fontSize: 13,
   outline: "none",
 };
-
-const primaryBtnStyle: CSSProperties = {
-  padding: "6px 12px",
-  color: "var(--dsw-alias-bg-layer-2, #101722)",
-  background: "var(--dsw-alias-brand-primary, #8ec5ff)",
-  border: 0,
-  borderRadius: 7,
-  cursor: "pointer",
-  fontFamily: MONO,
-  fontSize: 12,
-  fontWeight: 470,
-};
-
-const ghostBtnStyle: CSSProperties = {
-  padding: "6px 12px",
-  color: "var(--dsw-alias-label-secondary, #9daabd)",
-  background: "transparent",
-  border: "1px solid var(--dsw-alias-border-l2, rgba(196, 211, 232, 0.16))",
-  borderRadius: 7,
-  cursor: "pointer",
-  fontFamily: MONO,
-  fontSize: 12,
-};
-
-const smallPrimaryStyle: React.CSSProperties = { ...primaryBtnStyle, padding: "3px 9px", fontSize: 11 };
-const smallGhostStyle: React.CSSProperties = { ...ghostBtnStyle, padding: "3px 9px", fontSize: 11 };

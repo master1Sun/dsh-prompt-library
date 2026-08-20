@@ -173,8 +173,12 @@ async function collectText(
     .map((b) => (b as { text: string }).text)
     .join("")
     .trim();
-  if (!text) logAI("collect: 模型返回空文本");
-  return text || undefined;
+  if (!text) {
+    logAI("collect: 模型返回空文本");
+    return undefined;
+  }
+  logAI(`collect: 完成 kind=${assembler.finish.kind} 文本长度=${text.length}`);
+  return text;
 }
 
 /** 从模型输出中容错解析 JSON：剥离 markdown 围栏，截取首个对象。 */
@@ -215,6 +219,7 @@ function parseJson(text: string): AiRefineResult | undefined {
  * 任何失败都静默返回，不影响主流程。
  */
 export async function enrichLearnedPrompt(prompt: Prompt, settings: PluginSettings): Promise<void> {
+  logAI(`enrich: 开始 prompt="${prompt.title}" 正文长度=${prompt.body.length}`);
   if (!llm) {
     logAI(`enrich: 跳过（llm 服务未注入）prompt=${prompt.title}`);
     return;
@@ -222,13 +227,19 @@ export async function enrichLearnedPrompt(prompt: Prompt, settings: PluginSettin
   const route = await resolveRoute(llm, settings);
   if (!route) return;
   const profile = await readProfile();
+  logAI(
+    `enrich: 画像上下文 摘要长度=${profile.summary.length} 样本数=${profile.recentSamples.length} 主题数=${Object.keys(profile.topics).length}`,
+  );
   const text = await collectText(llm, route, systemPrompt(profile), userMessage(prompt.body, prompt.tags?.[0]));
   if (!text) return;
   const result = parseJson(text);
   if (!result) {
-    logAI(`parse: 模型输出无法解析为 JSON：${text.slice(0, 200)}`);
+    logAI(`parse: 模型输出无法解析为 JSON：${text.slice(0, 300)}`);
     return;
   }
+  logAI(
+    `parse: 成功 title="${result.title}" tags=[${result.tags.join(", ")}] 摘要长度=${result.summary.length} 改写正文长度=${result.body.length}`,
+  );
 
   const changed = result.body !== prompt.body;
   await updatePrompt(prompt.id, {
@@ -247,7 +258,9 @@ export async function enrichLearnedPrompt(prompt: Prompt, settings: PluginSettin
     },
     result.insight,
   );
-  logAI(`enrich: 完成 prompt=${result.title || prompt.title}（body ${changed ? "已改写" : "未改写"}）`);
+  logAI(
+    `enrich: 完成 prompt="${result.title || prompt.title}" body ${changed ? "已改写" : "未改写"} 画像洞察="${result.insight}"`,
+  );
 }
 
 /**
@@ -261,6 +274,7 @@ export async function polishPromptBody(
   body: string,
   settings: PluginSettings,
 ): Promise<string | undefined> {
+  logAI(`polish: 开始 正文长度=${body.length}`);
   if (!llm) {
     logAI("polish: 跳过（llm 服务未注入）");
     return undefined;
@@ -269,6 +283,9 @@ export async function polishPromptBody(
   if (!route) return undefined;
   // 读取用户画像作为上下文，让润色更贴合用户写作风格（越用越准）
   const profile = await readProfile();
+  logAI(
+    `polish: 画像上下文 摘要长度=${profile.summary.length} 样本数=${profile.recentSamples.length}`,
+  );
   const samples = profile.recentSamples.length
     ? profile.recentSamples.map((s) => `- 【${s.title}】${s.body}`).join("\n")
     : "（暂无）";
@@ -291,7 +308,7 @@ export async function polishPromptBody(
   const content = `请润色以下提示词内容：\n\n${body}`;
   const text = await collectText(llm, route, system, content);
   if (!text) return undefined;
-  logAI("polish: 完成（等待用户确认许可后并入画像学习）");
+  logAI(`polish: 完成 结果长度=${text.length}（等待用户确认许可后并入画像学习）`);
   return text;
 }
 
@@ -302,5 +319,5 @@ export async function polishPromptBody(
 export async function learnPolished(body: string): Promise<void> {
   const sampleTitle = body.split("\n")[0]?.trim().slice(0, 30) || "AI 润色";
   await updateProfileWith({ title: sampleTitle, body, tags: [] }, "");
-  logAI(`polish: 用户确认学习 ${sampleTitle}`);
+  logAI(`polish: 用户确认学习 "${sampleTitle}" 长度=${body.length}（已并入用户画像）`);
 }

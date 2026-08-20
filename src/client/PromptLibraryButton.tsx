@@ -30,6 +30,7 @@ import { SidebarPromptLibrary } from "./SidebarPromptLibrary.js";
 import { useHoverDetail } from "./HoverDetail.js";
 import { AUTO_LEARN_TOAST_MS, useAutoLearn } from "./auto-learn.js";
 import { isRecent, markRecent } from "./recent-created.js";
+import { notifyDataChanged, useDataChanged } from "./data-sync.js";
 
 
 /**
@@ -474,10 +475,13 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
       });
   }, []);
 
+  // 订阅数据变化：侧边栏新增/修改/删除时同步刷新本面板
+  useDataChanged(refresh);
+
   // 自动学习
   useAutoLearn(draft, prompts, settings, useCallback((learned: Prompt) => {
-    // 先立即刷新，展示自动学习结果（此刻可能还未被 AI 完善）
-    refresh();
+    // 通知两侧面板重新加载，展示自动学习结果（此刻可能还未被 AI 完善）
+    notifyDataChanged();
     showToast();
     // 若开启 AI 智能完善：AI 回写是异步的（约 10~30 秒）。
     // 轮询列表直到该条提示词完成 AI 完善（aiRefined === true），
@@ -496,12 +500,14 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
         if (updated?.aiRefined) {
           clearInterval(timer);
           setPrompts(list);
+          // AI 完善回写完成后，同样通知两侧面板同步刷新
+          notifyDataChanged();
         }
       } catch {
         // 拉取失败忽略，等待下一轮
       }
     }, 4000);
-  }, [refresh, showToast, settings.aiEnrichEnabled]));
+  }, [showToast, settings.aiEnrichEnabled]));
 
   // ~ 键触发
   useTildaTrigger(settings, prompts, inputActions, draft);
@@ -568,7 +574,8 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
     const tags = editor.tags.split(",").map((t) => t.trim()).filter(Boolean);
     const done = () => {
       setEditor(NO_EDITOR);
-      refresh();
+      // 通知两侧面板同步刷新（本面板通过事件统一重新加载）
+      notifyDataChanged();
     };
     if (editor.mode === "create") {
       apiCreate({ title, body, tags }).then((p) => {
@@ -586,7 +593,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
 
   const remove = (p: Prompt) => {
     if (!confirm(`删除 "${p.title}"？`)) return;
-    apiDelete(p.id).then(refresh, (e: unknown) =>
+    apiDelete(p.id).then(notifyDataChanged, (e: unknown) =>
       setError(e instanceof Error ? e.message : String(e)),
     );
   };
@@ -838,10 +845,6 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                   {filtered.map((p) => (
                     <li
                       key={p.id}
-                      onMouseEnter={hoverEnabled ? (e) => hover.show(p, e.clientX, e.clientY) : undefined}
-                      onMouseMove={hoverEnabled ? (e) => hover.show(p, e.clientX, e.clientY) : undefined}
-                      onMouseLeave={hoverEnabled ? hover.hide : undefined}
-                      onClick={hoverEnabled ? hover.hide : undefined}
                       style={{
                         padding: "10px 16px",
                         borderBottom: `1px solid ${TONE.border}`,
@@ -868,16 +871,25 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                           </span>
                         )}
                       </div>
-                      <pre style={{
-                        margin: 0,
-                        color: TONE.muted,
-                        fontSize: 12,
-                        whiteSpace: "pre-wrap",
-                        wordBreak: "break-word",
-                        fontFamily: MONO,
-                        maxHeight: 54,
-                        overflow: "hidden",
-                      }}>
+                      <pre
+                        onMouseEnter={hoverEnabled ? (e) => { e.currentTarget.style.background = "rgba(142, 197, 255, 0.08)"; hover.show(p, e.clientX, e.clientY); } : undefined}
+                        onMouseMove={hoverEnabled ? (e) => hover.show(p, e.clientX, e.clientY) : undefined}
+                        onMouseLeave={hoverEnabled ? (e) => { e.currentTarget.style.background = "transparent"; hover.leave(); } : undefined}
+                        onClick={hoverEnabled ? hover.hide : undefined}
+                        style={{
+                          margin: 0,
+                          color: TONE.muted,
+                          fontSize: 12,
+                          whiteSpace: "pre-wrap",
+                          wordBreak: "break-word",
+                          fontFamily: MONO,
+                          maxHeight: 54,
+                          overflow: "hidden",
+                          borderRadius: 6,
+                          cursor: hoverEnabled ? "pointer" : "default",
+                          transition: "background 0.15s ease",
+                        }}
+                      >
                         {p.body}
                       </pre>
                       <div style={{ display: "flex", gap: 6 }}>

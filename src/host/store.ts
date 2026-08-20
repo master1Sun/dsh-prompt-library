@@ -23,6 +23,11 @@ function storePath(): string {
   return join(dshHome(), "prompt-library.json");
 }
 
+/** 去掉 UTF-8 BOM（Windows 记事本/PowerShell 等工具可能写入），避免 JSON.parse 失败。 */
+function stripBom(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
 const EMPTY: PromptStoreFile = { version: 1, prompts: [] };
 
 /** 单管道读-修改-写队列。 */
@@ -31,7 +36,7 @@ let chain: Promise<unknown> = Promise.resolve();
 function readRaw(): Promise<PromptStoreFile> {
   return readFile(storePath(), "utf8")
     .then((text) => {
-      const parsed = JSON.parse(text) as PromptStoreFile;
+      const parsed = JSON.parse(stripBom(text)) as PromptStoreFile;
       if (parsed?.version !== 1 || !Array.isArray(parsed.prompts)) {
         throw new Error("prompt-library.json: unexpected shape");
       }
@@ -266,7 +271,7 @@ function settingsPath(): string {
 async function readSettingsRaw(): Promise<PluginSettings> {
   try {
     const text = await readFile(settingsPath(), "utf8");
-    const parsed = JSON.parse(text) as Partial<PluginSettings>;
+    const parsed = JSON.parse(stripBom(text)) as Partial<PluginSettings>;
     // 合并默认值，确保所有字段都存在
     return { ...DEFAULT_SETTINGS, ...parsed };
   } catch (err) {

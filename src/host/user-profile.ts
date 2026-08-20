@@ -203,10 +203,15 @@ function parseJsonProfile(text: string): UserProfile {
   };
 }
 
+/** 去掉 UTF-8 BOM（Windows 工具写入时可能带），避免解析首行失败。 */
+function stripBom(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
 function readRaw(): Promise<UserProfile> {
   // 1) 优先读取 Markdown 画像
   return readFile(profilePath(), "utf8")
-    .then(parseProfile)
+    .then((text) => parseProfile(stripBom(text)))
     .catch(async (err) => {
       if (err && typeof err === "object" && "code" in err && (err as NodeJS.ErrnoException).code !== "ENOENT") {
         throw err;

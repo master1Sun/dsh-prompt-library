@@ -35,6 +35,7 @@ import {
 } from "./api.js";
 import { isRecent, markRecent } from "./recent-created.js";
 import { useHoverDetail } from "./HoverDetail.js";
+import { notifyDataChanged, useDataChanged } from "./data-sync.js";
 
 const MONO =
   '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "SimHei", "黑体", sans-serif';
@@ -169,6 +170,9 @@ export function SidebarPromptLibrary(props?: {
       });
   }, []);
 
+  // 订阅数据变化：聊天面板新增/修改/删除时同步刷新本面板
+  useDataChanged(refresh);
+
   // 展开时加载数据并聚焦搜索框
   useEffect(() => {
     if (collapsed) return;
@@ -261,9 +265,9 @@ export function SidebarPromptLibrary(props?: {
       aiRefined: true,
     }).then(() => {
       closePolish();
-      refresh();
+      notifyDataChanged();
     }, (e: unknown) => setError(e instanceof Error ? e.message : String(e)));
-  }, [polish, polishResult, prompts, closePolish, refresh]);
+  }, [polish, polishResult, prompts, closePolish]);
 
   // 用户确认许可：把润色结果并入用户画像学习
   const confirmLearn = useCallback(() => {
@@ -327,7 +331,7 @@ export function SidebarPromptLibrary(props?: {
     const tags = editor.tags.split(",").map((t) => t.trim()).filter(Boolean);
     const done = () => {
       setEditor(NO_EDITOR);
-      refresh();
+      notifyDataChanged();
     };
     if (editor.mode === "create") {
       apiCreate({ title, body, tags }).then((p) => {
@@ -345,7 +349,7 @@ export function SidebarPromptLibrary(props?: {
 
   const remove = (p: Prompt) => {
     if (!confirm(`删除 "${p.title}"？`)) return;
-    apiDelete(p.id).then(refresh, (e: unknown) =>
+    apiDelete(p.id).then(notifyDataChanged, (e: unknown) =>
       setError(e instanceof Error ? e.message : String(e)),
     );
   };
@@ -676,9 +680,6 @@ export function SidebarPromptLibrary(props?: {
                     {!isCollapsed && items.map((p) => (
                       <div
                         key={p.id}
-                        onMouseEnter={hoverEnabled ? (e) => hover.show(p, e.clientX, e.clientY) : undefined}
-                        onMouseMove={hoverEnabled ? (e) => hover.show(p, e.clientX, e.clientY) : undefined}
-                        onMouseLeave={hoverEnabled ? hover.hide : undefined}
                         onClick={hoverEnabled ? hover.hide : undefined}
                         style={{
                           padding: "10px 16px",
@@ -713,16 +714,25 @@ export function SidebarPromptLibrary(props?: {
                             )}
                           </div>
                         </div>
-                        <pre style={{
-                          margin: 0,
-                          color: TONE.quiet,
-                          fontSize: 11,
-                          whiteSpace: "pre-wrap",
-                          wordBreak: "break-word",
-                          fontFamily: MONO,
-                          maxHeight: 84,
-                          overflow: "hidden",
-                        }}>
+                        <pre
+                          onMouseEnter={hoverEnabled ? (e) => { e.currentTarget.style.background = "rgba(142, 197, 255, 0.08)"; hover.show(p, e.clientX, e.clientY); } : undefined}
+                          onMouseMove={hoverEnabled ? (e) => hover.show(p, e.clientX, e.clientY) : undefined}
+                          onMouseLeave={hoverEnabled ? (e) => { e.currentTarget.style.background = "transparent"; hover.leave(); } : undefined}
+                          onClick={hoverEnabled ? hover.hide : undefined}
+                          style={{
+                            margin: 0,
+                            color: TONE.quiet,
+                            fontSize: 11,
+                            whiteSpace: "pre-wrap",
+                            wordBreak: "break-word",
+                            fontFamily: MONO,
+                            maxHeight: 84,
+                            overflow: "hidden",
+                            borderRadius: 6,
+                            cursor: hoverEnabled ? "pointer" : "default",
+                            transition: "background 0.15s ease",
+                          }}
+                        >
                           {p.body}
                         </pre>
                         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>

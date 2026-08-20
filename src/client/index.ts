@@ -16,6 +16,7 @@
  */
 import type { ReactNode } from "react";
 import { PromptLibraryButton } from "./PromptLibraryButton.js";
+import { AIPolishButton } from "./AIPolishButton.js";
 import { SettingsSection } from "./SettingsSection.js";
 import {
   registerSettingsNavIcon,
@@ -87,6 +88,20 @@ export function apply(ctx: ClientCtx): void {
         locale: NS,
       },
       PromptLibraryButton as (props: unknown) => ReactNode,
+    ),
+  );
+
+  // 注册 AI 润色按钮：紧邻提示词库按钮（order 61），复用同一输入框插槽。
+  // AI 能力复用 host 侧 ai.ts（polishPromptBody / learnPolished）。
+  ctx.slots.inject("conversation.input.left", () =>
+    ctx.slots.register(
+      {
+        name: "conversation.input.left",
+        id: "prompt-library-ai-polish",
+        order: 61,
+        locale: NS,
+      },
+      AIPolishButton as (props: unknown) => ReactNode,
     ),
   );
 

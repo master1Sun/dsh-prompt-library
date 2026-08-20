@@ -849,7 +849,10 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                           ...(isRecent(p.id) ? { color: TONE.accent } : {}),
                         }}>{p.title}</strong>
                         {isRecent(p.id) && (
-                          <span style={{ color: TONE.accent, fontSize: 10 }}>新增</span>
+                          <span
+                            title="新增"
+                            style={{ width: 8, height: 8, borderRadius: "50%", background: TONE.mint, display: "inline-block", flexShrink: 0 }}
+                          />
                         )}
                         {p.tags && p.tags.length > 0 && (
                           <span style={{ color: TONE.quiet, fontSize: 11 }}>

@@ -352,6 +352,16 @@ export function SettingsSection(): ReactNode {
           onChange={(v) => updateAndSave({ showComposerButton: v })}
         />
 
+		<div style={{ height: 1, background: TONE.border, margin: "8px 0" }} />
+
+        {/* AI 润色按钮显隐开关 */}
+        <ToggleRow
+          label="聊天框显示 AI 润色按钮"
+          desc="在输入框工具栏显示 AI 润色按钮"
+          checked={draft.showAIPolishButton}
+          onChange={(v) => updateAndSave({ showAIPolishButton: v })}
+        />
+
         <div style={{ height: 1, background: TONE.border, margin: "8px 0" }} />
 
         {/* # 触发开关 */}

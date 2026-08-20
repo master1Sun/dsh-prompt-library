@@ -1,0 +1,275 @@
+/**
+ * AI 润色 composer 按钮控件。
+ *
+ * 注册到 `conversation.input.left` 插槽：composer 工具栏中「提示词库」旁的
+ * 一个润色星星按钮。点击后获取当前输入框草稿，调用 harness AI 润色，
+ * 处理中按钮图标显示旋转动画；润色完成后弹出结果面板，支持一键覆盖输入框内容，
+ * 并自动把润色内容并入用户画像（AI 自学习），越用越贴合用户风格。
+ *
+ * AI 能力完全复用 host 侧 ai.ts（polishPromptBody / learnPolished），
+ * 本组件只做浏览器端编排，不重复实现 AI 调用逻辑。
+ */
+import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
+import { PL_BUTTON_CSS, plBtn } from "./button-style.js";
+import { getSettings as apiGetSettings, learnPolished, polishPrompt } from "./api.js";
+import type { PluginSettings } from "../types.js";
+import { DEFAULT_SETTINGS } from "../types.js";
+
+/**
+ * `conversation.input.left` 的最小属性合约（与 PromptLibraryButton 一致）。
+ * useInput 读取当前草稿；inputActions.setDraft 覆盖输入框内容。
+ */
+interface ButtonProps {
+  useInput: <T>(selector: (s: { draft: string }) => T) => T;
+  inputActions: {
+    setDraft: (text: string) => void;
+  };
+}
+
+const MONO =
+  'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif)';
+
+const TONE = {
+  text: "var(--dsw-alias-label-primary, #f2f6fc)",
+  muted: "var(--dsw-alias-label-secondary, #9daabd)",
+  quiet: "var(--dsw-alias-label-tertiary, #718096)",
+  panel: "var(--dsw-alias-bg-layer-1, #171f2b)",
+  row: "var(--dsw-alias-bg-layer-3, #1d2735)",
+  border: "var(--dsw-alias-border-l2, rgba(196, 211, 232, 0.16))",
+  borderStrong: "var(--dsw-alias-border-l3, rgba(196, 211, 232, 0.31))",
+  accent: "var(--dsw-alias-brand-primary, #8ec5ff)",
+  mint: "var(--dsw-alias-state-success-primary, #78dda0)",
+  red: "var(--dsw-alias-state-error-primary, #ff8592)",
+} as const;
+
+/** toast 展示时长（毫秒）。 */
+const TOAST_MS = 2200;
+
+/** 润色星星图标：主四角星 + 右上小星光。 */
+function SparkleIcon({ spinning }: { spinning: boolean }): ReactNode {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+      style={{ animation: spinning ? "pl-polish-spin 0.9s linear infinite" : "none" }}
+    >
+      <path
+        d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z"
+        stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"
+      />
+      <path
+        d="M18.5 14.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2Z"
+        stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** 读取插件设置，并在设置变更时（pl:settings-changed）立即生效。 */
+function useSettings(): PluginSettings {
+  const [settings, setSettings] = useState<PluginSettings>(DEFAULT_SETTINGS);
+
+  const load = useCallback(() => {
+    apiGetSettings().then(setSettings).catch(() => {});
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    const onChanged = (e: Event) => {
+      const detail = (e as CustomEvent).detail as PluginSettings | undefined;
+      if (detail) setSettings(detail);
+      else load();
+    };
+    window.addEventListener("pl:settings-changed", onChanged);
+    return () => window.removeEventListener("pl:settings-changed", onChanged);
+  }, [load]);
+
+  return settings;
+}
+
+export function AIPolishButton(props: ButtonProps): ReactNode {
+  const { inputActions, useInput } = props;
+  const draft = useInput((s) => s.draft);
+
+  const settings = useSettings();
+
+  const [status, setStatus] = useState<"idle" | "polishing" | "done" | "error">("idle");
+  const [result, setResult] = useState("");
+  const [error, setError] = useState("");
+  const [toast, setToast] = useState("");
+
+  // 定时清除 toast，避免长期悬浮
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(""), TOAST_MS);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  const showToast = useCallback((msg: string) => setToast(msg), []);
+
+  const closeResult = useCallback(() => {
+    setStatus("idle");
+    setResult("");
+    setError("");
+  }, []);
+
+  /** 点击润色：取输入框内容 → 调 AI 润色 → 展示结果并纳入画像自学习。 */
+  const handlePolish = useCallback(() => {
+    const text = draft.trim();
+    if (!text) {
+      showToast("请先在输入框输入内容");
+      return;
+    }
+    setStatus("polishing");
+    setError("");
+    polishPrompt(draft)
+      .then(({ polished }) => {
+        setResult(polished);
+        setStatus("done");
+        // 把润色能力写回用户画像，作为学习能力储存（AI 自学习）
+        learnPolished(polished).catch(() => {});
+        showToast("润色完成，已纳入自学习");
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : String(err));
+        setStatus("error");
+        showToast("AI 润色失败，请确认已连接 LLM 服务");
+      });
+  }, [draft, showToast]);
+
+  /** 用润色结果覆盖输入框内容。 */
+  const applyResult = useCallback(() => {
+    if (!result) return;
+    inputActions.setDraft(result);
+    showToast("已替换到输入框");
+    closeResult();
+  }, [result, inputActions, showToast, closeResult]);
+
+  /** 复制润色结果到剪贴板。 */
+  const copyResult = useCallback(() => {
+    navigator.clipboard.writeText(result).catch(() => {});
+    showToast("已复制");
+  }, [result, showToast]);
+
+  const containerStyle: CSSProperties = {
+    display: "inline-flex",
+    position: "relative",
+    fontFamily: MONO,
+  };
+
+  const panelStyle: CSSProperties = {
+    position: "absolute",
+    right: 0,
+    bottom: "calc(100% + 4px)",
+    zIndex: 1000,
+    width: 380,
+    maxWidth: "calc(100vw - 24px)",
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+    padding: "14px 16px",
+    color: TONE.text,
+    background: TONE.panel,
+    border: `1px solid ${TONE.borderStrong}`,
+    borderRadius: 12,
+    boxShadow: "0 1px 4px rgba(3, 8, 18, 0.1)",
+    fontFamily: MONO,
+  };
+
+  // 由设置控制显隐（hooks 已全部执行完再判断，保持 hooks 顺序稳定）
+  if (!settings.showAIPolishButton) return null;
+
+  return (
+    <span data-prompt-library-ai-polish style={containerStyle}>
+      <style>{PL_BUTTON_CSS}</style>
+      <style>{`@keyframes pl-polish-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className={plBtn("ghost", "sm")}
+        onClick={handlePolish}
+        disabled={status === "polishing"}
+        title={status === "polishing" ? "AI 润色中…" : "AI 润色当前输入内容"}
+        aria-label="AI 润色"
+        icon={<SparkleIcon spinning={status === "polishing"} />}
+      >
+        {status === "polishing" ? "润色中…" : "AI 润色"}
+      </Button>
+
+      {/* 状态提示 */}
+      {toast && (
+        <span
+          role="status" aria-live="polite"
+          style={{
+            position: "absolute",
+            bottom: "calc(100% + 4px)",
+            right: 0,
+            padding: "4px 10px",
+            color: TONE.panel,
+            background: status === "error" ? TONE.red : TONE.mint,
+            borderRadius: 6,
+            fontSize: 11,
+            fontFamily: MONO,
+            whiteSpace: "nowrap",
+            pointerEvents: "none",
+            opacity: 0.92,
+            zIndex: 1001,
+          }}
+        >
+          {status === "error" ? "\u26A0 " : "\u2713 "}
+          {toast}
+        </span>
+      )}
+
+      {/* 润色结果面板：可编辑，支持覆盖输入框 */}
+      {status === "done" && (
+        <>
+          <div onClick={closeResult} style={{ position: "fixed", inset: 0, zIndex: 999 }} />
+          <section role="dialog" aria-label="AI 润色结果" style={panelStyle}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
+              <strong style={{ fontSize: 13, fontWeight: 470 }}>AI 润色结果</strong>
+              {error && <span style={{ color: TONE.red, fontSize: 11 }}>{error}</span>}
+            </div>
+            <textarea
+              value={result}
+              onChange={(e) => setResult(e.target.value)}
+              rows={7}
+              aria-label="润色结果"
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                resize: "vertical",
+                padding: "7px 9px",
+                color: TONE.text,
+                background: TONE.row,
+                border: `1px solid ${TONE.border}`,
+                borderRadius: 7,
+                fontFamily: MONO,
+                fontSize: 12,
+                outline: "none",
+              }}
+            />
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={copyResult}>
+                复制
+              </Button>
+              <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={closeResult}>
+                关闭
+              </Button>
+              <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={applyResult}>
+                替换内容
+              </Button>
+            </div>
+          </section>
+        </>
+      )}
+    </span>
+  );
+}

@@ -690,7 +690,10 @@ export function SidebarPromptLibrary(props?: {
                           }}>{p.title}</strong>
                           <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                             {isRecent(p.id) && (
-                              <span style={{ color: TONE.accent, fontSize: 10 }}>新增</span>
+                              <span
+                                title="新增"
+                                style={{ width: 8, height: 8, borderRadius: "50%", background: TONE.mint, display: "inline-block", flexShrink: 0 }}
+                              />
                             )}
                             {p.usageCount > 0 && (
                               <span style={{ color: TONE.quiet, fontSize: 10 }}>

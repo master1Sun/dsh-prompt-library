@@ -99,6 +99,8 @@ export interface PluginSettings {
   rightPanelEnabled: boolean;
   /** 是否在聊天框工具栏显示提示词库按钮。 */
   showComposerButton: boolean;
+  /** 是否在聊天框工具栏显示 AI 润色按钮。 */
+  showAIPolishButton: boolean;
   /** 是否启用输入 ~ 触发词库选择。 */
   tildaTriggerEnabled: boolean;
   /** 提示词最大存储数量。 */
@@ -122,6 +124,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   panelHeight: 500,
   rightPanelEnabled: false,
   showComposerButton: true,
+  showAIPolishButton: true,
   tildaTriggerEnabled: true,
   maxPromptCount: 100,
   hoverDetailEnabled: false,

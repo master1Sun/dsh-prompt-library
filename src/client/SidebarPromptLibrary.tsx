@@ -32,6 +32,7 @@ import {
   usePrompt as apiUse,
 } from "./api.js";
 import { isRecent, markRecent } from "./recent-created.js";
+import { useHoverDetail } from "./HoverDetail.js";
 
 const MONO =
   '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "SimHei", "黑体", sans-serif';
@@ -123,6 +124,9 @@ export function SidebarPromptLibrary(props?: {
 
   const searchRef = useRef<HTMLInputElement | null>(null);
   const refreshController = useRef<AbortController | null>(null);
+  // 提示词行悬停详情（由设置控制，默认关闭）
+  const hover = useHoverDetail();
+  const hoverEnabled = settings.hoverDetailEnabled;
 
   const refresh = useCallback(() => {
     refreshController.current?.abort();
@@ -454,7 +458,7 @@ export function SidebarPromptLibrary(props?: {
                     value={editor.body}
                     onChange={(e) => setEditor({ ...editor, body: e.target.value })}
                     rows={6}
-                    style={{ ...inputStyle, resize: "vertical", minHeight: 90 }}
+                    style={{ ...inputStyle, resize: "vertical", minHeight: 250 }}
                   />
                 </label>
                 <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
@@ -488,7 +492,7 @@ export function SidebarPromptLibrary(props?: {
                   <div key={tag}>
                     {/* 分组头 — 可点击折叠/展开 */}
                     <div
-                      onClick={() => toggleGroup(tag)}
+                      onClick={() => { hover.hide(); toggleGroup(tag); }}
                       style={{
                         padding: "8px 16px 4px",
                         fontSize: 11,
@@ -513,6 +517,10 @@ export function SidebarPromptLibrary(props?: {
                     {!isCollapsed && items.map((p) => (
                       <div
                         key={p.id}
+                        onMouseEnter={hoverEnabled ? (e) => hover.show(p, e.clientX, e.clientY) : undefined}
+                        onMouseMove={hoverEnabled ? (e) => hover.show(p, e.clientX, e.clientY) : undefined}
+                        onMouseLeave={hoverEnabled ? hover.hide : undefined}
+                        onClick={hoverEnabled ? hover.hide : undefined}
                         style={{
                           padding: "10px 16px",
                           borderBottom: `1px solid ${TONE.border}`,
@@ -548,12 +556,12 @@ export function SidebarPromptLibrary(props?: {
                         </div>
                         <pre style={{
                           margin: 0,
-                          color: TONE.muted,
-                          fontSize: 12,
+                          color: TONE.quiet,
+                          fontSize: 11,
                           whiteSpace: "pre-wrap",
                           wordBreak: "break-word",
                           fontFamily: MONO,
-                          maxHeight: 54,
+                          maxHeight: 84,
                           overflow: "hidden",
                         }}>
                           {p.body}
@@ -571,6 +579,7 @@ export function SidebarPromptLibrary(props?: {
               </div>
             )}
           </div>
+          {hoverEnabled && hover.overlay}
         </section>
       )}
     </>

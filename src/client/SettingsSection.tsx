@@ -2,10 +2,11 @@
  * 提示词库设置面板 — 注册到 harness 的 settings.section 插槽。
  *
  * 在 DSH 设置界面中显示插件的所有配置项：
- * - 自动学习开关 + 标签/最小长度
+ * - 自动学习开关 + 标签/最小长度 + AI 智能完善（含 Provider/模型）
  * - 面板宽度/高度自定义
  * - 右侧侧边栏模式开关
- * - ~ 键触发词库选择开关
+ * - # 键触发词库选择开关
+ * - 鼠标移入显示详情开关
  * - 提示词最大存储数量
  * - 底部署名
  *
@@ -134,42 +135,50 @@ function TextRow({
   label,
   value,
   placeholder,
+  desc,
   onChange,
 }: {
   label: string;
   value: string;
   placeholder?: string;
+  desc?: string;
   onChange: (v: string) => void;
 }): ReactNode {
   return (
-    <label
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        gap: 12,
-        padding: "8px 0",
-      }}
-    >
-      <span style={{ fontSize: 13 }}>{label}</span>
-      <input
-        type="text"
-        value={value}
-        placeholder={placeholder}
-        onChange={(e) => onChange(e.target.value)}
+    <div style={{ padding: "8px 0" }}>
+      <label
         style={{
-          width: 120,
-          padding: "4px 6px",
-          color: TONE.text,
-          background: TONE.row,
-          border: `1px solid ${TONE.border}`,
-          borderRadius: 5,
-          fontFamily: MONO,
-          fontSize: 12,
-          outline: "none",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 12,
         }}
-      />
-    </label>
+      >
+        <span style={{ fontSize: 13 }}>{label}</span>
+        <input
+          type="text"
+          value={value}
+          placeholder={placeholder}
+          onChange={(e) => onChange(e.target.value)}
+          style={{
+            width: 120,
+            padding: "4px 6px",
+            color: TONE.text,
+            background: TONE.row,
+            border: `1px solid ${TONE.border}`,
+            borderRadius: 5,
+            fontFamily: MONO,
+            fontSize: 12,
+            outline: "none",
+          }}
+        />
+      </label>
+      {desc && (
+        <div style={{ fontSize: 11, color: TONE.quiet, marginTop: 4, lineHeight: 1.5 }}>
+          {desc}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -248,6 +257,32 @@ export function SettingsSection(): ReactNode {
               step={10}
               onChange={(v) => updateAndSave({ autoLearnMinLength: v })}
             />
+
+            {/* AI 智能完善开关（仅在自动学习开启时可用） */}
+            <ToggleRow
+              label="AI 智能完善"
+              desc="自动学习时调用 harness AI 生成标题/标签/摘要并改写正文，越用越聪明"
+              checked={draft.aiEnrichEnabled}
+              onChange={(v) => updateAndSave({ aiEnrichEnabled: v })}
+            />
+            {draft.aiEnrichEnabled && (
+              <div style={{ paddingLeft: 24 }}>
+                <TextRow
+                  label="AI Provider"
+                  value={draft.aiProvider}
+                  placeholder="留空自动发现"
+                  desc="模型服务供应商，如 DeepSeek、OpenAI 兼容服务等；留空时自动发现首个可用的 provider。"
+                  onChange={(v) => updateAndSave({ aiProvider: v })}
+                />
+                <TextRow
+                  label="AI 模型"
+                  value={draft.aiModel}
+                  placeholder="留空自动发现"
+                  desc="该 provider 下的模型 id，如 DeepSeek-V4-Flash、DeepSeek-V4-Pro；留空时自动选择 id 含 deepseek 的模型。"
+                  onChange={(v) => updateAndSave({ aiModel: v })}
+                />
+              </div>
+            )}
           </div>
         )}
 
@@ -289,6 +324,16 @@ export function SettingsSection(): ReactNode {
           desc="在输入框中输入 # 时弹出词库选择"
           checked={draft.tildaTriggerEnabled}
           onChange={(v) => updateAndSave({ tildaTriggerEnabled: v })}
+        />
+
+        <div style={{ height: 1, background: TONE.border, margin: "8px 0" }} />
+
+        {/* 鼠标移入显示详情开关 */}
+        <ToggleRow
+          label="鼠标移入显示详情"
+          desc="鼠标移入提示词时显示完整详情"
+          checked={draft.hoverDetailEnabled}
+          onChange={(v) => updateAndSave({ hoverDetailEnabled: v })}
         />
 
         <div style={{ height: 1, background: TONE.border, margin: "8px 0" }} />

@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { PluginSettings, Prompt, PromptStoreFile } from "../types.js";
 import { DEFAULT_SETTINGS } from "../types.js";
+import { enrichLearnedPrompt, isAiAvailable } from "./ai.js";
 
 const DEFAULT_DSH_HOME = join(homedir(), ".dsh");
 
@@ -137,17 +138,29 @@ export function createPrompt(input: {
 
 export function updatePrompt(
   id: string,
-  patch: { title?: string; body?: string; tags?: string[]; usageCount?: number; lastUsedAt?: number },
+  patch: {
+    title?: string;
+    body?: string;
+    tags?: string[];
+    summary?: string;
+    sourceBody?: string;
+    aiRefined?: boolean;
+    usageCount?: number;
+    lastUsedAt?: number;
+  },
 ): Promise<Prompt | undefined> {
   return transaction(async (store) => {
     const idx = store.prompts.findIndex((p) => p.id === id);
     if (idx === -1) return undefined;
     const current = store.prompts[idx]!;
     const next: Prompt = {
-      id: current.id,
+      ...current,
       title: patch.title !== undefined ? patch.title.trim() : current.title,
       body: patch.body !== undefined ? patch.body : current.body,
       tags: patch.tags !== undefined ? patch.tags : current.tags,
+      summary: patch.summary !== undefined ? patch.summary : current.summary,
+      sourceBody: patch.sourceBody !== undefined ? patch.sourceBody : current.sourceBody,
+      aiRefined: patch.aiRefined !== undefined ? patch.aiRefined : current.aiRefined,
       updatedAt: Date.now(),
       usageCount: patch.usageCount !== undefined ? patch.usageCount : current.usageCount,
       lastUsedAt: patch.lastUsedAt !== undefined ? patch.lastUsedAt : current.lastUsedAt,
@@ -185,9 +198,13 @@ export function recordUsage(id: string): Promise<Prompt | undefined> {
  * 通过精确正文匹配（trim + 忽略大小写）去重。如果正文已存在，
  * 返回已有的提示词；否则创建一个新提示词，自动生成标题
  *（首行或前 40 个字符），并标记 "auto-learned" 标签。
+ *
+ * 保存成功后，如果开启 AI 智能完善且有可用 LLM 服务，
+ * 会在后台调用 harness AI 生成标题/标签/摘要并改写正文，
+ * 同时更新用户画像（不阻塞 /learn 响应，失败静默）。
  */
 export function autoLearn(body: string, tag?: string): Promise<Prompt> {
-  return transaction(async (store) => {
+  const created = transaction(async (store) => {
     const normalized = body.trim().toLowerCase();
     const existing = store.prompts.find(
       (p) => p.body.trim().toLowerCase() === normalized,
@@ -214,6 +231,17 @@ export function autoLearn(body: string, tag?: string): Promise<Prompt> {
     // 创建后检查是否超过最大数量
     const settings = await readSettingsRaw();
     await enforceMaxCount(store, settings.maxPromptCount);
+    return prompt;
+  });
+
+  return created.then(async (prompt) => {
+    // 后台 AI 完善：不阻塞响应，任何失败静默降级
+    const settings = await readSettingsRaw();
+    if (settings.aiEnrichEnabled && isAiAvailable()) {
+      enrichLearnedPrompt(prompt, settings).catch(() => {
+        /* 静默：AI 完善失败不影响已保存的提示词 */
+      });
+    }
     return prompt;
   });
 }

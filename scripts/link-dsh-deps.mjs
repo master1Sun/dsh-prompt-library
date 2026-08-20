@@ -8,7 +8,7 @@ import { mkdir, symlink, lstat, readdir, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-const root = dirname(fileURLToPath(import.meta.url));
+const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const nmAt = join(root, "node_modules", "@deepseek-ai");
 
 const dshHome = process.env.DSH_HOME || join(process.env.HOME || process.env.USERPROFILE, ".dsh");

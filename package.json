@@ -1,6 +1,6 @@
 {
   "name": "@sunjuntao/dsh-prompt-library",
-  "version": "0.2.1-rc",
+  "version": "0.2.3-rc",
   "description": "DSH web 插件：在 composer 工具栏注入一个「提示词库」按钮，管理可复用 prompt 片段，点击插入当前输入框。host 侧用文件持久化到 ~/.dsh/prompt-library.json。",
   "type": "module",
   "main": "./lib/index.js",
@@ -52,6 +52,8 @@
   "scripts": {
     "link-dsh-deps": "node scripts/link-dsh-deps.mjs",
     "build": "node scripts/build.mjs",
+    "sync": "node scripts/sync-to-profile.mjs",
+    "deploy": "npm run build && npm run sync",
     "typecheck": "tsc --noEmit",
     "prepare": "node scripts/build.mjs",
     "prepublishOnly": "node scripts/build.mjs",
@@ -59,12 +61,16 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1-rc.1",
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/cordis": {
       "optional": false
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
     },
     "react": {
       "optional": false

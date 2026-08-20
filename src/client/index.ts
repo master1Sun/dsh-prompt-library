@@ -20,7 +20,6 @@ import { SettingsSection } from "./SettingsSection.js";
 import {
   registerSettingsNavIcon,
   SETTINGS_NAV_CSS,
-  SETTINGS_NAV_MARKER,
 } from "./settings-nav-icon.js";
 
 const NS = "prompt-library";

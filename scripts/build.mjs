@@ -25,6 +25,7 @@ const external = [
   "react/jsx-runtime",
   "@deepseek-ai/cordis",
   "@deepseek-ai/dsh-host-webserver",
+  "@deepseek-ai/dsh-llm",
   "@deepseek-ai/dsh-client-runtime",
   "@deepseek-ai/dsh-client-runtime/client",
   "@deepseek-ai/dsh-client-locale",

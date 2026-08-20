@@ -22,12 +22,13 @@ import {
   createPrompt as apiCreate,
   deletePrompt as apiDelete,
   getSettings as apiGetSettings,
-  learnPrompt as apiLearn,
   listPrompts as apiList,
   updatePrompt as apiUpdate,
   usePrompt as apiUse,
 } from "./api.js";
 import { SidebarPromptLibrary } from "./SidebarPromptLibrary.js";
+import { useHoverDetail } from "./HoverDetail.js";
+import { AUTO_LEARN_TOAST_MS, useAutoLearn } from "./auto-learn.js";
 import { isRecent, markRecent } from "./recent-created.js";
 
 
@@ -57,68 +58,6 @@ const TONE = {
   mint: "var(--dsw-alias-state-success-primary, #78dda0)",
   red: "var(--dsw-alias-state-error-primary, #ff8592)",
 } as const;
-
-// ── 自动学习 ────────────────────────────────────────────────────────────────
-
-const AUTO_LEARN_DEBOUNCE_MS = 3000;
-const AUTO_LEARN_TOAST_MS = 2500;
-
-/**
- * 判断文本是否适合自动学习。
- * 使用设置中的最小长度和启发式规则。
- */
-function isLearnWorthy(text: string, minLength: number): boolean {
-  const t = text.trim();
-  if (t.length < minLength) return false;
-  const sentenceEnds = (t.match(/[.!?]\s/g) ?? []).length;
-  const newlines = (t.match(/\n/g) ?? []).length;
-  if (sentenceEnds < 1 && newlines < 1) return false;
-  const hasPlaceholders = /\{[\w]+\}/.test(t) || /\[[\w]+\]/.test(t);
-  return hasPlaceholders || newlines >= 1 || sentenceEnds >= 2;
-}
-
-function useAutoLearn(
-  draft: string,
-  existingPrompts: Prompt[],
-  settings: PluginSettings,
-  onLearned: () => void,
-): void {
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const submittedRef = useRef<Set<string>>(new Set());
-
-  useEffect(() => {
-    if (!settings.autoLearnEnabled) return;
-    const text = draft.trim();
-    if (!text) return;
-    if (!isLearnWorthy(text, settings.autoLearnMinLength)) return;
-
-    const normalized = text.toLowerCase();
-    if (existingPrompts.some((p) => p.body.trim().toLowerCase() === normalized)) return;
-    if (submittedRef.current.has(normalized)) return;
-
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(async () => {
-      submittedRef.current.add(normalized);
-      try {
-        const learned = await apiLearn(text, settings.autoLearnTag);
-        markRecent(learned.id);
-        onLearned();
-      } catch {
-        // 静默失败
-      }
-    }, AUTO_LEARN_DEBOUNCE_MS);
-
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-  }, [draft, existingPrompts, settings.autoLearnEnabled, settings.autoLearnMinLength, settings.autoLearnTag, onLearned]);
-
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-  }, []);
-}
 
 // ── # 键触发 ────────────────────────────────────────────────────────────────
 
@@ -507,6 +446,9 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   const [settings] = useSettings();
   const panelId = useId();
   const refreshController = useRef<AbortController | null>(null);
+  // 提示词行悬停详情（由设置控制，默认关闭）
+  const hover = useHoverDetail();
+  const hoverEnabled = settings.hoverDetailEnabled;
 
   const showToast = useCallback(() => {
     setToast({ visible: true });
@@ -533,10 +475,33 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   }, []);
 
   // 自动学习
-  useAutoLearn(draft, prompts, settings, useCallback(() => {
+  useAutoLearn(draft, prompts, settings, useCallback((learned: Prompt) => {
+    // 先立即刷新，展示自动学习结果（此刻可能还未被 AI 完善）
     refresh();
     showToast();
-  }, [refresh, showToast]));
+    // 若开启 AI 智能完善：AI 回写是异步的（约 10~30 秒）。
+    // 轮询列表直到该条提示词完成 AI 完善（aiRefined === true），
+    // 再刷新展示 AI 生成的标题/标签/摘要，避免前端一直停留在自动完善结果。
+    if (!settings.aiEnrichEnabled) return;
+    const started = Date.now();
+    const maxWaitMs = 60_000;
+    const timer = setInterval(async () => {
+      if (Date.now() - started > maxWaitMs) {
+        clearInterval(timer);
+        return;
+      }
+      try {
+        const list = await apiList();
+        const updated = list.find((p) => p.id === learned.id);
+        if (updated?.aiRefined) {
+          clearInterval(timer);
+          setPrompts(list);
+        }
+      } catch {
+        // 拉取失败忽略，等待下一轮
+      }
+    }, 4000);
+  }, [refresh, showToast, settings.aiEnrichEnabled]));
 
   // ~ 键触发
   useTildaTrigger(settings, prompts, inputActions, draft);
@@ -628,6 +593,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
 
   // 按钮点击：始终弹出面板，与侧边栏独立显示
   const handleButtonClick = () => {
+    hover.hide();
     setOpen((v) => !v);
   };
 
@@ -866,6 +832,10 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                   {filtered.map((p) => (
                     <li
                       key={p.id}
+                      onMouseEnter={hoverEnabled ? (e) => hover.show(p, e.clientX, e.clientY) : undefined}
+                      onMouseMove={hoverEnabled ? (e) => hover.show(p, e.clientX, e.clientY) : undefined}
+                      onMouseLeave={hoverEnabled ? hover.hide : undefined}
+                      onClick={hoverEnabled ? hover.hide : undefined}
                       style={{
                         padding: "10px 16px",
                         borderBottom: `1px solid ${TONE.border}`,
@@ -917,6 +887,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
           </section>
         </>
       )}
+      {hoverEnabled && hover.overlay}
       <SidebarPromptLibrary inputActions={inputActions} draft={draft} />
     </span>
   );

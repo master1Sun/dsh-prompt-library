@@ -60,8 +60,13 @@ export function usePrompt(id: string): Promise<Prompt> {
 }
 
 /** 调用 harness AI 润色提示词正文，返回润色后的文本。 */
-export function polishPrompt(body: string, title?: string): Promise<{ polished: string }> {
-  return send<{ polished: string }>("POST", "/api/prompt-library/ai/polish", { body, title });
+export function polishPrompt(body: string): Promise<{ polished: string }> {
+  return send<{ polished: string }>("POST", "/api/prompt-library/ai/polish", { body });
+}
+
+/** 用户确认许可后，把润色内容并入用户画像（AI 自学习）。 */
+export function learnPolished(body: string): Promise<{ learned: boolean }> {
+  return send<{ learned: boolean }>("POST", "/api/prompt-library/ai/polish/learn", { body });
 }
 
 const SETTINGS_BASE = "/api/prompt-library/settings";

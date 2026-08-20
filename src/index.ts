@@ -8,6 +8,7 @@
 import type { Context } from "@deepseek-ai/cordis";
 import { makePromptRoutes } from "./host/routes.js";
 import { registerLlm, logAiInjected } from "./host/ai.js";
+import { ensureProfileFile } from "./host/user-profile.js";
 
 export const name = "prompt-library";
 
@@ -16,6 +17,10 @@ export const inject: string[] = [];
 
 export function apply(ctx: Context): void {
   const routes = makePromptRoutes();
+
+  // 启动时确保用户画像文件存在（~/.dsh/prompt-library-user.md），
+  // 便于用户确认画像落盘与路径；失败静默忽略，不影响其他功能。
+  ensureProfileFile().catch(() => {});
 
   // 注入 LLM 服务：可用时把 harness 的 AI 能力提供给自学习模块；
   // llm 不可用（如无模型配置）时 AI 完善自动停用，不影响其他功能。

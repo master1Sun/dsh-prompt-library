@@ -31,6 +31,7 @@ import {
   updatePrompt as apiUpdate,
   usePrompt as apiUse,
   polishPrompt,
+  learnPolished,
 } from "./api.js";
 import { isRecent, markRecent } from "./recent-created.js";
 import { useHoverDetail } from "./HoverDetail.js";
@@ -107,6 +108,16 @@ export function SidebarPromptLibrary(props?: {
   >({ status: "idle" });
   // AI 润色结果（可编辑）
   const [polishResult, setPolishResult] = useState("");
+  // 当前润色结果是否已获用户确认并纳入画像学习
+  const [polishLearned, setPolishLearned] = useState(false);
+  // 轻量成功提示（toast），短暂显示后自动消失
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<number | null>(null);
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), 2600);
+  }, []);
   // 每个分组的折叠状态（持久化到 localStorage，刷新后保持）
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
     try {
@@ -206,20 +217,32 @@ export function SidebarPromptLibrary(props?: {
       .catch(() => {});
   }, []);
 
-  // 调用 AI 润色提示词正文，成功后进入润色结果视图
+  // 调用 AI 润色提示词正文，成功后进入润色结果视图。
+  // 勾选「AI 智能完善」时，润色结果自动纳入 AI 自学习，无需用户确认；
+  // 未勾选时，仅展示结果，由用户点击「确认学习」后再纳入画像。
   const startPolish = useCallback((p: Prompt) => {
     setPolish({ status: "loading", id: p.id });
-    polishPrompt(p.body, p.title).then(
+    polishPrompt(p.body).then(
       (res) => {
         setPolishResult(res.polished);
+        setPolishLearned(false);
         setPolish({ status: "done", id: p.id });
+        if (settings.aiEnrichEnabled) {
+          learnPolished(res.polished).then(
+            () => {
+              setPolishLearned(true);
+              showToast("学习成功，已自动纳入用户画像");
+            },
+            (e: unknown) => setError(e instanceof Error ? e.message : String(e)),
+          );
+        }
       },
       (e: unknown) => {
         setError(e instanceof Error ? e.message : String(e));
         setPolish({ status: "idle" });
       },
     );
-  }, []);
+  }, [settings.aiEnrichEnabled, showToast]);
 
   // 关闭润色结果视图
   const closePolish = useCallback(() => {
@@ -241,6 +264,18 @@ export function SidebarPromptLibrary(props?: {
       refresh();
     }, (e: unknown) => setError(e instanceof Error ? e.message : String(e)));
   }, [polish, polishResult, prompts, closePolish, refresh]);
+
+  // 用户确认许可：把润色结果并入用户画像学习
+  const confirmLearn = useCallback(() => {
+    if (polish.status !== "done" || polishLearned) return;
+    learnPolished(polishResult).then(
+      () => {
+        setPolishLearned(true);
+        showToast("学习成功，已写入用户画像");
+      },
+      (e: unknown) => setError(e instanceof Error ? e.message : String(e)),
+    );
+  }, [polish, polishResult, polishLearned, showToast]);
 
   // 按 tag 分组（无 tag 归为"未分类"，多 tag 的提示词出现在每个 tag 分组中）
   const tagGrouped = useMemo(() => {
@@ -513,6 +548,11 @@ export function SidebarPromptLibrary(props?: {
                   <strong style={{ fontSize: 13 }}>AI 润色结果</strong>
                   <button type="button" onClick={closePolish} style={smallGhostStyle}>关闭</button>
                 </div>
+                <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5 }}>
+                  {settings.aiEnrichEnabled
+                    ? "仅润色内容。已开启「AI 智能完善」，本次润色将自动纳入 AI 自学习，越用越贴合你的风格。"
+                    : "仅润色内容。点击「确认学习」后，本次润色将纳入 AI 自学习，让润色越用越贴合你的风格。"}
+                </div>
                 <textarea
                   value={polishResult}
                   onChange={(e) => setPolishResult(e.target.value)}
@@ -533,6 +573,32 @@ export function SidebarPromptLibrary(props?: {
                   <button type="button" onClick={savePolish} style={smallPrimaryStyle}>
                     保存到词库
                   </button>
+                  {settings.aiEnrichEnabled ? (
+                    <span
+                      style={{
+                        ...smallGhostStyle,
+                        color: polishLearned ? TONE.quiet : TONE.accent,
+                        borderStyle: "dashed",
+                        opacity: polishLearned ? 0.7 : 1,
+                      }}
+                    >
+                      {polishLearned ? "已自动纳入自学习" : "自动学习中…"}
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={confirmLearn}
+                      disabled={polishLearned}
+                      style={{
+                        ...smallGhostStyle,
+                        color: polishLearned ? TONE.quiet : TONE.accent,
+                        cursor: polishLearned ? "not-allowed" : "pointer",
+                        opacity: polishLearned ? 0.7 : 1,
+                      }}
+                    >
+                      {polishLearned ? "已学习" : "确认学习"}
+                    </button>
+                  )}
                 </div>
               </div>
             ) : editing ? (
@@ -690,6 +756,29 @@ export function SidebarPromptLibrary(props?: {
           </div>
           {hoverEnabled && hover.overlay}
         </section>
+      )}
+      {/* 成功提示浮层 */}
+      {toast && (
+        <div
+          role="status"
+          style={{
+            position: "fixed",
+            left: "50%",
+            bottom: 24,
+            transform: "translateX(-50%)",
+            zIndex: 2147483647,
+            padding: "9px 16px",
+            background: "rgba(46, 160, 67, 0.94)",
+            color: "#ffffff",
+            borderRadius: 8,
+            fontSize: 12,
+            fontFamily: MONO,
+            boxShadow: "0 4px 18px rgba(3, 8, 18, 0.45)",
+            pointerEvents: "none",
+          }}
+        >
+          {toast}
+        </div>
       )}
     </>
   );

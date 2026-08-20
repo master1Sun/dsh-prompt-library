@@ -242,6 +242,23 @@ function transaction<T>(fn: (profile: UserProfile) => Promise<T> | T): Promise<T
   return run;
 }
 
+/**
+ * 确保用户画像文件存在（~/.dsh/prompt-library-user.md）。
+ * 文件缺失（且无旧版 JSON 待迁移）时创建一份空画像 Markdown，
+ * 让用户随时能看到画像的落盘位置与结构，便于确认功能生效。
+ */
+export function ensureProfileFile(): Promise<void> {
+  return transaction(async (profile) => {
+    const isEmpty =
+      profile.learnCount === 0 &&
+      !profile.summary &&
+      profile.recentSamples.length === 0 &&
+      Object.keys(profile.topics).length === 0;
+    if (isEmpty) await writeRaw(profile);
+    return profile;
+  }).then(() => undefined);
+}
+
 /** 读取用户画像（返回一个深拷贝，避免调用方误改共享状态）。 */
 export function readProfile(): Promise<UserProfile> {
   return transaction(async (profile) => ({

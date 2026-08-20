@@ -275,7 +275,7 @@ export function SettingsSection(): ReactNode {
             {/* AI 智能完善开关（仅在自动学习开启时可用） */}
             <ToggleRow
               label="AI 智能完善"
-              desc="自动学习时调用 harness AI 生成标题/标签/摘要并改写正文，越用越聪明"
+              desc="自动学习时调用 harness AI 生成标题/标签/摘要并改写正文"
               checked={draft.aiEnrichEnabled}
               onChange={(v) => updateAndSave({ aiEnrichEnabled: v })}
             />
@@ -285,14 +285,14 @@ export function SettingsSection(): ReactNode {
                   label="AI Provider"
                   value={draft.aiProvider}
                   placeholder="留空自动发现"
-                  desc="模型服务供应商，如 DeepSeek、OpenAI 兼容服务等；留空时自动发现首个可用的 provider。"
+                  desc="模型服务供应商，例如 DeepSeek、OpenAI 兼容服务等；留空时自动发现首个可用的 provider。"
                   onChange={(v) => updateAndSave({ aiProvider: v })}
                 />
                 <TextRow
                   label="AI 模型"
                   value={draft.aiModel}
                   placeholder="留空自动发现"
-                  desc="该 provider 下的模型 id，如 DeepSeek-V4-Flash、DeepSeek-V4-Pro；留空时自动选择 id 含 deepseek 的模型。"
+                  desc="该 provider 下的模型 id，例如 DeepSeek-V4-Flash、DeepSeek-V4-Pro；留空时自动选择 id 含 deepseek 的模型。"
                   onChange={(v) => updateAndSave({ aiModel: v })}
                 />
               </div>
@@ -331,7 +331,7 @@ export function SettingsSection(): ReactNode {
           defaultValue={DEFAULT_SETTINGS.maxPromptCount}
           onChange={(v) => updateAndSave({ maxPromptCount: v })}
         />
-        
+
         <div style={{ height: 1, background: TONE.border, margin: "8px 0" }} />
 
         {/* 右侧展开/折叠开关 */}

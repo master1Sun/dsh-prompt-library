@@ -8,24 +8,26 @@
  * - 统计高频主题（标签频次）
  * - 记录最近学习的提示词样本（供后续 AI 调用参考）
  *
- * 旧版 JSON（prompt-library-user.json）会在首次读取时自动迁移为 MD。
+ * 旧版 JSON 迁移逻辑已移除，仅保留 Markdown 实现。
  * 与提示词存储一样，通过单管道读-修改-写队列串行化访问。
  */
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { UserProfile, UserProfileSample } from "../types.js";
+import type { UserProfile } from "../types.js";
 
 const DEFAULT_DSH_HOME = join(homedir(), ".dsh");
 
 /** 摘要最长字符数，超出时裁剪最旧的行。 */
 const MAX_SUMMARY_CHARS = 1500;
+/** 摘要最多保留的行数（只保留核心重点，防止无意义累积）。 */
+const MAX_SUMMARY_LINES = 8;
 /** 画像保留的主题数量上限（按频次）。 */
 const MAX_TOPICS = 50;
 /** 画像保留的最近样本数量上限。 */
 const MAX_SAMPLES = 8;
-/** 样本正文的存储截断长度。 */
-const SAMPLE_BODY_CAP = 500;
+/** 样本正文的存储截断长度：只保留开头的主旨作为记忆锚点，不存大段内容。 */
+const SAMPLE_BODY_CAP = 120;
 
 // ── Markdown 结构常量 ────────────────────────────────────────────────────────
 const H1 = "# 用户画像";
@@ -46,11 +48,6 @@ function dshHome(): string {
 /** 当前用户画像文件（Markdown）。 */
 function profilePath(): string {
   return join(dshHome(), "prompt-library-user.md");
-}
-
-/** 旧版用户画像文件（JSON，仅用于迁移）。 */
-function jsonProfilePath(): string {
-  return join(dshHome(), "prompt-library-user.json");
 }
 
 /** 空画像工厂：每次返回全新对象，避免共享可变引用。 */
@@ -182,53 +179,20 @@ function parseProfile(text: string): UserProfile {
   return profile;
 }
 
-/** 读取旧版 JSON 画像（迁移用）。 */
-function parseJsonProfile(text: string): UserProfile {
-  const parsed = JSON.parse(text) as Partial<UserProfile>;
-  return {
-    version: 1,
-    summary: typeof parsed.summary === "string" ? parsed.summary : "",
-    topics:
-      parsed.topics && typeof parsed.topics === "object"
-        ? (parsed.topics as Record<string, number>)
-        : {},
-    recentSamples: Array.isArray(parsed.recentSamples)
-      ? parsed.recentSamples.filter(
-          (s): s is UserProfileSample =>
-            !!s && typeof s.title === "string" && typeof s.body === "string" && Array.isArray(s.tags),
-        )
-      : [],
-    learnCount: typeof parsed.learnCount === "number" ? parsed.learnCount : 0,
-    updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : 0,
-  };
-}
-
 /** 去掉 UTF-8 BOM（Windows 工具写入时可能带），避免解析首行失败。 */
 function stripBom(text: string): string {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
 function readRaw(): Promise<UserProfile> {
-  // 1) 优先读取 Markdown 画像
   return readFile(profilePath(), "utf8")
     .then((text) => parseProfile(stripBom(text)))
-    .catch(async (err) => {
+    .catch((err) => {
       if (err && typeof err === "object" && "code" in err && (err as NodeJS.ErrnoException).code !== "ENOENT") {
         throw err;
       }
-      // 2) 旧版 JSON 迁移：读 JSON -> 写 MD -> 删除 JSON
-      try {
-        const jsonText = await readFile(jsonProfilePath(), "utf8");
-        const profile = parseJsonProfile(jsonText);
-        await writeRaw(profile);
-        await rm(jsonProfilePath(), { force: true });
-        return profile;
-      } catch (jsonErr) {
-        if (jsonErr && typeof jsonErr === "object" && "code" in jsonErr && (jsonErr as NodeJS.ErrnoException).code === "ENOENT") {
-          return emptyProfile();
-        }
-        throw jsonErr;
-      }
+      // Markdown 文件不存在：返回空画像（仅保留 Markdown 实现）
+      return emptyProfile();
     });
 }
 
@@ -249,7 +213,7 @@ function transaction<T>(fn: (profile: UserProfile) => Promise<T> | T): Promise<T
 
 /**
  * 确保用户画像文件存在（~/.dsh/prompt-library-user.md）。
- * 文件缺失（且无旧版 JSON 待迁移）时创建一份空画像 Markdown，
+ * 文件缺失时创建一份空画像 Markdown，
  * 让用户随时能看到画像的落盘位置与结构，便于确认功能生效。
  */
 export function ensureProfileFile(): Promise<void> {
@@ -274,10 +238,12 @@ export function readProfile(): Promise<UserProfile> {
 }
 
 /**
- * 把一次 AI 完善的结果合并进用户画像：
- * - 摘要：追加 insight（超长时裁剪最旧的行，保留最新）；
+ * 把一次 AI 完善的结果合并进用户画像。
+ * 画像定位是「AI 自学习的记忆与个性配置文件」，所有字段都有固定上限，
+ * 只存核心记忆要点，绝不无休止堆积内容：
+ * - 摘要：仅追加一句话洞察（去重，最多 MAX_SUMMARY_LINES 行 / MAX_SUMMARY_CHARS 字符）；
  * - 主题：累加标签频次（裁剪到 MAX_TOPICS）；
- * - 样本：去重后置顶最近学习的提示词（保留 MAX_SAMPLES 条）；
+ * - 样本：去重后置顶最近学习的提示词（保留 MAX_SAMPLES 条，正文截断到 SAMPLE_BODY_CAP）；
  * - 统计：自增学习次数并更新时间戳。
  */
 export function updateProfileWith(
@@ -291,10 +257,25 @@ export function updateProfileWith(
       recentSamples: profile.recentSamples.map((s) => ({ ...s, tags: [...s.tags] })),
     };
 
-    // 1) 累积摘要
+    // 1) 累积摘要：只写入核心重点 —— 先去重（大小写不敏感），再按条数/字符双上限裁剪，
+    //    避免无意义的重复与堆积稀释掉画像的核心用途。
     const line = insight.trim();
     if (line) {
-      next.summary = next.summary ? `${next.summary.trim()}\n- ${line}` : `- ${line}`;
+      const normalized = line.toLowerCase();
+      const existing = next.summary
+        .split("\n")
+        .map((s) => s.trim().replace(/^- /, ""))
+        .filter(Boolean)
+        .map((s) => s.toLowerCase());
+      if (!existing.includes(normalized)) {
+        next.summary = next.summary ? `${next.summary.trim()}\n- ${line}` : `- ${line}`;
+      }
+      // 只保留最近 MAX_SUMMARY_LINES 行（最新最能反映用户当前风格）
+      const summaryLines = next.summary.split("\n").filter(Boolean);
+      if (summaryLines.length > MAX_SUMMARY_LINES) {
+        next.summary = summaryLines.slice(-MAX_SUMMARY_LINES).join("\n");
+      }
+      // 超长时裁剪最旧的行，保留最新
       if (next.summary.length > MAX_SUMMARY_CHARS) {
         const lines = next.summary.split("\n");
         let out = lines[lines.length - 1] ?? "";
@@ -321,7 +302,11 @@ export function updateProfileWith(
       sample.body.length > SAMPLE_BODY_CAP ? `${sample.body.slice(0, SAMPLE_BODY_CAP)}…` : sample.body;
     next.recentSamples = [
       { title: sample.title, body: bodyCap, tags: [...sample.tags] },
-      ...next.recentSamples.filter((s) => s.title !== sample.title),
+      ...next.recentSamples
+        .filter((s) => s.title !== sample.title)
+        .map((s) =>
+          s.body.length > SAMPLE_BODY_CAP ? { ...s, body: `${s.body.slice(0, SAMPLE_BODY_CAP)}…` } : s,
+        ),
     ].slice(0, MAX_SAMPLES);
 
     // 4) 统计

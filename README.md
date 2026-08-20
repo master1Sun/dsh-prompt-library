@@ -1,111 +1,59 @@
 # dsh-prompt-library
 
-DSH（DeepSeek Harness）Web 插件：在 composer 工具栏注入「提示词库」按钮，管理可复用的 prompt 片段，点击即可插入当前输入框。
+DSH（DeepSeek Harness）提示词库插件：在聊天栏提供**提示词管理**与**AI 润色**能力，帮你沉淀、复用和优化提示词。
 
-支持 **# 键快速触发**、**AI 自学习**、**AI 智能完善（润色）**、**右侧侧边栏** 与 **原生设置面板**。
+## 主要功能
 
-## 功能特性
+### 提示词库
 
-### 提示词管理
+- 保存和管理常用提示词（标题 + 正文 + 标签），支持搜索、排序、标签分组
+- 一键插入：点击提示词即可填入输入框
+- 输入 `#` 快速选择提示词
+- 新建 / 自动学习的提示词带绿色圆点标记
+- 支持聊天栏弹窗和右侧侧边栏两种方式，两边实时同步
 
-- **增删改查**：标题 + 正文 + 标签；按关键词搜索（标题/正文/标签）
-- **一键插入**：点击列表项自动插入当前输入框
-- **排序**：使用最多的前 3 条置顶，其余按更新时间倒序
-- **标签分组**：按标签分组展示，多标签提示词出现在每个对应分组
-- **新增高亮**：新建 / 自动学习的提示词带「新增」标记
+### AI 润色
 
-### 与官方 UI 同步
+- 聊天栏「AI 润色」按钮，一键优化输入框中的文字
+- 润色时按钮显示处理动画，完成后可一键替换回输入框
+- 润色结果自动纳入自学习，越用越懂你的风格
 
-- 按钮使用官方 `Button` 组件（`variant`/`size`），字体走官方 `--dsw-font-family`，颜色/边框/背景全用 `--dsw-alias-*` 语义化 token，随主题自动生效
+### AI 自学习
 
-### # 键触发词库选择
+- 输入内容自动识别保存为提示词，无需手动整理
+- AI 智能完善标题、标签、摘要和正文
+- 学习样本累积成用户画像，作为 AI 的个性化记忆，越用越贴合
 
-- 输入 `#` 弹出选择浮层：`↑` `↓` 选择、`Enter` 插入、`Esc` 关闭；鼠标移入高亮可点击插入
-- 兼容标准 `textarea`/`input` 与 `contenteditable`，通过 `keyup`/`input`/`compositionend` 三事件检测
-- 浮层智能定位：底部空间不足自动翻转到输入框上方，上下都不足时收缩最大高度
+### 设置
 
-### 右侧侧边栏模式
+在 DSH 设置 → 提示词库中调整：自动学习开关、面板大小、侧边栏、按钮显隐、`#` 触发、AI 模型等，修改即时生效。
 
-- 面板固定在屏幕右侧（`position: fixed`），不随滚动条移动
-- 展开时面板左缘显示折叠按钮；折叠后右缘仅剩紧凑圆形箭头按钮（默认透明、hover 出背景）
-- 折叠/展开按钮位置随面板宽度实时更新；折叠后点击面板外部不关闭
-- 聊天栏弹窗与侧边栏通过 `data-sync.ts` 实时同步（任一组件增删改，两边自动刷新）
+## 数据存储
 
-### AI 自学习 + AI 智能完善
-
-- **自动学习**：输入适合作为提示词的文本并停止输入约 3 秒，自动识别保存（长度 ≥ 最小学习长度、含 `{var}` 占位符、多行结构等）；自动去重（精确正文匹配）、自动生成标题、标记 `auto-learned` 标签
-- **AI 智能完善**：后台调用 harness LLM 生成标题/标签/摘要并优化正文；完成后前端自动轮询刷新列表，无需手动刷新
-- **自学习策略**：勾选「AI智能完善」时润色结果自动纳入自学习；未勾选时弹窗提示需用户点击「确认学习」
-- **用户画像**：学习样本累积到 `~/.dsh/prompt-library-user.json`（摘要/高频主题/最近样本），AI 完善时以此作为上下文，越用越贴合用户风格
-- **悬停详情**：鼠标移入提示词行显示正文详情（仅内容，可滚动；默认关闭，可在设置开启）
-
-### 原生设置面板
-
-注册到 DSH 设置界面（设置 → 提示词库），修改立即生效。支持：
-
-- 自动学习开关 / 标签 / 最小长度（20–500，默认 60）
-- 面板宽度（300–700px，默认 380）/ 面板高度（300–800px，默认 500）
-- 右侧侧边栏展开/折叠、聊天框按钮显隐
-- '#'键触发、鼠标移入显示详情、提示词最大存储数量（10–1000，默认 100）
-- AI 智能完善开关、AI provider / model（留空自动发现）
-
-## 持久化
-
-
-| 数据     | 路径                                  |
-| -------- | ------------------------------------- |
-| 提示词   | `~/.dsh/prompt-library.json`          |
+| 数据     | 位置                                |
+| -------- | ----------------------------------- |
+| 提示词   | `~/.dsh/prompt-library.json`        |
 | 设置     | `~/.dsh/prompt-library-settings.json` |
-| 用户画像 | `~/.dsh/prompt-library-user.json`     |
+| 用户画像 | `~/.dsh/prompt-library-user.md`     |
 
-## 安装（harness 插件方式）
+> 用户画像是 AI 自学习的记忆文件，只保留核心要点，不会无限膨胀。
+
+## 安装
 
 ```bash
 dsh plugin --profile web add @sunjuntao/dsh-prompt-library
 ```
 
-或手动方式：
+## 使用
 
-```bash
-cd ~/.dsh/profiles/web
-# package.json 的 dependencies 添加 "@sunjuntao/dsh-prompt-library": "latest"
-# dsh.profile.bundles 数组追加 "@sunjuntao/dsh-prompt-library"
-pnpm install --no-frozen-lockfile
-```
+启动 `dsh web`，点击聊天栏「提示词库」按钮打开面板，或输入 `#` 快速触发；点击「AI 润色」一键优化输入内容。
 
 ## 开发 / 构建
 
 ```bash
-cd dsh-prompt-library
 npm install
-npm run typecheck   # TS 类型检查
-npm run build       # 构建产物到 lib/
-npm run sync        # 同步到 ~/.dsh/profiles/web（需重启 dsh web 生效）
-npm run deploy      # build + sync
+npm run deploy   # 类型检查 + 构建 + 同步到 DSH（需重启 dsh web 生效）
 ```
-
-构建产物：
-
-- `lib/index.js` — host 入口（Node ESM）
-- `lib/client.js` — 浏览器入口（`__ModuleLoader__` 格式）
-
-## 使用
-
-启动 `dsh web`，在对话输入框左侧工具栏点击 **提示词库** 按钮打开面板，或输入 `#` 快速触发。
-
-## 验证安装
-
-```bash
-dsh --profile web --dump-config | grep prompt-library
-```
-
-## 技术栈
-
-- **运行时**：DSH Cordis 插件框架
-- **UI 插槽**：`conversation.input.left`、`settings.section`
-- **前端**：React + TypeScript
-- **构建**：esbuild
-- **持久化**：JSON 文件
 
 ## 效果图
 

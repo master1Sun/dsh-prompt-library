@@ -169,7 +169,8 @@ export function makePromptRoutes(): WebRoute[] {
         }
         const body = (raw as { body: string }).body;
         if (!body.trim()) return json(res, 400, { ok: false, error: "body empty" });
-        await learnPolished(body);
+        const settings = await getSettings();
+        await learnPolished(body, settings);
         return json(res, 200, { ok: true, data: { learned: true } });
       }
 

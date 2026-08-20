@@ -315,9 +315,45 @@ export async function polishPromptBody(
 /**
  * 用户确认许可后，把一段 AI 润色内容并入用户画像（AI 自学习），
  * 让润色也积累用户习惯、越用越贴合。
+ * 会调用 AI 从润色内容中提炼一句风格洞察，追加写入画像摘要；
+ * AI 不可用或失败时静默降级（洞察为空，仅记录样本）。
  */
-export async function learnPolished(body: string): Promise<void> {
+export async function learnPolished(body: string, settings: PluginSettings): Promise<void> {
   const sampleTitle = body.split("\n")[0]?.trim().slice(0, 30) || "AI 润色";
-  await updateProfileWith({ title: sampleTitle, body, tags: [] }, "");
-  logAI(`polish: 用户确认学习 "${sampleTitle}" 长度=${body.length}（已并入用户画像）`);
+  const insight = await generateInsight(body, settings);
+  await updateProfileWith({ title: sampleTitle, body, tags: [] }, insight);
+  logAI(
+    `polish: 用户确认学习 "${sampleTitle}" 长度=${body.length} 洞察长度=${insight.length}（已并入用户画像）`,
+  );
+}
+
+/**
+ * 从一段提示词内容中提炼一句话用户风格/关注领域洞察，
+ * 用于追加到用户画像摘要（越学越准）。失败时返回空字符串。
+ */
+async function generateInsight(body: string, settings: PluginSettings): Promise<string> {
+  if (!llm) return "";
+  const route = await resolveRoute(llm, settings);
+  if (!route) return "";
+  const profile = await readProfile();
+  const samples = profile.recentSamples.length
+    ? profile.recentSamples.map((s) => `- 【${s.title}】${s.body}`).join("\n")
+    : "（暂无）";
+  const system = [
+    "你是一名用户画像洞察助手，擅长从用户使用的提示词中提炼用户的写作风格与关注领域。",
+    "",
+    "【用户画像摘要】此前积累的风格与偏好（可能为空）：",
+    profile.summary || "（暂无）",
+    "",
+    "【用户最近学习的提示词】供你参考用户风格（可能为空）：",
+    samples,
+    "",
+    "要求：",
+    "- 用一句中文（不超过 40 字）总结这条提示词反映的用户写作风格或关注领域；",
+    "- 不要引用或重复提示词原文，只提炼抽象特征；",
+    "- 直接输出这一句话，不要任何解释或 Markdown 代码块。",
+  ].join("\n");
+  const content = `请提炼以下提示词反映的用户风格或关注领域：\n\n${body}`;
+  const text = await collectText(llm, route, system, content);
+  return text?.trim() ?? "";
 }

@@ -1,4 +1,4 @@
 # dsh-prompt-library bundle patch：把插件挂进 profile
 - insert:
     - id: prompt-library
-      name: 'dsh-prompt-library'
+      name: '@sunjuntao/dsh-prompt-library'

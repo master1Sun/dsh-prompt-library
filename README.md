@@ -41,7 +41,7 @@ DSH（DeepSeek Harness）提示词库插件：在聊天栏提供**提示词管�
 ## 安装
 
 ```bash
-dsh plugin --profile web add dsh-prompt-library
+dsh plugin --profile web add @sunjuntao/dsh-prompt-library
 ```
 
 ## 使用

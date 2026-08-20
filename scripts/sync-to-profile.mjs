@@ -54,10 +54,16 @@ for (const f of files) {
 
 // 4) 同步 package.json，让运行环境版本号与本地一致（避免版本困惑）
 await cp(join(root, "package.json"), join(dstRoot, "package.json"), { force: true });
+copied++;
+
+// 5) 同步 bundle patch（cordis.patch.yml）：本地对 patch 的修改（如入口包名）
+//    必须覆盖到安装副本，否则 npm 包自带的旧 patch 会导致 dsh web 启动失败。
+await cp(join(root, "cordis.patch.yml"), join(dstRoot, "cordis.patch.yml"), { force: true });
+copied++;
 
 const localPkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 console.log(`sync-to-profile: 已同步 ${copied} 个文件`);
 console.log(`  lib/ → ${dstLib}`);
-console.log(`  package.json → ${dstRoot}\\package.json`);
+console.log(`  package.json + cordis.patch.yml → ${dstRoot}`);
 console.log(`  版本：${pkgName}@${localPkg.version}`);
 console.log(`完成！请重启 \`dsh web\` 使新版本生效。`);

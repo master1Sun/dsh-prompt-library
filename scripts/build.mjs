@@ -7,12 +7,18 @@
 //                    react + react/jsx-runtime + @deepseek-ai/* 在运行时通过
 //                    factory 的 `require` 解析（即不打入 bundle）。
 import { build as esbuildBuild } from "esbuild";
-import { rm, mkdir, writeFile } from "node:fs/promises";
+import { rm, mkdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const PLUGIN_ID = "dsh-prompt-library";
+
+// 客户端模块 id 必须等于包的完整名：client-modules 按插件包名注册浏览器模块，
+// 与加载时校验的 id 一致。从 package.json 的 name 派生（唯一事实来源），
+// 避免硬编码导致包名变更后产物与运行时漂移（历史 bug：曾硬编码为无 scope 的
+// dsh-prompt-library，导致 __ModuleLoader__.load 未注册完整包名而报错）。
+const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+const PLUGIN_ID = pkg.name;
 
 const libDir = join(root, "lib");
 await rm(libDir, { recursive: true, force: true });

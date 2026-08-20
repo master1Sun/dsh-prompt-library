@@ -68,8 +68,8 @@ dsh plugin --profile web add @sunjuntao/dsh-prompt-library
 
 ```bash
 cd ~/.dsh/profiles/web
-# package.json 的 dependencies 添加 "dsh-prompt-library": "latest"
-# dsh.profile.bundles 数组追加 "dsh-prompt-library"
+# package.json 的 dependencies 添加 "@sunjuntao/dsh-prompt-library": "latest"
+# dsh.profile.bundles 数组追加 "@sunjuntao/dsh-prompt-library"
 pnpm install --no-frozen-lockfile
 ```
 

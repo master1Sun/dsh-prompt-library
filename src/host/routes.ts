@@ -113,12 +113,12 @@ export function makePromptRoutes(): WebRoute[] {
         if (typeof raw !== "object" || raw === null || typeof (raw as { body: string }).body !== "string") {
           return json(res, 400, { ok: false, error: "invalid body: {body: string}" });
         }
-        const body = raw as { body: string; tag?: string };
+        const body = raw as { body: string; tag?: string; skipEnrich?: boolean };
         const text = body.body.trim();
         if (text.length < 20) {
           return json(res, 400, { ok: false, error: "body too short" });
         }
-        const prompt = await autoLearn(text, body.tag);
+        const prompt = await autoLearn(text, body.tag, body.skipEnrich);
         return json(res, 200, { ok: true, data: prompt });
       }
 

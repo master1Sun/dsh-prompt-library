@@ -250,7 +250,7 @@ function buildTitle(body: string): string {
   return clampTitle(cleaned.slice(0, Math.max(1, cut)) + "…");
 }
 
-export function autoLearn(body: string, tag?: string): Promise<Prompt> {
+export function autoLearn(body: string, tag?: string, skipEnrich?: boolean): Promise<Prompt> {
   const created = transaction(async (store) => {
     const normalized = body.trim().toLowerCase();
     const existing = store.prompts.find(
@@ -270,6 +270,8 @@ export function autoLearn(body: string, tag?: string): Promise<Prompt> {
       updatedAt: now,
       usageCount: 0,
       lastUsedAt: 0,
+      // 已在界面完成 AI 润色的正文视为已完善，跳过后台 AI 完善
+      aiRefined: !!skipEnrich,
     };
     store.prompts.unshift(prompt);
     await writeRaw(store);
@@ -280,12 +282,15 @@ export function autoLearn(body: string, tag?: string): Promise<Prompt> {
   });
 
   return created.then(async (prompt) => {
-    // 后台 AI 完善：不阻塞响应，任何失败静默降级
-    const settings = await readSettingsRaw();
-    if (settings.aiEnrichEnabled && isAiAvailable()) {
-      enrichLearnedPrompt(prompt, settings).catch(() => {
-        /* 静默：AI 完善失败不影响已保存的提示词 */
-      });
+    // 后台 AI 完善：不阻塞响应，任何失败静默降级。
+    // 若是手动确认里已点过「AI 润色」的正文（skipEnrich），不再重复调用 AI 完善。
+    if (!skipEnrich) {
+      const settings = await readSettingsRaw();
+      if (settings.aiEnrichEnabled && isAiAvailable()) {
+        enrichLearnedPrompt(prompt, settings).catch(() => {
+          /* 静默：AI 完善失败不影响已保存的提示词 */
+        });
+      }
     }
     return prompt;
   });

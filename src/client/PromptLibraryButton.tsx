@@ -494,6 +494,8 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   const [toast, setToast] = useState<{ visible: boolean }>({ visible: false });
   // 手动确认模式：记录待确认入库的正文，聊天框弹出保存/取消
   const [pendingConfirm, setPendingConfirm] = useState<string | null>(null);
+  // 手动确认里是否点过「AI 润色」：点过则保存后不再触发后台 AI 完善
+  const [polishConfirmUsed, setPolishConfirmUsed] = useState(false);
   // 确认卡片内的 AI 润色加载状态
   const [polishConfirmLoading, setPolishConfirmLoading] = useState(false);
 
@@ -564,6 +566,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   // 手动确认模式回调：学习到正文后不自动保存，交由界面弹出保存/取消
   useCallback((text: string) => {
     setPendingConfirm(text);
+    setPolishConfirmUsed(false);
   }, []));
 
   // ~ 键触发
@@ -677,19 +680,22 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
     if (!text) return;
     setPendingConfirm(null);
     try {
-      const learned = await apiLearn(text, settings.autoLearnTag);
+      // 点过「AI 润色」则已是润色后的正文，保存时跳过后台 AI 完善
+      const learned = await apiLearn(text, settings.autoLearnTag, polishConfirmUsed);
+      setPolishConfirmUsed(false);
       markRecent(learned.id);
       notifyDataChanged();
       showToast();
     } catch {
       /* 静默失败 */
     }
-  }, [pendingConfirm, settings.autoLearnTag, showToast]);
+  }, [pendingConfirm, settings.autoLearnTag, showToast, polishConfirmUsed]);
 
   // 手动确认：放弃保存
   const cancelLearn = useCallback(() => {
     setPendingConfirm(null);
     setPolishConfirmLoading(false);
+    setPolishConfirmUsed(false);
   }, []);
 
   // 手动确认卡片：AI 润色确认中的正文，完成后直接把润色结果填充回卡片预览
@@ -700,6 +706,8 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
       const res = await apiPolish(pendingConfirm);
       // 润色完直接填充到框内（预览与待保存正文一起更新）
       setPendingConfirm(res.polished);
+      // 已在本卡片内完成 AI 润色，保存时不再重复触发后台 AI 完善
+      setPolishConfirmUsed(true);
     } catch {
       /* 静默失败 */
     } finally {

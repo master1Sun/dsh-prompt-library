@@ -107,7 +107,8 @@ export function isNearDuplicate(text: string, existingPrompts: Prompt[], thresho
  * 自动学习钩子：草稿文本满足条件且停顿足够时长后，把文本交给回调处理。
  * 支持两种模式：
  * - 自动入库：直接调用 /learn 保存到词库（客户端与 host 双侧去重）。
- * - 手动确认：不自动保存，把文本交给 onManual，由界面弹出保存/取消（AI 智能完善开启时忽略此模式，行为同自动入库）。
+ * - 手动确认：不自动保存，把文本交给 onManual，由界面弹出保存/取消；
+ *   是否在保存后再调后台 AI 完善，由界面按用户是否点过「AI 润色」决定。
  */
 export function useAutoLearn(
   draft: string,
@@ -118,8 +119,9 @@ export function useAutoLearn(
 ): void {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const submittedRef = useRef<Set<string>>(new Set());
-  // 手动确认仅在未开启 AI 智能完善时生效（开启时保持原自动入库逻辑）
-  const manualActive = !!onManual && settings.autoLearnManualConfirm && !settings.aiEnrichEnabled;
+  // 手动确认：只要开启手动确认就生效（无论是否开启 AI 智能完善）。
+  // 是否在保存后继续调后台 AI 完善，由界面在确认保存时按用户是否点过「AI 润色」决定。
+  const manualActive = !!onManual && settings.autoLearnManualConfirm;
 
   useEffect(() => {
     if (!settings.autoLearnEnabled) return;

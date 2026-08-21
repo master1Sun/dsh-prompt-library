@@ -49,9 +49,10 @@ export function deletePrompt(id: string): Promise<{ id: string }> {
   return send<{ id: string }>("DELETE", `${BASE}/${encodeURIComponent(id)}`);
 }
 
-/** 从原始草稿正文自动学习提示词（去重在 host 侧完成）。 */
-export function learnPrompt(body: string, tag?: string): Promise<Prompt> {
-  return send<Prompt>("POST", "/api/prompt-library/learn", { body, tag });
+/** 从原始草稿正文自动学习提示词（去重在 host 侧完成）。
+ * skipEnrich：true 表示正文已在界面完成 AI 润色，不再触发后台 AI 完善。 */
+export function learnPrompt(body: string, tag?: string, skipEnrich?: boolean): Promise<Prompt> {
+  return send<Prompt>("POST", "/api/prompt-library/learn", { body, tag, skipEnrich });
 }
 
 /** 记录提示词的使用（点击插入时调用）。 */

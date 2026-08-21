@@ -13,22 +13,48 @@ import { BlockAssembler, createUserMessage } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, LlmRuntime, LlmModelInfo } from "@deepseek-ai/dsh-llm";
 import type { PluginSettings, Prompt } from "../types.js";
 import { updatePrompt } from "./store.js";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { appendMemory, buildCharacterSystem, noteInsight, readCharacterDocs } from "./character.js";
-import { aiLogPath } from "./paths.js";
+import { logDir } from "./paths.js";
 import type { CharacterKind } from "./paths.js";
 
 /** 单次 AI 完善调用的超时（毫秒）。 */
 const AI_TIMEOUT_MS = 30_000;
 /** AI 完善的输出 token 上限（JSON 输出可能较长，留足空间）。 */
 const AI_MAX_TOKENS = 2048;
-/** AI 完善诊断日志路径（位于统一数据目录 ~/.dsh/prompt-library/ai.log）。 */
-const AI_LOG = aiLogPath();
 
-/** 追加一行 AI 诊断日志；写日志失败绝不影响主流程。 */
+/** 两位数字补零（如 3 → "03"）。 */
+function pad2(n: number): string {
+  return n < 10 ? `0${n}` : String(n);
+}
+
+/** 系统时区（本地）日期，格式 YYYY-MM-DD。 */
+function localDate(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+/** 系统时区（本地）时间戳，格式 YYYY-MM-DD HH:mm:ss。 */
+function localTime(): string {
+  const d = new Date();
+  return `${localDate()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+}
+
+/**
+ * 按系统时区日期返回当天的日志文件路径：
+ * ~/.dsh/prompt-library/log/ai-YYYY-MM-DD.log（每天一个日志文件）。
+ */
+function getDailyLogPath(): string {
+  return join(logDir(), `ai-${localDate()}.log`);
+}
+
+/** 追加一行 AI 诊断日志（按日期分文件，时间戳用系统时区）；写日志失败绝不影响主流程。 */
 function logAI(msg: string): void {
   try {
-    appendFileSync(AI_LOG, `[${new Date().toISOString()}] ${msg}\n`);
+    const logPath = getDailyLogPath();
+    mkdirSync(dirname(logPath), { recursive: true });
+    appendFileSync(logPath, `[${localTime()}] ${msg}\n`);
   } catch {
     /* 忽略 */
   }

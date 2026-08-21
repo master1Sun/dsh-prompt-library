@@ -38,6 +38,7 @@ import { useHoverDetail } from "./HoverDetail.js";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { notifyDataChanged, useDataChanged } from "./data-sync.js";
 import { PL_BUTTON_CSS, plBtn } from "./button-style.js";
+import { type PLTranslate, usePLT } from "./i18n.js";
 
 const MONO =
   'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif)';
@@ -93,8 +94,10 @@ function useSettings(): PluginSettings {
 export function SidebarPromptLibrary(props?: {
   inputActions?: { setDraft: (text: string) => void };
   draft?: string;
+  t?: PLTranslate;
 }): ReactNode {
-  const { inputActions, draft } = props ?? {};
+  const { inputActions, draft, t } = props ?? {};
+  const T = usePLT(t);
   const settings = useSettings();
   // 默认折叠，显示展开按钮
   const [collapsed, setCollapsed] = useState(true);
@@ -246,7 +249,7 @@ export function SidebarPromptLibrary(props?: {
           learnPolished(res.polished).then(
             () => {
               setPolishLearned(true);
-              showToast("学习成功，已自动纳入用户画像");
+              showToast(T("pl.learnSuccessAuto"));
             },
             (e: unknown) => setError(e instanceof Error ? e.message : String(e)),
           );
@@ -257,7 +260,7 @@ export function SidebarPromptLibrary(props?: {
         setPolish({ status: "idle" });
       },
     );
-  }, [settings.aiEnrichEnabled, showToast]);
+  }, [settings.aiEnrichEnabled, showToast, T]);
 
   // 关闭润色结果视图
   const closePolish = useCallback(() => {
@@ -286,15 +289,16 @@ export function SidebarPromptLibrary(props?: {
     learnPolished(polishResult).then(
       () => {
         setPolishLearned(true);
-        showToast("学习成功，已写入用户画像");
+        showToast(T("pl.learnSuccessManual"));
       },
       (e: unknown) => setError(e instanceof Error ? e.message : String(e)),
     );
-  }, [polish, polishResult, polishLearned, showToast]);
+  }, [polish, polishResult, polishLearned, showToast, T]);
 
   // 按 tag 分组（无 tag 归为"未分类"，多 tag 的提示词出现在每个 tag 分组中）
   const tagGrouped = useMemo(() => {
     const groups = new Map<string, Prompt[]>();
+    const uncategorized = T("pl.sidebar.uncategorized");
     for (const p of filtered) {
       if (p.tags && p.tags.length > 0) {
         for (const tag of p.tags) {
@@ -302,18 +306,18 @@ export function SidebarPromptLibrary(props?: {
           groups.get(tag)!.push(p);
         }
       } else {
-        if (!groups.has("未分类")) groups.set("未分类", []);
-        groups.get("未分类")!.push(p);
+        if (!groups.has(uncategorized)) groups.set(uncategorized, []);
+        groups.get(uncategorized)!.push(p);
       }
     }
     // 按标签名排序，"未分类"排最后
     const sorted = Array.from(groups.entries()).sort(([a], [b]) => {
-      if (a === "未分类") return 1;
-      if (b === "未分类") return -1;
+      if (a === uncategorized) return 1;
+      if (b === uncategorized) return -1;
       return a.localeCompare(b);
     });
     return sorted;
-  }, [filtered]);
+  }, [filtered, T]);
 
   // 当设置中启用侧边栏时显示，禁用时隐藏
   if (!settings.rightPanelEnabled) return null;
@@ -336,7 +340,7 @@ export function SidebarPromptLibrary(props?: {
     const title = editor.title.trim();
     const body = editor.body;
     if (!title || !body) {
-      setError("标题和正文为必填项");
+      setError(T("pl.requireTitleBody"));
       return;
     }
     const tags = editor.tags.split(",").map((t) => t.trim()).filter(Boolean);
@@ -359,7 +363,7 @@ export function SidebarPromptLibrary(props?: {
   };
 
   const remove = (p: Prompt) => {
-    if (!confirm(`删除 "${p.title}"？`)) return;
+    if (!confirm(T("pl.confirmDelete", { title: p.title }))) return;
     apiDelete(p.id).then(notifyDataChanged, (e: unknown) =>
       setError(e instanceof Error ? e.message : String(e)),
     );
@@ -378,8 +382,8 @@ export function SidebarPromptLibrary(props?: {
         <button
           type="button"
           onClick={() => setCollapsed(false)}
-          title="展开提示词库"
-          aria-label="展开提示词库"
+          title={T("pl.sidebar.expand")}
+          aria-label={T("pl.sidebar.expand")}
           className="pl-collapse-expand-btn"
           style={{
             position: "fixed",
@@ -408,7 +412,7 @@ export function SidebarPromptLibrary(props?: {
       ) : (
         <section
           role="dialog"
-          aria-label="提示词库"
+          aria-label={T("pl.title")}
           style={{
             position: "fixed",
             right: 0,
@@ -432,8 +436,8 @@ export function SidebarPromptLibrary(props?: {
           <button
             type="button"
             onClick={() => setCollapsed(true)}
-            title="折叠提示词库"
-            aria-label="折叠提示词库"
+            title={T("pl.sidebar.collapse")}
+            aria-label={T("pl.sidebar.collapse")}
             style={{
               position: "fixed",
               right: Math.min(panelWidth, window.innerWidth),
@@ -478,7 +482,7 @@ export function SidebarPromptLibrary(props?: {
               flexShrink: 0,
             }}
           >
-            <strong style={{ fontSize: 14, fontWeight: 470 }}>提示词库</strong>
+            <strong style={{ fontSize: 14, fontWeight: 470 }}>{T("pl.title")}</strong>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <Button
                 type="button"
@@ -487,7 +491,7 @@ export function SidebarPromptLibrary(props?: {
                 className={plBtn("ghost", "sm")}
                 onClick={refresh}
                 disabled={phase === "loading"}
-                title={phase === "loading" ? "刷新中…" : "刷新提示词列表"}
+                title={phase === "loading" ? T("pl.refreshing") : T("pl.refreshTitle")}
                 icon={
                   <svg
                     width="13" height="13" viewBox="0 0 24 24" fill="none"
@@ -500,7 +504,7 @@ export function SidebarPromptLibrary(props?: {
                   </svg>
                 }
               >
-                {phase === "loading" ? "刷新中…" : "刷新"}
+                {phase === "loading" ? T("pl.refreshing") : T("pl.refresh")}
               </Button>
               <Button
                 type="button"
@@ -510,7 +514,7 @@ export function SidebarPromptLibrary(props?: {
                 onClick={startCreate}
                 disabled={editing}
               >
-                + 新建
+                {T("pl.new")}
               </Button>
             </div>
           </header>
@@ -522,7 +526,7 @@ export function SidebarPromptLibrary(props?: {
                 ref={searchRef}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="搜索…"
+                placeholder={T("pl.search")}
                 style={{
                   width: "100%",
                   boxSizing: "border-box",
@@ -543,7 +547,7 @@ export function SidebarPromptLibrary(props?: {
           <div style={{ flex: 1, overflow: "auto" }}>
             {phase === "loading" && (
               <div style={{ padding: "20px 16px", color: TONE.muted, fontSize: 13, textAlign: "center" }}>
-                加载中…
+                {T("pl.loading")}
               </div>
             )}
             {phase === "error" && (
@@ -553,13 +557,13 @@ export function SidebarPromptLibrary(props?: {
             {polish.status === "done" ? (
               <div style={{ padding: "12px 16px", display: "flex", flexDirection: "column", gap: 9 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <strong style={{ fontSize: 13 }}>AI 润色结果</strong>
-                  <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={closePolish}>关闭</Button>
+                  <strong style={{ fontSize: 13 }}>{T("pl.polishResult")}</strong>
+                  <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={closePolish}>{T("pl.close")}</Button>
                 </div>
                 <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5 }}>
                   {settings.aiEnrichEnabled
-                    ? "仅润色内容。已开启「AI 智能完善」，本次润色将自动纳入 AI 自学习，越用越贴合你的风格。"
-                    : "仅润色内容。点击「确认学习」后，本次润色将纳入 AI 自学习，让润色越用越贴合你的风格。"}
+                    ? T("pl.polishResultDescAuto")
+                    : T("pl.polishResultDescManual")}
                 </div>
                 <textarea
                   value={polishResult}
@@ -569,13 +573,13 @@ export function SidebarPromptLibrary(props?: {
                 />
                 <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
                   <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => { navigator.clipboard.writeText(polishResult).catch(() => {}); }}>
-                    复制
+                    {T("pl.copy")}
                   </Button>
                   <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => insertText(polishResult)}>
-                    插入
+                    {T("pl.insert")}
                   </Button>
                   <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={savePolish}>
-                    保存到词库
+                    {T("pl.saveToLibrary")}
                   </Button>
                   {settings.aiEnrichEnabled ? (
                     <span
@@ -586,7 +590,7 @@ export function SidebarPromptLibrary(props?: {
                         opacity: polishLearned ? 0.7 : 1,
                       }}
                     >
-                      {polishLearned ? "已自动纳入自学习" : "自动学习中…"}
+                      {polishLearned ? T("pl.autoLearnedTag") : T("pl.autoLearning")}
                     </span>
                   ) : (
                     <Button
@@ -597,7 +601,7 @@ export function SidebarPromptLibrary(props?: {
                       onClick={confirmLearn}
                       disabled={polishLearned}
                     >
-                      {polishLearned ? "已学习" : "确认学习"}
+                      {polishLearned ? T("pl.learned") : T("pl.confirmLearn")}
                     </Button>
                   )}
                 </div>
@@ -605,7 +609,7 @@ export function SidebarPromptLibrary(props?: {
             ) : editing ? (
               <div style={{ padding: "12px 16px", display: "flex", flexDirection: "column", gap: 9 }}>
                 <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
-                  标题
+                  {T("pl.titleField")}
                   <input
                     value={editor.title}
                     onChange={(e) => setEditor({ ...editor, title: e.target.value })}
@@ -613,7 +617,7 @@ export function SidebarPromptLibrary(props?: {
                   />
                 </label>
                 <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
-                  正文
+                  {T("pl.bodyField")}
                   <textarea
                     value={editor.body}
                     onChange={(e) => setEditor({ ...editor, body: e.target.value })}
@@ -622,7 +626,7 @@ export function SidebarPromptLibrary(props?: {
                   />
                 </label>
                 <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
-                  标签（逗号分隔）
+                  {T("pl.tagsField")}
                   <input
                     value={editor.tags}
                     onChange={(e) => setEditor({ ...editor, tags: e.target.value })}
@@ -632,10 +636,10 @@ export function SidebarPromptLibrary(props?: {
                 {error && <div style={{ color: TONE.red, fontSize: 12 }}>{error}</div>}
                 <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
                   <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => { setEditor(NO_EDITOR); setError(null); }}>
-                    取消
+                    {T("pl.cancel")}
                   </Button>
                   <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={saveEditor}>
-                    保存
+                    {T("pl.save")}
                   </Button>
                 </div>
               </div>
@@ -643,7 +647,7 @@ export function SidebarPromptLibrary(props?: {
               <div>
                 {phase === "ready" && filtered.length === 0 && (
                   <div style={{ padding: "16px", color: TONE.muted, fontSize: 13, textAlign: "center" }}>
-                    暂无提示词
+                    {T("pl.empty")}
                   </div>
                 )}
                 {tagGrouped.map(([tag, items]) => {
@@ -672,7 +676,7 @@ export function SidebarPromptLibrary(props?: {
                         {isCollapsed ? "\u25B6" : "\u25BC"}
                       </span>
                       <span>{tag}</span>
-                      <span style={{ fontSize: 10, opacity: 0.6 }}>({items.length})</span>
+                      <span style={{ fontSize: 10, opacity: 0.6 }}>{T("pl.sidebar.groupCount", { count: items.length })}</span>
                     </div>
                     {!isCollapsed && items.map((p) => (
                       <div
@@ -701,13 +705,13 @@ export function SidebarPromptLibrary(props?: {
                           <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                             {isRecent(p.id) && (
                               <span
-                                title="新增"
+                                title={T("pl.recentNew")}
                                 style={{ width: 8, height: 8, borderRadius: "50%", background: TONE.mint, display: "inline-block", flexShrink: 0 }}
                               />
                             )}
                             {p.usageCount > 0 && (
                               <span style={{ color: TONE.quiet, fontSize: 10 }}>
-                                {p.usageCount}次
+                                {T("pl.sidebar.usageCount", { count: p.usageCount })}
                               </span>
                             )}
                             {p.tags && p.tags.length > 0 && (
@@ -739,12 +743,12 @@ export function SidebarPromptLibrary(props?: {
                           {p.body}
                         </pre>
                         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                          <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={() => insert(p)}>插入</Button>
-                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => overwrite(p)}>覆盖</Button>
+                          <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={() => insert(p)}>{T("pl.insert")}</Button>
+                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => overwrite(p)}>{T("pl.overwrite")}</Button>
                           <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => copy(p)}>
-                            {copiedId === p.id ? "已复制" : "复制"}
+                            {copiedId === p.id ? T("pl.copied") : T("pl.copy")}
                           </Button>
-                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => startEdit(p)}>编辑</Button>
+                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => startEdit(p)}>{T("pl.edit")}</Button>
                           <Button
                             type="button"
                             variant="ghost"
@@ -753,9 +757,9 @@ export function SidebarPromptLibrary(props?: {
                             onClick={() => startPolish(p)}
                             disabled={polish.status === "loading"}
                           >
-                            {polish.status === "loading" && polish.id === p.id ? "润色中…" : "AI 润色"}
+                            {polish.status === "loading" && polish.id === p.id ? T("pl.polishing") : T("pl.polish")}
                           </Button>
-                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => remove(p)}>删除</Button>
+                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => remove(p)}>{T("pl.delete")}</Button>
                         </div>
                       </div>
                     ))}

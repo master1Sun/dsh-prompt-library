@@ -18,34 +18,11 @@ import type { ReactNode } from "react";
 import { PromptLibraryButton } from "./PromptLibraryButton.js";
 import { AIPolishButton } from "./AIPolishButton.js";
 import { SettingsSection } from "./SettingsSection.js";
+import { en, NS, zh } from "./i18n.js";
 import {
   registerSettingsNavIcon,
   SETTINGS_NAV_CSS,
 } from "./settings-nav-icon.js";
-
-const NS = "prompt-library";
-
-const copy = {
-  "pl.title": "提示词库",
-  "pl.button": "提示词",
-  "pl.search": "搜索…",
-  "pl.empty": "暂无提示词",
-  "pl.loading": "加载中…",
-  "pl.new": "+ 新建",
-  "pl.insert": "插入",
-  "pl.edit": "编辑",
-  "pl.delete": "删除",
-  "pl.save": "保存",
-  "pl.cancel": "取消",
-  "pl.refresh": "刷新",
-  "pl.titleField": "标题",
-  "pl.bodyField": "正文",
-  "pl.tagsField": "标签（逗号分隔）",
-  "pl.requireTitleBody": "标题和正文为必填项",
-  "pl.confirmDelete": "删除 \"{title}\"？",
-};
-const zh = copy;
-const en = copy;
 
 /** 此插件的 apply 依赖的客户端服务。 */
 export const inject = ["slots", "locale"];
@@ -55,6 +32,7 @@ interface ClientCtx {
   effect(fn: () => unknown, label: string): unknown;
   locale: {
     register(namespace: string, dicts: Record<string, Record<string, string>>): unknown;
+    bind(namespace: string): (key: string, params?: Record<string, unknown>) => string;
   };
   slots: {
     inject(slotName: string, factory: () => () => void): unknown;
@@ -73,10 +51,13 @@ interface ClientCtx {
 }
 
 export function apply(ctx: ClientCtx): void {
+  // 注册完整中英文字典：系统语言切换后自动跟随
   ctx.effect(
     () => ctx.locale.register(NS, { zh, en }),
     "prompt-library: dictionaries",
   );
+  // 绑定命名空间的翻译函数，用于设置导航标签（每次读取当前语言）
+  const t = ctx.locale.bind(NS);
 
   // 注册 composer 工具栏按钮
   ctx.slots.inject("conversation.input.left", () =>
@@ -117,7 +98,7 @@ export function apply(ctx: ClientCtx): void {
         document.head.appendChild(style);
       }
       // 给设置导航中文本为「提示词库」的按钮打标记，替换为提示词图标
-      const disposeMarker = registerSettingsNavIcon(() => "提示词库");
+      const disposeMarker = registerSettingsNavIcon(() => t("pl.title"));
       return () => {
         disposeMarker();
         style?.remove();
@@ -133,7 +114,8 @@ export function apply(ctx: ClientCtx): void {
         name: "settings.section",
         id: "prompt-library",
         order: 100,
-        label: () => "提示词库",
+        locale: NS,
+        label: () => t("pl.title"),
       },
       SettingsSection as (props: unknown) => ReactNode,
     ),

@@ -1,6 +1,6 @@
 {
   "name": "@sunjuntao/dsh-prompt-library",
-  "version": "0.3.9",
+  "version": "0.3.10",
   "description": "DSH web 插件：在 composer 工具栏注入一个「提示词库」按钮，管理可复用 prompt 片段，点击插入当前输入框。host 侧用文件持久化到 ~/.dsh/prompt-library.json。",
   "type": "module",
   "main": "./lib/index.js",
@@ -80,6 +80,7 @@
     }
   },
   "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.0.0",
     "@types/react": "^18.3.0",
     "esbuild": "^0.23.0",
@@ -88,5 +89,8 @@
   "license": "MIT",
   "engines": {
     "node": ">=22.19"
+  },
+  "dependencies": {
+    "js-yaml": "^5.3.0"
   }
 }

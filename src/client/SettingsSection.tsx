@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import type { PluginSettings } from "../types.js";
 import { DEFAULT_SETTINGS } from "../types.js";
 import { getAiSelectables, getSettings, updateSettings as apiUpdateSettings, type ClientAiSelectable } from "./api.js";
+import { type PLTranslate, usePLT } from "./i18n.js";
 
 const MONO =
   '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "SimHei", "黑体", sans-serif';
@@ -253,7 +254,10 @@ function SelectRow({
 }
 
 /** 设置面板组件，修改后立即生效。 */
-export function SettingsSection(): ReactNode {
+export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
+  const { t } = props ?? {};
+  // 统一取翻译函数：优先框架注入的 t（跟随系统语言），否则回退中文
+  const T = usePLT(t);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState<PluginSettings>(DEFAULT_SETTINGS);
   const [selectables, setSelectables] = useState<ClientAiSelectable[]>([]);
@@ -293,31 +297,31 @@ export function SettingsSection(): ReactNode {
   if (loading) {
     return (
       <div style={{ padding: 16, color: TONE.quiet, fontFamily: MONO, fontSize: 13 }}>
-        加载中…
+        {T("pl.loading")}
       </div>
     );
   }
 
   // 组装 AI Provider 下拉选项：系统列表 + “留空自动发现” + 若已保存值不在列表则保留
-  const providerOptions: { value: string; label: string }[] = [{ value: "", label: "留空自动发现" }];
+  const providerOptions: { value: string; label: string }[] = [{ value: "", label: T("pl.set.autoDiscover") }];
   for (const s of selectables) {
     if (s.provider && !providerOptions.some((o) => o.value === s.provider)) {
       providerOptions.push({ value: s.provider, label: s.name || s.provider });
     }
   }
   if (draft.aiProvider && !providerOptions.some((o) => o.value === draft.aiProvider)) {
-    providerOptions.push({ value: draft.aiProvider, label: `${draft.aiProvider}（未发现）` });
+    providerOptions.push({ value: draft.aiProvider, label: T("pl.set.notFound", { value: draft.aiProvider }) });
   }
   // 组装 AI 模型下拉选项：当前已选 provider 的模型列表 + “留空自动发现” + 已保存值不在列表则保留
   const activeProvider = selectables.find((s) => s.provider === draft.aiProvider);
-  const modelOptions: { value: string; label: string }[] = [{ value: "", label: "留空自动发现" }];
+  const modelOptions: { value: string; label: string }[] = [{ value: "", label: T("pl.set.autoDiscover") }];
   for (const m of activeProvider?.models ?? []) {
     if (m.id && !modelOptions.some((o) => o.value === m.id)) {
       modelOptions.push({ value: m.id, label: m.name || m.id });
     }
   }
   if (draft.aiModel && !modelOptions.some((o) => o.value === draft.aiModel)) {
-    modelOptions.push({ value: draft.aiModel, label: `${draft.aiModel}（未发现）` });
+    modelOptions.push({ value: draft.aiModel, label: T("pl.set.notFound", { value: draft.aiModel }) });
   }
 
   return (
@@ -331,8 +335,8 @@ export function SettingsSection(): ReactNode {
       <div style={{ padding: "12px 0", display: "flex", flexDirection: "column", gap: 4 }}>
         {/* 自动学习开关 */}
         <ToggleRow
-          label="自动学习提示词"
-          desc="输入复杂 prompt 时自动保存到词库"
+          label={T("pl.set.autoLearn")}
+          desc={T("pl.set.autoLearnDesc")}
           checked={draft.autoLearnEnabled}
           onChange={(v) => updateAndSave({ autoLearnEnabled: v })}
         />
@@ -341,8 +345,8 @@ export function SettingsSection(): ReactNode {
         {draft.autoLearnEnabled && (
           <div style={{ paddingLeft: 0 }}>
             <ToggleRow
-              label="手动确认"
-              desc="学习到提示词时在聊天框弹出保存/取消，确认后才入库（勾选 AI 智能完善时自动入库，忽略该选项）"
+              label={T("pl.set.manualConfirm")}
+              desc={T("pl.set.manualConfirmDesc")}
               checked={draft.autoLearnManualConfirm}
               onChange={(v) => updateAndSave({ autoLearnManualConfirm: v })}
             />
@@ -353,13 +357,13 @@ export function SettingsSection(): ReactNode {
         {draft.autoLearnEnabled && (
           <div style={{ paddingLeft: 24 }}>
             <TextRow
-              label="自动学习标签"
+              label={T("pl.set.autoLearnTag")}
               value={draft.autoLearnTag}
               placeholder="auto-learned"
               onChange={(v) => updateAndSave({ autoLearnTag: v })}
             />
             <NumberRow
-              label="最小学习长度"
+              label={T("pl.set.minLength")}
               value={draft.autoLearnMinLength}
               min={20}
               max={500}
@@ -369,25 +373,25 @@ export function SettingsSection(): ReactNode {
 
             {/* AI 智能完善开关（仅在自动学习开启时可用） */}
             <ToggleRow
-              label="AI 智能完善"
-              desc="自动学习时调用 harness AI 生成标题/标签/摘要并改写正文"
+              label={T("pl.set.aiEnrich")}
+              desc={T("pl.set.aiEnrichDesc")}
               checked={draft.aiEnrichEnabled}
               onChange={(v) => updateAndSave({ aiEnrichEnabled: v })}
             />
             {draft.aiEnrichEnabled && (
               <div style={{ paddingLeft: 24 }}>
                 <SelectRow
-                  label="AI Provider"
+                  label={T("pl.set.aiProvider")}
                   value={draft.aiProvider}
                   options={providerOptions}
-                  desc="模型服务供应商，从系统已连接的 LLM 服务中读取；选择“留空自动发现”时自动查找首个可用的 provider。"
+                  desc={T("pl.set.aiProviderDesc")}
                   onChange={(v) => updateAndSave({ aiProvider: v })}
                 />
                 <SelectRow
-                  label="AI 模型"
+                  label={T("pl.set.aiModel")}
                   value={draft.aiModel}
                   options={modelOptions}
-                  desc="该 provider 下的模型 id，从系统读取；选择“留空自动发现”时自动选择 id 含 deepseek 的模型。"
+                  desc={T("pl.set.aiModelDesc")}
                   onChange={(v) => updateAndSave({ aiModel: v })}
                 />
               </div>
@@ -399,7 +403,7 @@ export function SettingsSection(): ReactNode {
 
         {/* 面板宽高设置 */}
         <NumberRow
-          label="聊天框提示词面板宽度（px）"
+          label={T("pl.set.panelWidth")}
           value={draft.panelWidth}
           min={300}
           max={700}
@@ -407,7 +411,7 @@ export function SettingsSection(): ReactNode {
           onChange={(v) => updateAndSave({ panelWidth: v })}
         />
         <NumberRow
-          label="聊天框提示词面板高度（px）"
+          label={T("pl.set.panelHeight")}
           value={draft.panelHeight}
           min={300}
           max={800}
@@ -418,7 +422,7 @@ export function SettingsSection(): ReactNode {
 
         {/* 提示词最大存储数量 */}
         <NumberRow
-          label="提示词最大存储数量(10-1000)"
+          label={T("pl.set.maxCount")}
           value={draft.maxPromptCount}
           min={10}
           max={1000}
@@ -431,8 +435,8 @@ export function SettingsSection(): ReactNode {
 
         {/* 右侧展开/折叠开关 */}
         <ToggleRow
-          label="右侧侧边栏展开/折叠"
-          desc="在右侧展开面板，支持折叠收起"
+          label={T("pl.set.rightPanel")}
+          desc={T("pl.set.rightPanelDesc")}
           checked={draft.rightPanelEnabled}
           onChange={(v) => updateAndSave({ rightPanelEnabled: v })}
         />
@@ -441,8 +445,8 @@ export function SettingsSection(): ReactNode {
 
         {/* 聊天框按钮显隐开关 */}
         <ToggleRow
-          label="聊天框显示提示词按钮"
-          desc="在输入框工具栏显示提示词库按钮"
+          label={T("pl.set.showComposerBtn")}
+          desc={T("pl.set.showComposerBtnDesc")}
           checked={draft.showComposerButton}
           onChange={(v) => updateAndSave({ showComposerButton: v })}
         />
@@ -451,8 +455,8 @@ export function SettingsSection(): ReactNode {
 
         {/* AI 润色按钮显隐开关 */}
         <ToggleRow
-          label="聊天框显示 AI 润色按钮"
-          desc="在输入框工具栏显示 AI 润色按钮"
+          label={T("pl.set.showPolishBtn")}
+          desc={T("pl.set.showPolishBtnDesc")}
           checked={draft.showAIPolishButton}
           onChange={(v) => updateAndSave({ showAIPolishButton: v })}
         />
@@ -461,8 +465,8 @@ export function SettingsSection(): ReactNode {
 
         {/* # 触发开关 */}
         <ToggleRow
-          label="输入 # 触发词库选择"
-          desc="输入 # 后弹出词库；继续输入可实时筛选，↑↓ 选择、回车插入，输入空格或 Esc 结束筛选"
+          label={T("pl.set.tildaTrigger")}
+          desc={T("pl.set.tildaTriggerDesc")}
           checked={draft.tildaTriggerEnabled}
           onChange={(v) => updateAndSave({ tildaTriggerEnabled: v })}
         />
@@ -471,8 +475,8 @@ export function SettingsSection(): ReactNode {
 
         {/* 鼠标移入显示详情开关 */}
         <ToggleRow
-          label="鼠标移入显示详情"
-          desc="鼠标移入提示词时显示完整详情"
+          label={T("pl.set.hoverDetail")}
+          desc={T("pl.set.hoverDetailDesc")}
           checked={draft.hoverDetailEnabled}
           onChange={(v) => updateAndSave({ hoverDetailEnabled: v })}
         />
@@ -489,15 +493,15 @@ export function SettingsSection(): ReactNode {
               letterSpacing: 1,
             }}
           >
-            实验室功能
+            {T("pl.set.lab")}
           </span>
           <span style={{ fontSize: 11, color: "#d89b8a", lineHeight: 1.5 }}>
-            以下为实验性能力，可能影响整个 AI 对话的表现。请谨慎勾选，后果自负。
+            {T("pl.set.labWarning")}
           </span>
         </div>
         <ToggleRow
-          label="整个聊天应用灵魂边界"
-          desc="勾选后灵魂文件约束整个对话，但只对新会话生效，不影响当前正在进行的对话"
+          label={T("pl.set.chatCharacter")}
+          desc={T("pl.set.chatCharacterDesc")}
           checked={draft.applyCharacterToChat}
           onChange={(v) => updateAndSave({ applyCharacterToChat: v })}
         />

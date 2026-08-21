@@ -35,6 +35,7 @@ import { useHoverDetail } from "./HoverDetail.js";
 import { AUTO_LEARN_TOAST_MS, useAutoLearn } from "./auto-learn.js";
 import { isRecent, markRecent } from "./recent-created.js";
 import { notifyDataChanged, useDataChanged } from "./data-sync.js";
+import { type PLT, type PLTranslate, usePLT } from "./i18n.js";
 
 
 /**
@@ -45,6 +46,7 @@ interface ButtonProps {
   inputActions: {
     setDraft: (text: string) => void;
   };
+  t?: PLTranslate;
 }
 
 const MONO =
@@ -108,6 +110,7 @@ function useTildaTrigger(
   prompts: Prompt[],
   inputActions: { setDraft: (text: string) => void },
   draft: string,
+  t: PLT,
 ): void {
   const activeRef = useRef(false);
   // 触发浮层时「#」在正文中的位置；用于计算「#」之后的实时筛选内容
@@ -135,7 +138,7 @@ function useTildaTrigger(
       if (prevChar !== " " && prevChar !== "\n") return;
       activeRef.current = true;
       triggerIdxRef.current = selStart - 1;
-      showOverlay(el, lastPromptsForSelect, inputActionsRef.current, draftRef.current, "");
+      showOverlay(el, lastPromptsForSelect, inputActionsRef.current, draftRef.current, "", t);
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -204,7 +207,7 @@ function useTildaTrigger(
             return;
           }
           // 实时按筛选内容更新浮层
-          showOverlay(el, lastPromptsForSelect, inputActionsRef.current, draftRef.current, query);
+          showOverlay(el, lastPromptsForSelect, inputActionsRef.current, draftRef.current, query, t);
         }
         return;
       }
@@ -242,7 +245,7 @@ function useTildaTrigger(
       document.removeEventListener("click", onDocClick, true);
       removeOverlay();
     };
-  }, [settings.tildaTriggerEnabled]);
+  }, [settings.tildaTriggerEnabled, t]);
 }
 
 let highlightIndex = 0;
@@ -259,6 +262,7 @@ function showOverlay(
   inputActions: { setDraft: (text: string) => void },
   draft: string,
   query = "",
+  t: PLT,
 ): void {
   removeOverlay();
   if (prompts.length === 0) return;
@@ -313,7 +317,7 @@ function showOverlay(
   // 无匹配结果时仍保留浮层，提示用户继续输入或输入空格结束筛选
   if (filtered.length === 0) {
     const empty = document.createElement("div");
-    empty.textContent = q ? `无匹配“${q}”` : "暂无提示词";
+    empty.textContent = q ? t("pl.overlayNoMatch", { query: q }) : t("pl.empty");
     empty.style.cssText = [
       "padding: 10px",
       "font-size: 12px",
@@ -380,8 +384,8 @@ function showOverlay(
   // 底部快捷键提示（筛选模式下展示当前筛选词）
   const hint = document.createElement("div");
   hint.textContent = q
-    ? `筛选“${q}” · ↑↓选择 · Enter确认 · 空格 结束 · Esc 关闭`
-    : "↑↓ 选择 · Enter 确认 · 继续输入筛选 · 空格 结束 · Esc 关闭";
+    ? t("pl.overlayHintFilter", { query: q })
+    : t("pl.overlayHintDefault");
   hint.style.cssText = [
     "padding: 6px 10px 3px",
     "font-size: 10px",
@@ -480,7 +484,8 @@ function useSettings(): [PluginSettings, boolean] {
 // ── 主组件 ───────────────────────────────────────────────────────────────
 
 export function PromptLibraryButton(props: ButtonProps): ReactNode {
-  const { inputActions, useInput } = props;
+  const { inputActions, useInput, t } = props;
+  const T = usePLT(t);
   const draft = useInput((s) => s.draft);
 
   const [open, setOpen] = useState(false);
@@ -570,7 +575,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   }, []));
 
   // ~ 键触发
-  useTildaTrigger(settings, prompts, inputActions, draft);
+  useTildaTrigger(settings, prompts, inputActions, draft, T);
 
   // 组件挂载即加载提示词列表（供 # 触发 / 自动学习使用，不依赖面板是否打开）
   useEffect(() => {
@@ -638,7 +643,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
     const title = editor.title.trim();
     const body = editor.body;
     if (!title || !body) {
-      setError("标题和正文为必填项");
+      setError(T("pl.requireTitleBody"));
       return;
     }
     const tags = editor.tags.split(",").map((t) => t.trim()).filter(Boolean);
@@ -662,7 +667,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   };
 
   const remove = (p: Prompt) => {
-    if (!confirm(`删除 "${p.title}"？`)) return;
+    if (!confirm(T("pl.confirmDelete", { title: p.title }))) return;
     apiDelete(p.id).then(notifyDataChanged, (e: unknown) =>
       setError(e instanceof Error ? e.message : String(e)),
     );
@@ -756,8 +761,8 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
         size="sm"
         className={plBtn("ghost", "sm")}
         onClick={handleButtonClick}
-        title="提示词库"
-        aria-label="提示词库"
+        title={T("pl.title")}
+        aria-label={T("pl.title")}
         aria-expanded={open}
         aria-controls={panelId}
         icon={
@@ -770,7 +775,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
           </svg>
         }
       >
-        提示词库
+        {T("pl.title")}
         {/* 上下展开/折叠指示箭头：随开关旋转，颜色随按钮文本（官方 currentColor） */}
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true" style={{
           marginLeft: 2,
@@ -801,7 +806,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
             zIndex: 1001,
           }}
         >
-          &#10003; 已自动学习
+          &#10003; {T("pl.learnedToast")}
         </span>
       )}
 
@@ -809,7 +814,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
       {pendingConfirm !== null && (
         <span
           role="dialog"
-          aria-label="确认保存提示词"
+          aria-label={T("pl.confirmSave")}
           style={{
             position: "absolute",
             bottom: "calc(100% + 6px)",
@@ -829,7 +834,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
             fontFamily: MONO,
           }}
         >
-          <div style={{ fontSize: 12, fontWeight: 600 }}>检测到可学习提示词</div>
+          <div style={{ fontSize: 12, fontWeight: 600 }}>{T("pl.learnFound")}</div>
           <div
             style={{
               maxHeight: 96,
@@ -855,9 +860,9 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
               className={plBtn("ghost", "sm")}
               onClick={polishLearnText}
               disabled={polishConfirmLoading}
-              title={polishConfirmLoading ? "AI 润色中…" : "调用 AI 润色正文"}
+              title={polishConfirmLoading ? T("pl.polishLoadingTitle") : T("pl.polishBtnTitle")}
             >
-              {polishConfirmLoading ? "润色中…" : "AI 润色"}
+              {polishConfirmLoading ? T("pl.polishing") : T("pl.polish")}
             </Button>
             <div style={{ display: "flex", gap: 8 }}>
               <Button
@@ -867,7 +872,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                 className={plBtn("ghost", "sm")}
                 onClick={cancelLearn}
               >
-                取消
+                {T("pl.cancel")}
               </Button>
               <Button
                 type="button"
@@ -876,7 +881,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                 className={plBtn("primary", "sm")}
                 onClick={confirmLearn}
               >
-                保存
+                {T("pl.save")}
               </Button>
             </div>
           </div>
@@ -889,7 +894,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
             onClick={() => { setEditor(NO_EDITOR); setOpen(false); }}
             style={{ position: "fixed", inset: 0, zIndex: 999 }}
           />
-          <section id={panelId} role="dialog" aria-label="提示词库" style={panelStyle}>
+          <section id={panelId} role="dialog" aria-label={T("pl.title")} style={panelStyle}>
             <header
               style={{
                 display: "flex",
@@ -901,7 +906,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                 flexShrink: 0,
               }}
             >
-              <strong style={{ fontSize: 14, fontWeight: 470 }}>提示词库</strong>
+              <strong style={{ fontSize: 14, fontWeight: 470 }}>{T("pl.title")}</strong>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <Button
                   type="button"
@@ -910,7 +915,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                   className={plBtn("ghost", "sm")}
                   onClick={refresh}
                   disabled={phase === "loading"}
-                  title={phase === "loading" ? "刷新中…" : "刷新提示词列表"}
+                  title={phase === "loading" ? T("pl.refreshing") : T("pl.refreshTitle")}
                   icon={
                     <svg
                       width="13" height="13" viewBox="0 0 24 24" fill="none"
@@ -923,7 +928,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                     </svg>
                   }
                 >
-                  {phase === "loading" ? "刷新中…" : "刷新"}
+                  {phase === "loading" ? T("pl.refreshing") : T("pl.refresh")}
                 </Button>
                 <Button
                   type="button"
@@ -934,7 +939,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                   disabled={editing}
                   style={{ color: "var(--dsw-alias-brand-primary, #8ec5ff)" }}
                 >
-                  + 新建
+                  {T("pl.new")}
                 </Button>
               </div>
             </header>
@@ -944,7 +949,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                 <input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="搜索…"
+                  placeholder={T("pl.search")}
                   style={{
                     width: "100%",
                     boxSizing: "border-box",
@@ -964,7 +969,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
             <div style={{ flex: 1, overflow: "auto" }}>
               {phase === "loading" && (
                 <div style={{ padding: "20px 16px", color: TONE.muted, fontSize: 13, textAlign: "center" }}>
-                  加载中…
+                  {T("pl.loading")}
                 </div>
               )}
               {phase === "error" && (
@@ -974,7 +979,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
               {editing ? (
                 <div style={{ padding: "12px 16px", display: "flex", flexDirection: "column", gap: 9 }}>
                   <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
-                    标题
+                    {T("pl.titleField")}
                     <input
                       value={editor.title}
                       onChange={(e) => setEditor({ ...editor, title: e.target.value })}
@@ -982,7 +987,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                     />
                   </label>
                   <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
-                    正文
+                    {T("pl.bodyField")}
                     <textarea
                       value={editor.body}
                       onChange={(e) => setEditor({ ...editor, body: e.target.value })}
@@ -991,7 +996,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                     />
                   </label>
                   <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
-                    标签（逗号分隔）
+                    {T("pl.tagsField")}
                     <input
                       value={editor.tags}
                       onChange={(e) => setEditor({ ...editor, tags: e.target.value })}
@@ -1001,10 +1006,10 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                   {error && <div style={{ color: TONE.red, fontSize: 12 }}>{error}</div>}
                   <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
                     <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => { setEditor(NO_EDITOR); setError(null); }}>
-                      取消
+                      {T("pl.cancel")}
                     </Button>
                     <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={saveEditor}>
-                      保存
+                      {T("pl.save")}
                     </Button>
                   </div>
                 </div>
@@ -1012,7 +1017,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                 <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
                   {phase === "ready" && filtered.length === 0 && (
                     <li style={{ padding: "16px", color: TONE.muted, fontSize: 13, textAlign: "center" }}>
-                      暂无提示词
+                      {T("pl.empty")}
                     </li>
                   )}
                   {filtered.map((p) => (
@@ -1041,7 +1046,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                         }} title={p.title}>{clampTitle(p.title)}</strong>
                         {isRecent(p.id) && (
                           <span
-                            title="新增"
+                            title={T("pl.recentNew")}
                             style={{ width: 8, height: 8, borderRadius: "50%", background: TONE.mint, display: "inline-block", flexShrink: 0 }}
                           />
                         )}
@@ -1068,10 +1073,10 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                         {p.body}
                       </pre>
                       <div style={{ display: "flex", gap: 6 }}>
-                        <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={() => insert(p)}>插入</Button>
-                        <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => overwrite(p)}>覆盖</Button>
-                        <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => startEdit(p)}>编辑</Button>
-                        <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => remove(p)}>删除</Button>
+                        <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={() => insert(p)}>{T("pl.insert")}</Button>
+                        <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => overwrite(p)}>{T("pl.overwrite")}</Button>
+                        <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => startEdit(p)}>{T("pl.edit")}</Button>
+                        <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => remove(p)}>{T("pl.delete")}</Button>
                       </div>
                     </li>
                   ))}
@@ -1084,7 +1089,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
       </>
       )}
       {hoverEnabled && hover.overlay}
-      <SidebarPromptLibrary inputActions={inputActions} draft={draft} />
+      <SidebarPromptLibrary inputActions={inputActions} draft={draft} t={t} />
     </span>
   );
 }

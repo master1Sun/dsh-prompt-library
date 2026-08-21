@@ -15,6 +15,7 @@ import { PL_BUTTON_CSS, plBtn } from "./button-style.js";
 import { getSettings as apiGetSettings, learnPolished, polishPrompt } from "./api.js";
 import type { PluginSettings } from "../types.js";
 import { DEFAULT_SETTINGS } from "../types.js";
+import { type PLTranslate, usePLT } from "./i18n.js";
 
 /**
  * `conversation.input.left` 的最小属性合约（与 PromptLibraryButton 一致）。
@@ -25,6 +26,7 @@ interface ButtonProps {
   inputActions: {
     setDraft: (text: string) => void;
   };
+  t?: PLTranslate;
 }
 
 const MONO =
@@ -93,7 +95,8 @@ function useSettings(): PluginSettings {
 }
 
 export function AIPolishButton(props: ButtonProps): ReactNode {
-  const { inputActions, useInput } = props;
+  const { inputActions, useInput, t } = props;
+  const T = usePLT(t);
   const draft = useInput((s) => s.draft);
 
   const settings = useSettings();
@@ -122,7 +125,7 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
   const handlePolish = useCallback(() => {
     const text = draft.trim();
     if (!text) {
-      showToast("请先在输入框输入内容");
+      showToast(T("pl.polishEmpty"));
       return;
     }
     setStatus("polishing");
@@ -133,28 +136,28 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
         setStatus("done");
         // 把润色能力写回用户画像，作为学习能力储存（AI 自学习）
         learnPolished(polished).catch(() => {});
-        showToast("润色完成，已纳入自学习");
+        showToast(T("pl.polishDoneLearn"));
       })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : String(err));
         setStatus("error");
-        showToast("AI 润色失败，请确认已连接 LLM 服务");
+        showToast(T("pl.polishFail"));
       });
-  }, [draft, showToast]);
+  }, [draft, showToast, T]);
 
   /** 用润色结果覆盖输入框内容。 */
   const applyResult = useCallback(() => {
     if (!result) return;
     inputActions.setDraft(result);
-    showToast("已替换到输入框");
+    showToast(T("pl.polishReplaced"));
     closeResult();
-  }, [result, inputActions, showToast, closeResult]);
+  }, [result, inputActions, showToast, closeResult, T]);
 
   /** 复制润色结果到剪贴板。 */
   const copyResult = useCallback(() => {
     navigator.clipboard.writeText(result).catch(() => {});
-    showToast("已复制");
-  }, [result, showToast]);
+    showToast(T("pl.copied"));
+  }, [result, showToast, T]);
 
   const containerStyle: CSSProperties = {
     display: "inline-flex",
@@ -196,11 +199,11 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
         className={plBtn("ghost", "sm")}
         onClick={handlePolish}
         disabled={status === "polishing"}
-        title={status === "polishing" ? "AI 润色中…" : "AI 润色当前输入内容"}
-        aria-label="AI 润色"
+        title={status === "polishing" ? T("pl.polishLoadingTitle") : T("pl.polishBtnTitle2")}
+        aria-label={T("pl.polish")}
         icon={<SparkleIcon spinning={status === "polishing"} />}
       >
-        {status === "polishing" ? "润色中…" : "AI 润色"}
+        {status === "polishing" ? T("pl.polishing") : T("pl.polish")}
       </Button>
 
       {/* 状态提示 */}
@@ -232,16 +235,16 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
       {status === "done" && (
         <>
           <div onClick={closeResult} style={{ position: "fixed", inset: 0, zIndex: 999 }} />
-          <section role="dialog" aria-label="AI 润色结果" style={panelStyle}>
+          <section role="dialog" aria-label={T("pl.polishResult")} style={panelStyle}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
-              <strong style={{ fontSize: 13, fontWeight: 470 }}>AI 润色结果</strong>
+              <strong style={{ fontSize: 13, fontWeight: 470 }}>{T("pl.polishResult")}</strong>
               {error && <span style={{ color: TONE.red, fontSize: 11 }}>{error}</span>}
             </div>
             <textarea
               value={result}
               onChange={(e) => setResult(e.target.value)}
               rows={7}
-              aria-label="润色结果"
+              aria-label={T("pl.polishResultAria")}
               style={{
                 width: "100%",
                 boxSizing: "border-box",
@@ -258,13 +261,13 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
             />
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
               <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={copyResult}>
-                复制
+                {T("pl.copy")}
               </Button>
               <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={closeResult}>
-                关闭
+                {T("pl.close")}
               </Button>
               <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={applyResult}>
-                替换内容
+                {T("pl.replaceContent")}
               </Button>
             </div>
           </section>

@@ -26,8 +26,8 @@ export const inject: string[] = [];
 export function apply(ctx: Context): void {
   const routes = makePromptRoutes();
 
-  // 启动时一次性完成把旧数据文件迁移到统一目录 ~/.dsh/prompt-library/：
-  // 提示词库、设置旧路径归档到新目录。失败静默忽略，不影响其他功能。
+  // 启动时一次性迁移：若旧提示词库 ~/.dsh/prompt-library.json 存在且新文件不存在，
+  // 迁移到 ~/.dsh/prompt-library/prompts.json。失败静默忽略，不影响其他功能。
   migrateLegacyIfNeeded().catch(() => {});
 
   // 确保 AI 人格/边界体系（OpenCLaW 式）五维文件存在（SOUL/AGENTS/USER/IDENTITY/MEMORY），

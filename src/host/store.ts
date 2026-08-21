@@ -8,11 +8,17 @@
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
+import { load, dump } from "js-yaml";
 import type { PluginSettings, Prompt, PromptStoreFile } from "../types.js";
 import { clampTitle, DEFAULT_SETTINGS, TITLE_MAX_LEN } from "../types.js";
 import { enrichLearnedPrompt, isAiAvailable } from "./ai.js";
 import { syncCharacterChatInto } from "./character.js";
-import { legacySettingsPath, legacyStorePath, settingsPath, storePath } from "./paths.js";
+import {
+  legacyStorePath,
+  SETTINGS_NAMESPACE,
+  storePath,
+  systemSettingsPath,
+} from "./paths.js";
 
 /** 去掉 UTF-8 BOM（Windows 记事本/PowerShell 等工具可能写入），避免 JSON.parse 失败。 */
 function stripBom(text: string): string {
@@ -26,13 +32,6 @@ let chain: Promise<unknown> = Promise.resolve();
 
 function readRaw(): Promise<PromptStoreFile> {
   return readFile(storePath(), "utf8")
-    .catch((err) => {
-      // 新路径不存在：回退读取旧路径 ~/.dsh/prompt-library.json（一次性迁移场景）
-      if (err && typeof err === "object" && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
-        return readFile(legacyStorePath(), "utf8");
-      }
-      throw err;
-    })
     .then((text) => {
       const parsed = JSON.parse(stripBom(text)) as PromptStoreFile;
       if (parsed?.version !== 1 || !Array.isArray(parsed.prompts)) {
@@ -46,6 +45,7 @@ function readRaw(): Promise<PromptStoreFile> {
       return parsed;
     })
     .catch((err) => {
+      // 新路径不存在：返回空库，写入时自动新建
       if (err && typeof err === "object" && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
         return EMPTY;
       }
@@ -60,29 +60,24 @@ async function writeRaw(store: PromptStoreFile): Promise<void> {
   await writeFile(storePath(), JSON.stringify(store, null, 2), "utf8");
 }
 
-/** 若旧数据文件存在且新文件不存在，把旧文件移动/归档到新目录（一次性迁移）。 */
-export async function migrateLegacyIfNeeded(force?: "store" | "settings"): Promise<void> {
-  const pairs: { legacy: string; next: string; only: "store" | "settings" }[] = [
-    { legacy: legacyStorePath(), next: storePath(), only: "store" },
-    { legacy: legacySettingsPath(), next: settingsPath(), only: "settings" },
-  ];
-  for (const { legacy, next, only } of pairs) {
-    if (force && force !== only) continue;
+/** 若旧提示词库 ~/.dsh/prompt-library.json 存在且新文件不存在，迁移到新路径（一次性）。 */
+export async function migrateLegacyIfNeeded(): Promise<void> {
+  const legacy = legacyStorePath();
+  const next = storePath();
+  try {
+    await stat(legacy);
+  } catch {
+    return; // 旧文件不存在
+  }
+  try {
+    await stat(next);
+  } catch {
+    // 新文件不存在：迁移旧文件到新路径
     try {
-      await stat(legacy);
+      await mkdir(dirname(next), { recursive: true });
+      await rename(legacy, next);
     } catch {
-      continue; // 旧文件不存在
-    }
-    try {
-      await stat(next);
-    } catch {
-      // 新文件不存在：迁移旧文件到新路径
-      try {
-        await mkdir(dirname(next), { recursive: true });
-        await rename(legacy, next);
-      } catch {
-        /* 迁移失败则保留旧文件，读取仍走回退逻辑 */
-      }
+      /* 迁移失败则保留旧文件 */
     }
   }
 }
@@ -306,56 +301,73 @@ export function deletePrompt(id: string): Promise<boolean> {
   });
 }
 
-// ── 设置存储 ────────────────────────────────────────────────────────────────
+// ── 设置存储（系统 settings.yaml）───────────────────────────────────────────
 
-/** 读取设置，如果文件不存在则返回默认值；格式错误时写回默认数据并返回默认值，避免功能报错。 */
-async function readSettingsRaw(): Promise<PluginSettings> {
-  let text: string | undefined;
+/**
+ * 读取系统 settings.yaml 中的插件设置命名空间（`prompt-library`）。
+ * 文件不存在、无法解析或命名空间缺失/非对象时返回 undefined；
+ * 任何读取失败都不向上抛错，避免干扰主流程。
+ */
+async function readSystemSettingsNamespace(): Promise<Partial<PluginSettings> | undefined> {
+  let text: string;
   try {
-    text = await readFile(settingsPath(), "utf8").catch((err) => {
-      // 新路径不存在：回退读取旧路径 ~/.dsh/prompt-library-settings.json
-      if (err && typeof err === "object" && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
-        return readFile(legacySettingsPath(), "utf8");
-      }
-      throw err;
-    });
-    const parsed: unknown = JSON.parse(stripBom(text));
-    // 校验结构：必须是普通对象（非 null、非数组）
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      throw new Error("prompt-library-settings.json: unexpected shape");
-    }
-    // 合并默认值，确保所有字段都存在
-    const settings: PluginSettings = { ...DEFAULT_SETTINGS, ...(parsed as Partial<PluginSettings>) };
-    syncCharacterChatInto(settings.applyCharacterToChat ?? false);
-    return settings;
-  } catch (err) {
-    // 文件不存在：创建默认设置文件后返回默认值
-    if (err && typeof err === "object" && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
-      const settings: PluginSettings = { ...DEFAULT_SETTINGS };
-      try {
-        await writeSettingsRaw(settings);
-      } catch {
-        /* 写入失败也照常返回默认值，不影响本次读取 */
-      }
-      syncCharacterChatInto(settings.applyCharacterToChat);
-      return settings;
-    }
-    // 文件存在但内容/格式非法：写回默认设置，防止后续功能反复报错并让功能保持可用
-    const fresh: PluginSettings = { ...DEFAULT_SETTINGS };
-    try {
-      await writeSettingsRaw(fresh);
-    } catch {
-      /* 写入失败也照常返回默认值，不影响本次读取 */
-    }
-    syncCharacterChatInto(fresh.applyCharacterToChat);
-    return fresh;
+    text = await readFile(systemSettingsPath(), "utf8");
+  } catch {
+    return undefined;
   }
+  let root: unknown;
+  try {
+    root = load(stripBom(text));
+  } catch {
+    return undefined; // 系统配置格式错误：不动它，视为命名空间缺失
+  }
+  if (typeof root !== "object" || root === null || Array.isArray(root)) return undefined;
+  const ns = (root as Record<string, unknown>)[SETTINGS_NAMESPACE];
+  if (typeof ns !== "object" || ns === null || Array.isArray(ns)) return undefined;
+  return ns as Partial<PluginSettings>;
 }
 
+/**
+ * 把插件设置写入系统 settings.yaml 的 `prompt-library` 命名空间：
+ * 读取整个系统配置 → 仅追加/替换自己的命名空间 → 整体写回。
+ * 系统其它命名空间原样保留（只可能被 YAML 重新排版，不会丢值）；
+ * 系统配置不存在或无法解析时按空配置处理，不覆盖、不误改。
+ */
 async function writeSettingsRaw(settings: PluginSettings): Promise<void> {
-  await migrateLegacyIfNeeded("settings");
-  await mkdir(dirname(settingsPath()), { recursive: true });
-  await writeFile(settingsPath(), JSON.stringify(settings, null, 2), "utf8");
+  let root: Record<string, unknown> = {};
+  try {
+    const text = await readFile(systemSettingsPath(), "utf8");
+    const parsed: unknown = load(stripBom(text));
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+      root = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // 系统配置缺失或不可读：从空配置开始，仅写入自己的命名空间
+  }
+  root[SETTINGS_NAMESPACE] = settings;
+  await writeFile(systemSettingsPath(), dump(root, { indent: 2 }), "utf8");
+}
+
+/**
+ * 读取设置：优先从系统 settings.yaml 的 `prompt-library` 命名空间读取；
+ * 命名空间缺失时用默认值并写入系统配置。任何写入失败都不影响本次读取。
+ */
+async function readSettingsRaw(): Promise<PluginSettings> {
+  const ns = await readSystemSettingsNamespace().catch(() => undefined);
+  if (ns !== undefined) {
+    const settings: PluginSettings = { ...DEFAULT_SETTINGS, ...ns };
+    syncCharacterChatInto(settings.applyCharacterToChat ?? false);
+    return settings;
+  }
+  // 命名空间缺失：用默认值初始化并写入系统配置
+  const settings: PluginSettings = { ...DEFAULT_SETTINGS };
+  try {
+    await writeSettingsRaw(settings);
+  } catch {
+    /* 写入失败也照常返回设置值，不影响本次读取 */
+  }
+  syncCharacterChatInto(settings.applyCharacterToChat ?? false);
+  return settings;
 }
 
 /** 设置读-修改-写队列。 */

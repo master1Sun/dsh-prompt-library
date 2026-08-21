@@ -242,7 +242,7 @@ export function SelectionAddPrompt(props: Props): ReactNode {
             </label>
             <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
               {T("pl.tagsField")}
-              <TagInput value={tags} onChange={setTags} suggestions={allTags} inputStyle={inputStyle} />
+              <TagInput value={tags} onChange={setTags} suggestions={allTags} inputStyle={inputStyle} t={props?.t} />
             </label>
             {error && <div style={{ color: TONE.red, fontSize: 12 }}>{error}</div>}
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingTop: 4 }}>

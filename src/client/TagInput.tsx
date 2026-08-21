@@ -9,6 +9,7 @@
  * - 点击组件外部关闭下拉。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { type PLTranslate, usePLT } from "./i18n.js";
 
 const TONE = {
   border: "var(--dsw-alias-border-l2, rgba(17,24,39,0.12))",
@@ -26,6 +27,8 @@ interface Props {
   suggestions: string[];
   /** 输入框外层样式（颜色/边框/圆角等），组件据此构造外观。 */
   inputStyle: CSSProperties;
+  /** 国际化翻译函数（可选，未传时回退中文）。 */
+  t?: PLTranslate;
 }
 
 /**
@@ -64,7 +67,8 @@ function getFixedBase(el: HTMLElement): HTMLElement | null {
   return null;
 }
 
-export function TagInput({ value, onChange, suggestions, inputStyle }: Props): ReactNode {
+export function TagInput({ value, onChange, suggestions, inputStyle, t }: Props): ReactNode {
+  const T = usePLT(t);
   const [open, setOpen] = useState(false);
   // 下拉固定定位（视口坐标折算后），选中标签引发 wrap 高度变化也不会让下拉跳动
   const [pos, setPos] = useState<{ top: number; left: number; width: number; up: boolean } | null>(null);
@@ -333,7 +337,7 @@ export function TagInput({ value, onChange, suggestions, inputStyle }: Props): R
         userSelect: "none",
       }}
     >
-      输入 # 分隔可一次添加多个标签（如「营销#汇报」）；回车或 # 确认，退格键或 × 删除
+      {T("pl.tagsHint")}
     </div>
     </div>
   );

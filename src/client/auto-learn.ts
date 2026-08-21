@@ -18,14 +18,89 @@ export const AUTO_LEARN_DEBOUNCE_MS = 3000;
 /** 自动学习成功 toast 的展示时长（毫秒）。 */
 export const AUTO_LEARN_TOAST_MS = 2500;
 
+/** 明显无意义的客套语 / 问候 / 单字应答（紧凑命中即视为低质量）。 */
+const LOW_QUALITY_PATTERNS = [
+  /^(好的|好|嗯|嗯嗯|噢|ok|okay|收到|谢谢|感谢|辛苦了|了解|明白了|可以|没问题|行|赞|666|厉害|不错|牛|绝了|好的收到|谢谢您)$/i,
+  /^(你好|哈喽|hello|hi|嗨|早上好|中午好|下午好|晚上好|在吗)$/i,
+];
+
+/** 纯表情 / 符号 / 标点 / 空白组成的字符流（学习价值低）。 */
+const EMOJI_OR_SYMBOL_RE = /^[\p{So}\p{Po}\p{Pi}\p{Pf}\p{Ps}\p{Pe}\p{Sc}…~！?。，；：、\s]+$/u;
+
+/** 句子边界：句末标点或换行（多一句提示更有结构、更值得复用）。 */
+const CLAUSE_BOUNDARY_RE = /[。！？!?；;…]|[\r\n]/g;
+
+/** 结构化线索：列表项、占位符、层级标记等，多为可复用提示词特征。 */
+const STRUCTURE_HINT_RE = /[#*\-•1-9]\.|【|】|\[|\]|<|>|：|、/;
+
 /**
- * 判断文本是否适合自动学习。
- * 依据设置的最小学习长度（有效字符数量）：先过滤空白、标点、符号等，
- * 剩余有效字符数达到数量才触发。
+ * 低质量内容检测：
+ * - 空白 / 纯表情 / 纯符号 → 低质量；
+ * - 客套语、问候、单字应答 → 低质量。
+ */
+export function isLowQuality(text: string): boolean {
+  const t = text.trim();
+  if (!t) return true;
+  if (EMOJI_OR_SYMBOL_RE.test(t)) return true;
+  const compact = t.replace(/\s+/g, "");
+  return LOW_QUALITY_PATTERNS.some((re) => re.test(compact));
+}
+
+/**
+ * 信息密度 / 可复用价值判断。
+ *
+ * 在「有效字符数达标」基础上叠加结构启发式：
+ * - 低于最小学习长度的碎片直接不学；
+ * - 命中多句结构或列表/占位符等可复用特征 → 达标即可学；
+ * - 没有明显结构的单句短文本，需要达到 2 倍最小长度才学（避免一次性聊天碎片）。
  */
 export function isLearnWorthy(text: string, minLength: number): boolean {
-  const meaningful = text.replace(/[\s\p{P}\p{S}]/gu, "").length;
-  return meaningful >= minLength;
+  const t = text.trim();
+  if (isLowQuality(t)) return false;
+  const meaningful = t.replace(/[\s\p{P}\p{S}]/gu, "").length;
+  if (meaningful < minLength) return false;
+  const clauseCount = (t.match(CLAUSE_BOUNDARY_RE) ?? []).length;
+  const hasStructure = STRUCTURE_HINT_RE.test(t);
+  if (clauseCount >= 1 || hasStructure) return true;
+  return meaningful >= Math.max(minLength * 2, 20);
+}
+
+/**
+ * 粗略文本相似度（0~1）：对字符二元组做 Jaccard 相似度。
+ * 忽略空格与大小写，用于判断「高度重复」的新文本。
+ */
+export function similarity(a: string, b: string): number {
+  const grams = (s: string): Set<string> => {
+    const set = new Set<string>();
+    const t = s.toLowerCase().replace(/\s+/g, "");
+    for (let i = 0; i < t.length; i++) set.add(t.slice(i, i + 2));
+    if (!t) set.add("");
+    return set;
+  };
+  const A = grams(a);
+  const B = grams(b);
+  const union = A.size + B.size;
+  if (union === 0) return 1;
+  let inter = 0;
+  for (const g of A) if (B.has(g)) inter++;
+  return inter / (union - inter);
+}
+
+/**
+ * 判断文本是否与词库中的某条高度重复（近似去重）。
+ * 长度差异过大的两条直接跳过，避免长文误伤短文。
+ */
+export function isNearDuplicate(text: string, existingPrompts: Prompt[], threshold = 0.8): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  for (const p of existingPrompts) {
+    const b = p.body.trim();
+    if (!b) continue;
+    const ratio = Math.min(t.length, b.length) / Math.max(t.length, b.length);
+    if (ratio < 0.5) continue;
+    if (similarity(t, b) >= threshold) return true;
+  }
+  return false;
 }
 
 /**
@@ -53,8 +128,10 @@ export function useAutoLearn(
     if (!isLearnWorthy(text, settings.autoLearnMinLength)) return;
 
     const normalized = text.toLowerCase();
-    if (existingPrompts.some((p) => p.body.trim().toLowerCase() === normalized)) return;
     if (submittedRef.current.has(normalized)) return;
+    // 先精确去重，再做近似去重（命中高度重复的相似文本也不再入库）
+    if (existingPrompts.some((p) => p.body.trim().toLowerCase() === normalized)) return;
+    if (isNearDuplicate(text, existingPrompts)) return;
 
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(async () => {

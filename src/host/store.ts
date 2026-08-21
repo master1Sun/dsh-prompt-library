@@ -225,16 +225,31 @@ export function recordUsage(id: string): Promise<Prompt | undefined> {
 }
 
 /**
- * 从用户输入中自动学习提示词。
- *
- * 通过精确正文匹配（trim + 忽略大小写）去重。如果正文已存在，
- * 返回已有的提示词；否则创建一个新提示词，自动生成标题
- *（首行或前 40 个字符），并标记 "auto-learned" 标签。
- *
- * 保存成功后，如果开启 AI 智能完善且有可用 LLM 服务，
- * 会在后台调用 harness AI 生成标题/标签/摘要并改写正文，
- * 同时更新用户画像（不阻塞 /learn 响应，失败静默）。
+ * 无 AI 时的标题自动梳理：从正文中提取一个干净的标题。
+ * - 取首个有内容的行；
+ * - 去掉行首的 markdown 标题/列表/序号/引用及纯符号前缀；
+ * - 超长时优先在句末标点处断句，加省略号，再限制在 TITLE_MAX_LEN 内；
+ * - 全部为空时回退到默认标题。
+ * 开启「AI 智能完善」后，标题仍会由 AI 在后台进一步语义化。
  */
+function buildTitle(body: string): string {
+  const fallback = "Learned Prompt";
+  const firstLine = (body.split(/\r?\n/) ?? [""]).map((l) => l.trim()).find((l) => l.length > 0);
+  if (!firstLine) return fallback;
+  // 去掉行首标题/列表/序号/引用标记与纯符号前缀
+  const cleaned = firstLine
+    .replace(/^\s*(#{1,6}\s*|\*\s*|-{1,3}\s*|\d+[.、)]\s*|>\s*)/, "")
+    .replace(/^[\s\p{P}\p{S}]+/u, "")
+    .trim();
+  if (!cleaned) return fallback;
+  if (cleaned.length <= TITLE_MAX_LEN) return cleaned;
+  // 超长：优先在较靠前的句末标点处断句；找不到则整段截断
+  const segment = cleaned.slice(0, TITLE_MAX_LEN + 6);
+  const m = segment.match(/[。！？!?；;…]/);
+  const cut = m ? m.index! + 1 : TITLE_MAX_LEN;
+  return clampTitle(cleaned.slice(0, Math.max(1, cut)) + "…");
+}
+
 export function autoLearn(body: string, tag?: string): Promise<Prompt> {
   const created = transaction(async (store) => {
     const normalized = body.trim().toLowerCase();
@@ -243,10 +258,8 @@ export function autoLearn(body: string, tag?: string): Promise<Prompt> {
     );
     if (existing) return existing;
 
-    // 自动生成标题：首行最多 25 个字符（限制小标题）。
-    const firstLine = (body.split("\n")[0] ?? "").trim();
-    const title =
-      firstLine.length > TITLE_MAX_LEN ? clampTitle(firstLine + "...") : firstLine || "Learned Prompt";
+    // 自动生成标题：无 AI 时也用 buildTitle 做基础梳理（去标记、句末断句、限 25 字）。
+    const title = buildTitle(body);
 
     const now = Date.now();
     const prompt: Prompt = {

@@ -564,6 +564,16 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
     [draft, inputActions],
   );
 
+  // 用提示词正文覆盖当前输入框内容
+  const overwrite = useCallback(
+    async (prompt: Prompt) => {
+      apiUse(prompt.id).catch(() => {});
+      inputActions.setDraft(prompt.body);
+      setOpen(false);
+    },
+    [inputActions],
+  );
+
   const editing = editor.mode !== "none";
 
   const NO_EDITOR = { mode: "none" as const, title: "", body: "", tags: "" };
@@ -1007,6 +1017,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                       </pre>
                       <div style={{ display: "flex", gap: 6 }}>
                         <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={() => insert(p)}>插入</Button>
+                        <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => overwrite(p)}>覆盖</Button>
                         <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => startEdit(p)}>编辑</Button>
                         <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => remove(p)}>删除</Button>
                       </div>

@@ -8,19 +8,50 @@
 import type { Context } from "@deepseek-ai/cordis";
 import { makePromptRoutes } from "./host/routes.js";
 import { registerLlm, logAiInjected } from "./host/ai.js";
-import { ensureProfileFile } from "./host/user-profile.js";
+import { characterSystemSync, ensureCharacterFiles, shouldInjectChatCharacter } from "./host/character.js";
+import { migrateLegacyIfNeeded } from "./host/store.js";
 
 export const name = "prompt-library";
 
-/** 没有静态声明的必需服务；webServer 与 llm 按条件注入。 */
+/** systemPrompt.section 注册项的结构化形状（宿主类型未导出，故本地声明）。 */
+interface PromptSection {
+  name: string;
+  order: number;
+  text: string | ((context: unknown) => string);
+}
+
+/** 没有静态声明的必需服务；webServer / llm / systemPrompt 按条件注入。 */
 export const inject: string[] = [];
 
 export function apply(ctx: Context): void {
   const routes = makePromptRoutes();
 
-  // 启动时确保用户画像文件存在（~/.dsh/prompt-library-user.md），
-  // 便于用户确认画像落盘与路径；失败静默忽略，不影响其他功能。
-  ensureProfileFile().catch(() => {});
+  // 启动时一次性完成把旧数据文件迁移到统一目录 ~/.dsh/prompt-library/：
+  // 提示词库、设置旧路径归档到新目录。失败静默忽略，不影响其他功能。
+  migrateLegacyIfNeeded().catch(() => {});
+
+  // 确保 AI 人格/边界体系（OpenCLaW 式）五维文件存在（SOUL/AGENTS/USER/IDENTITY/MEMORY），
+  // 缺失时写入默认模板，供 AI 润色/完善/洞察时遵守这些灵魂边界。
+  ensureCharacterFiles().catch(() => {});
+
+  // [实验室功能] 把灵魂边界注入「新会话」整个聊天，约束整个对话；不影响启用前正在进行的对话。
+  // systemPrompt 服务可用时注册一个动态 prompt section：每次对话组装时，按会话 scope 判断：
+  // - 功能关闭 → 返回空串（不注入），并把该会话记为既存；
+  // - 功能开启 → 这个 scope 若是「新会话」（从未见过）才注入五维边界，既存会话返回空串。
+  ctx.inject(["systemPrompt"], (promptCtx: Context) => {
+    // 宿主会把 systemPrompt 服务挂到注入的 ctx 上，但宿主类型未声明，这里作结构化类型转换
+    const sp = (promptCtx as unknown as { systemPrompt: { section: (s: PromptSection) => () => void } }).systemPrompt;
+    const dispose = sp.section({
+      name: "prompt-library-character",
+      order: 50,
+      text: (context) => {
+        const scope = (context as { scope?: unknown } | undefined)?.scope;
+        if (!shouldInjectChatCharacter(scope)) return "";
+        return characterSystemSync();
+      },
+    });
+    return () => dispose();
+  });
 
   // 注入 LLM 服务：可用时把 harness 的 AI 能力提供给自学习模块；
   // llm 不可用（如无模型配置）时 AI 完善自动停用，不影响其他功能。

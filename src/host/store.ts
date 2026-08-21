@@ -5,23 +5,14 @@
  * 所有访问通过互斥锁串行化，防止并发 HTTP 处理程序交错执行
  * 读-修改-写而导致丢失更新。
  */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { PluginSettings, Prompt, PromptStoreFile } from "../types.js";
 import { DEFAULT_SETTINGS } from "../types.js";
 import { enrichLearnedPrompt, isAiAvailable } from "./ai.js";
-
-const DEFAULT_DSH_HOME = join(homedir(), ".dsh");
-
-function dshHome(): string {
-  return process.env.DSH_HOME || DEFAULT_DSH_HOME;
-}
-
-function storePath(): string {
-  return join(dshHome(), "prompt-library.json");
-}
+import { resetChatCharacterGrants, syncCharacterChatInto } from "./character.js";
+import { legacySettingsPath, legacyStorePath, settingsPath, storePath } from "./paths.js";
 
 /** 去掉 UTF-8 BOM（Windows 记事本/PowerShell 等工具可能写入），避免 JSON.parse 失败。 */
 function stripBom(text: string): string {
@@ -35,6 +26,13 @@ let chain: Promise<unknown> = Promise.resolve();
 
 function readRaw(): Promise<PromptStoreFile> {
   return readFile(storePath(), "utf8")
+    .catch((err) => {
+      // 新路径不存在：回退读取旧路径 ~/.dsh/prompt-library.json（一次性迁移场景）
+      if (err && typeof err === "object" && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
+        return readFile(legacyStorePath(), "utf8");
+      }
+      throw err;
+    })
     .then((text) => {
       const parsed = JSON.parse(stripBom(text)) as PromptStoreFile;
       if (parsed?.version !== 1 || !Array.isArray(parsed.prompts)) {
@@ -56,8 +54,37 @@ function readRaw(): Promise<PromptStoreFile> {
 }
 
 async function writeRaw(store: PromptStoreFile): Promise<void> {
+  // 写入前若旧路径存在且新路径不存在，先归档旧文件到新路径（一次性迁移）
+  await migrateLegacyIfNeeded();
   await mkdir(dirname(storePath()), { recursive: true });
   await writeFile(storePath(), JSON.stringify(store, null, 2), "utf8");
+}
+
+/** 若旧数据文件存在且新文件不存在，把旧文件移动/归档到新目录（一次性迁移）。 */
+export async function migrateLegacyIfNeeded(force?: "store" | "settings"): Promise<void> {
+  const pairs: { legacy: string; next: string; only: "store" | "settings" }[] = [
+    { legacy: legacyStorePath(), next: storePath(), only: "store" },
+    { legacy: legacySettingsPath(), next: settingsPath(), only: "settings" },
+  ];
+  for (const { legacy, next, only } of pairs) {
+    if (force && force !== only) continue;
+    try {
+      await stat(legacy);
+    } catch {
+      continue; // 旧文件不存在
+    }
+    try {
+      await stat(next);
+    } catch {
+      // 新文件不存在：迁移旧文件到新路径
+      try {
+        await mkdir(dirname(next), { recursive: true });
+        await rename(legacy, next);
+      } catch {
+        /* 迁移失败则保留旧文件，读取仍走回退逻辑 */
+      }
+    }
+  }
 }
 
 /** 串行化一个读-修改-写事务。 */
@@ -263,26 +290,33 @@ export function deletePrompt(id: string): Promise<boolean> {
 
 // ── 设置存储 ────────────────────────────────────────────────────────────────
 
-function settingsPath(): string {
-  return join(dshHome(), "prompt-library-settings.json");
-}
-
 /** 读取设置，如果文件不存在则返回默认值。 */
 async function readSettingsRaw(): Promise<PluginSettings> {
   try {
-    const text = await readFile(settingsPath(), "utf8");
+    const text = await readFile(settingsPath(), "utf8").catch((err) => {
+      // 新路径不存在：回退读取旧路径 ~/.dsh/prompt-library-settings.json
+      if (err && typeof err === "object" && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
+        return readFile(legacySettingsPath(), "utf8");
+      }
+      throw err;
+    });
     const parsed = JSON.parse(stripBom(text)) as Partial<PluginSettings>;
     // 合并默认值，确保所有字段都存在
-    return { ...DEFAULT_SETTINGS, ...parsed };
+    const settings: PluginSettings = { ...DEFAULT_SETTINGS, ...parsed };
+    syncCharacterChatInto(settings.applyCharacterToChat ?? false);
+    return settings;
   } catch (err) {
     if (err && typeof err === "object" && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
-      return { ...DEFAULT_SETTINGS };
+      const settings: PluginSettings = { ...DEFAULT_SETTINGS };
+      syncCharacterChatInto(settings.applyCharacterToChat);
+      return settings;
     }
     throw err;
   }
 }
 
 async function writeSettingsRaw(settings: PluginSettings): Promise<void> {
+  await migrateLegacyIfNeeded("settings");
   await mkdir(dirname(settingsPath()), { recursive: true });
   await writeFile(settingsPath(), JSON.stringify(settings, null, 2), "utf8");
 }
@@ -307,6 +341,9 @@ export function updateSettings(patch: Partial<PluginSettings>): Promise<PluginSe
   return settingsTransaction(async (settings) => {
     const next: PluginSettings = { ...settings, ...patch };
     await writeSettingsRaw(next);
+    // 立即同步会话级灵魂边界开关，让勾选即刻生效；关闭时重置已注入会话记录
+    syncCharacterChatInto(next.applyCharacterToChat ?? false);
+    if (!next.applyCharacterToChat) resetChatCharacterGrants();
     return next;
   });
 }

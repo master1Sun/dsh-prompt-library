@@ -393,6 +393,31 @@ export function SettingsSection(): ReactNode {
           checked={draft.hoverDetailEnabled}
           onChange={(v) => updateAndSave({ hoverDetailEnabled: v })}
         />
+
+        <div style={{ height: 1, background: TONE.border, margin: "8px 0" }} />
+
+        {/* 实验室功能 */}
+        <div style={{ padding: "4px 0", display: "flex", flexDirection: "column", gap: 2 }}>
+          <span
+            style={{
+              fontSize: 12,
+              fontWeight: 600,
+              color: TONE.accent,
+              letterSpacing: 1,
+            }}
+          >
+            实验室功能
+          </span>
+          <span style={{ fontSize: 11, color: "#d89b8a", lineHeight: 1.5 }}>
+            以下为实验性能力，可能影响整个 AI 对话的表现。请谨慎勾选，后果自负。
+          </span>
+        </div>
+        <ToggleRow
+          label="整个聊天应用灵魂边界"
+          desc="勾选后灵魂文件约束整个对话，但只对新会话生效，不影响当前正在进行的对话"
+          checked={draft.applyCharacterToChat}
+          onChange={(v) => updateAndSave({ applyCharacterToChat: v })}
+        />
       </div>
 
       {/* 底部署名 */}

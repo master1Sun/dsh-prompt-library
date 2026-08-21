@@ -61,28 +61,6 @@ export interface PromptPatch {
   lastUsedAt?: number;
 }
 
-/** 用户画像中记录的最近学习样本（供 AI 参考用户风格）。 */
-export interface UserProfileSample {
-  title: string;
-  body: string;
-  tags: string[];
-}
-
-/** 用户画像文件的磁盘结构（越学越聪明的基础）。 */
-export interface UserProfile {
-  version: 1;
-  /** 累积的用户画像摘要：写作风格、常用领域、偏好等。 */
-  summary: string;
-  /** 高频主题（标签 -> 学习次数）。 */
-  topics: Record<string, number>;
-  /** 最近学习的提示词样本（保留最近 N 条）。 */
-  recentSamples: UserProfileSample[];
-  /** 累计自动学习次数。 */
-  learnCount: number;
-  /** 最后一次更新的纪元毫秒时间戳。 */
-  updatedAt: number;
-}
-
 /** 插件设置。 */
 export interface PluginSettings {
   /** 是否开启自动学习。 */
@@ -115,6 +93,8 @@ export interface PluginSettings {
   aiProvider: string;
   /** AI 调用使用的模型 id（留空则自动发现）。 */
   aiModel: string;
+  /** [实验室功能] 勾选后，把灵魂边界注入整个聊天会话，约束整个对话（后果自负）。 */
+  applyCharacterToChat: boolean;
 }
 
 /** 设置的默认值。 */
@@ -134,4 +114,5 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   aiEnrichEnabled: false,
   aiProvider: "",
   aiModel: "",
+  applyCharacterToChat: false,
 };

@@ -214,6 +214,13 @@ export function SidebarPromptLibrary(props?: {
     [insertText],
   );
 
+  // 用提示词正文覆盖当前草稿；无草稿上下文时回退为复制到剪贴板
+  const overwrite = useCallback((prompt: Prompt) => {
+    apiUse(prompt.id).catch(() => {});
+    if (inputActions) inputActions.setDraft(prompt.body);
+    else navigator.clipboard.writeText(prompt.body).catch(() => {});
+  }, [inputActions]);
+
   // 复制提示词正文到剪贴板，短暂显示「已复制」
   const copy = useCallback((p: Prompt) => {
     navigator.clipboard
@@ -730,6 +737,7 @@ export function SidebarPromptLibrary(props?: {
                         </pre>
                         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                           <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={() => insert(p)}>插入</Button>
+                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => overwrite(p)}>覆盖</Button>
                           <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => copy(p)}>
                             {copiedId === p.id ? "已复制" : "复制"}
                           </Button>

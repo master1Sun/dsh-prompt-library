@@ -11,19 +11,18 @@
  */
 import { BlockAssembler, createUserMessage } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, LlmRuntime, LlmModelInfo } from "@deepseek-ai/dsh-llm";
-import type { PluginSettings, Prompt, UserProfile } from "../types.js";
-import { readProfile, updateProfileWith } from "./user-profile.js";
+import type { PluginSettings, Prompt } from "../types.js";
 import { updatePrompt } from "./store.js";
 import { appendFileSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
+import { appendMemory, buildCharacterSystem, noteInsight, readCharacterDocs } from "./character.js";
+import { aiLogPath } from "./paths.js";
 
 /** 单次 AI 完善调用的超时（毫秒）。 */
 const AI_TIMEOUT_MS = 30_000;
 /** AI 完善的输出 token 上限（JSON 输出可能较长，留足空间）。 */
 const AI_MAX_TOKENS = 2048;
-/** AI 完善诊断日志路径（用于排查「AI 智能完善未生效」）。 */
-const AI_LOG = join(homedir(), ".dsh", "prompt-library-ai.log");
+/** AI 完善诊断日志路径（位于统一数据目录 ~/.dsh/prompt-library/ai.log）。 */
+const AI_LOG = aiLogPath();
 
 /** 追加一行 AI 诊断日志；写日志失败绝不影响主流程。 */
 function logAI(msg: string): void {
@@ -97,29 +96,28 @@ async function resolveRoute(
   return { provider, model: pick.id };
 }
 
-/** 组装 system prompt：把用户画像与最近样本作为上下文，让 AI 越用越懂用户。 */
-function systemPrompt(profile: UserProfile): string {
-  const samples = profile.recentSamples.length
-    ? profile.recentSamples.map((s) => `- 【${s.title}】${s.body}`).join("\n")
-    : "（暂无）";
+/** 组装 system prompt：把 USER.md 与 MEMORY.md 作为上下文，让 AI 越用越懂用户。 */
+function systemPrompt(userDoc: string, memoryDoc: string): string {
+  const user = userDoc.trim() || "（暂无）";
+  const memory = memoryDoc.trim() || "（暂无）";
   return [
     "你是一名提示词库整理助手，帮助用户把原始输入整理成高质量、可复用的提示词，并洞察用户的写作风格与关注领域。",
     "",
-    "【用户画像】这是此前积累的关于用户风格与偏好的摘要（可能为空，越用越准）：",
-    profile.summary || "（暂无）",
+    "【用户档案 USER.md】这是用户习惯、偏好与关注领域，请贴合（可能为空，越用越准）：",
+    user,
     "",
-    "【用户最近学习的提示词】供你参考用户风格（可能为空）：",
-    samples,
+    "【长期记忆 MEMORY.md】这是此前沉淀的用户风格与经验洞察，供你参考（可能为空）：",
+    memory,
     "",
     "请严格输出一个 JSON 对象，不要 Markdown 代码块，不要任何多余文字：",
     '{ "title": "简洁标题", "tags": ["标签1", "标签2"], "summary": "用途摘要与使用说明", "body": "优化改写后的提示词正文", "insight": "一句话总结用户写作风格或关注领域" }',
     "",
     "要求：",
     "- title：简洁明了，不超过 30 字；",
-    "- tags：2~5 个，用于分类与筛选，可沿用用户画像中出现的高频主题；",
+    "- tags：2~5 个，用于分类与筛选，可沿用 USER.md 中出现的高频主题；",
     "- summary：一两句话说明这个提示词的用途与使用方法；",
     "- body：在保留原意的基础上润色，使表达更清晰、通用、可直接使用，不要丢失关键细节；",
-    "- insight：用一句话描述这条提示词反映的用户写作风格或关注领域，用于持续完善用户画像。",
+    "- insight：用一句话描述这条提示词反映的用户写作风格或关注领域，用于持续完善用户档案。",
   ].join("\n");
 }
 
@@ -128,6 +126,27 @@ function userMessage(rawBody: string, tag?: string): string {
   const lines = ["以下是用户要学习的原始提示词：", "", rawBody];
   if (tag) lines.push("", `用户给出的候选标签：${tag}`);
   return lines.join("\n");
+}
+
+/**
+ * 把五维灵魂边界（SOUL/AGENTS/USER/IDENTITY/MEMORY）注入 AI 的 system prompt，
+ * 让 AI 在润色 / 完善 / 洞察时都遵守这些边界（OpenCLaW 式自学习的前置条件）。
+ * 读取失败时静默忽略，不影响本次调用。
+ */
+async function withCharacterSystem(system: string): Promise<string> {
+  try {
+    const docs = await readCharacterDocs();
+    const boundary = buildCharacterSystem(docs);
+    if (!boundary) return system;
+    return [
+      system,
+      "",
+      "【灵魂边界】以下是你在本次任务中必须严格遵循的身份与行为边界：",
+      boundary,
+    ].join("\n");
+  } catch {
+    return system;
+  }
 }
 
 /**
@@ -226,11 +245,14 @@ export async function enrichLearnedPrompt(prompt: Prompt, settings: PluginSettin
   }
   const route = await resolveRoute(llm, settings);
   if (!route) return;
-  const profile = await readProfile();
-  logAI(
-    `enrich: 画像上下文 摘要长度=${profile.summary.length} 样本数=${profile.recentSamples.length} 主题数=${Object.keys(profile.topics).length}`,
+  const docs = await readCharacterDocs();
+  logAI(`enrich: 灵魂上下文 USER=${docs.USER.length} 字 MEMORY=${docs.MEMORY.length} 字`);
+  const text = await collectText(
+    llm,
+    route,
+    await withCharacterSystem(systemPrompt(docs.USER, docs.MEMORY)),
+    userMessage(prompt.body, prompt.tags?.[0]),
   );
-  const text = await collectText(llm, route, systemPrompt(profile), userMessage(prompt.body, prompt.tags?.[0]));
   if (!text) return;
   const result = parseJson(text);
   if (!result) {
@@ -250,16 +272,13 @@ export async function enrichLearnedPrompt(prompt: Prompt, settings: PluginSettin
     sourceBody: changed ? prompt.body : undefined,
     aiRefined: true,
   });
-  await updateProfileWith(
-    {
-      title: result.title || prompt.title,
-      body: result.body,
-      tags: result.tags.length ? result.tags : (prompt.tags ?? []),
-    },
-    result.insight,
-  );
+  // 自学习都写入灵魂文件：风格洞察进 USER.md，学习经验进 MEMORY.md（有界维护）
+  noteInsight(result.insight).catch(() => {});
+  appendMemory(
+    `自动学习了提示词「${result.title || prompt.title}」，并提炼出用户风格洞察：${result.insight || "（无）"}`,
+  ).catch(() => {});
   logAI(
-    `enrich: 完成 prompt="${result.title || prompt.title}" body ${changed ? "已改写" : "未改写"} 画像洞察="${result.insight}"`,
+    `enrich: 完成 prompt="${result.title || prompt.title}" body ${changed ? "已改写" : "未改写"} 洞察="${result.insight}"`,
   );
 }
 
@@ -281,72 +300,65 @@ export async function polishPromptBody(
   }
   const route = await resolveRoute(llm, settings);
   if (!route) return undefined;
-  // 读取用户画像作为上下文，让润色更贴合用户写作风格（越用越准）
-  const profile = await readProfile();
-  logAI(
-    `polish: 画像上下文 摘要长度=${profile.summary.length} 样本数=${profile.recentSamples.length}`,
-  );
-  const samples = profile.recentSamples.length
-    ? profile.recentSamples.map((s) => `- 【${s.title}】${s.body}`).join("\n")
-    : "（暂无）";
+  // 读取灵魂文件（USER.md / MEMORY.md）作为上下文，让润色更贴合用户（越用越准）
+  const docs = await readCharacterDocs();
+  logAI(`polish: 灵魂上下文 USER=${docs.USER.length} 字 MEMORY=${docs.MEMORY.length} 字`);
   const system = [
     "你是一名专业的提示词润色助手，擅长贴合用户的写作风格对提示词进行润色。",
     "",
-    "【用户画像】这是此前积累的关于用户风格与偏好的摘要（可能为空，越用越准）：",
-    profile.summary || "（暂无）",
+    "【用户档案 USER.md】这是用户习惯、偏好与关注领域，请贴合（可能为空）：",
+    docs.USER.trim() || "（暂无）",
     "",
-    "【用户最近学习的提示词】供你参考用户风格（可能为空）：",
-    samples,
+    "【长期记忆 MEMORY.md】这是此前沉淀的用户风格与经验洞察，供你参考（可能为空）：",
+    docs.MEMORY.trim() || "（暂无）",
     "",
     "要求：",
     "- 只润色提示词内容本身，不要涉及标题、标签、分类等；",
     "- 保持原意与所有关键细节，不得遗漏、曲解或删减；",
-    "- 结合用户画像中的写作风格与关注领域进行润色，使表达更贴合用户习惯；",
+    "- 结合 USER.md 中的写作风格与关注领域进行润色，使表达更贴合用户习惯；",
     "- 让提示词更清晰、通用、结构清晰、可直接复用；",
     "- 直接输出润色后的提示词正文，不要任何解释或 Markdown 代码块。",
   ].join("\n");
   const content = `请润色以下提示词内容：\n\n${body}`;
-  const text = await collectText(llm, route, system, content);
+  const text = await collectText(llm, route, await withCharacterSystem(system), content);
   if (!text) return undefined;
-  logAI(`polish: 完成 结果长度=${text.length}（等待用户确认许可后并入画像学习）`);
+  logAI(`polish: 完成 结果长度=${text.length}（等待用户确认许可后并入 USER/MEMORY 学习）`);
   return text;
 }
 
 /**
- * 用户确认许可后，把一段 AI 润色内容并入用户画像（AI 自学习），
+ * 用户确认许可后，把一段 AI 润色内容并入灵魂文件（AI 自学习），
  * 让润色也积累用户习惯、越用越贴合。
- * 会调用 AI 从润色内容中提炼一句风格洞察，追加写入画像摘要；
- * AI 不可用或失败时静默降级（洞察为空，仅记录样本）。
+ * 会调用 AI 从润色内容中提炼一句风格洞察，补充写入 USER.md；
+ * 并把此次学习经验写入 MEMORY.md。AI 不可用或失败时静默降级。
  */
 export async function learnPolished(body: string, settings: PluginSettings): Promise<void> {
   const sampleTitle = body.split("\n")[0]?.trim().slice(0, 30) || "AI 润色";
   const insight = await generateInsight(body, settings);
-  await updateProfileWith({ title: sampleTitle, body, tags: [] }, insight);
+  noteInsight(insight).catch(() => {});
+  appendMemory(`用户确认学习了润色内容「${sampleTitle}」。洞察：${insight || "（无）"}`).catch(() => {});
   logAI(
-    `polish: 用户确认学习 "${sampleTitle}" 长度=${body.length} 洞察长度=${insight.length}（已并入用户画像）`,
+    `polish: 用户确认学习 "${sampleTitle}" 长度=${body.length} 洞察长度=${insight.length}（已写入 USER/MEMORY）`,
   );
 }
 
 /**
  * 从一段提示词内容中提炼一句话用户风格/关注领域洞察，
- * 用于追加到用户画像摘要（越学越准）。失败时返回空字符串。
+ * 用于补充到 USER.md（越学越准）。失败时返回空字符串。
  */
 async function generateInsight(body: string, settings: PluginSettings): Promise<string> {
   if (!llm) return "";
   const route = await resolveRoute(llm, settings);
   if (!route) return "";
-  const profile = await readProfile();
-  const samples = profile.recentSamples.length
-    ? profile.recentSamples.map((s) => `- 【${s.title}】${s.body}`).join("\n")
-    : "（暂无）";
+  const docs = await readCharacterDocs();
   const system = [
-    "你是一名用户画像洞察助手，擅长从用户使用的提示词中提炼用户的写作风格与关注领域。",
+    "你是一名用户洞察助手，擅长从用户使用的提示词中提炼用户的写作风格与关注领域。",
     "",
-    "【用户画像摘要】此前积累的风格与偏好（可能为空）：",
-    profile.summary || "（暂无）",
+    "【用户档案 USER.md】此前积累的风格与偏好（可能为空）：",
+    docs.USER.trim() || "（暂无）",
     "",
-    "【用户最近学习的提示词】供你参考用户风格（可能为空）：",
-    samples,
+    "【长期记忆 MEMORY.md】此前沉淀的用户风格与经验洞察（可能为空）：",
+    docs.MEMORY.trim() || "（暂无）",
     "",
     "要求：",
     "- 用一句中文（不超过 40 字）总结这条提示词反映的用户写作风格或关注领域；",
@@ -354,6 +366,6 @@ async function generateInsight(body: string, settings: PluginSettings): Promise<
     "- 直接输出这一句话，不要任何解释或 Markdown 代码块。",
   ].join("\n");
   const content = `请提炼以下提示词反映的用户风格或关注领域：\n\n${body}`;
-  const text = await collectText(llm, route, system, content);
+  const text = await collectText(llm, route, await withCharacterSystem(system), content);
   return text?.trim() ?? "";
 }

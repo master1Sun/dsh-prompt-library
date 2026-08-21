@@ -40,6 +40,16 @@ export function storePath(): string {
   return join(dataDir(), "prompts.json");
 }
 
+/** SQLite 数据库目录：~/.dsh/prompt-library/db/ */
+export function dbDir(): string {
+  return join(dataDir(), "db");
+}
+
+/** 提示词库 SQLite 数据库文件：~/.dsh/prompt-library/db/prompts.db */
+export function dbPath(): string {
+  return join(dbDir(), "prompts.db");
+}
+
 /** 系统设置文件：~/.dsh/settings.yaml（插件设置写入其 `prompt-library` 命名空间）。 */
 export function systemSettingsPath(): string {
   return join(dshHome(), "settings.yaml");

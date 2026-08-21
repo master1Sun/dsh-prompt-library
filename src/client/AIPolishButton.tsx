@@ -180,7 +180,6 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
     background: TONE.panel,
     border: `1px solid ${TONE.borderStrong}`,
     borderRadius: 12,
-    boxShadow: "0 1px 4px rgba(3, 8, 18, 0.1)",
     fontFamily: MONO,
   };
 

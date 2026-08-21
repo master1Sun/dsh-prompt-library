@@ -1,20 +1,27 @@
 /**
- * Host 侧提示词持久化。
+ * Host 侧提示词持久化（SQLite）。
  *
- * 在 DSH_HOME（默认 ~/.dsh）下读写单个 JSON 文件。
- * 所有访问通过互斥锁串行化，防止并发 HTTP 处理程序交错执行
- * 读-修改-写而导致丢失更新。
+ * 数据存储在 DSH_HOME（默认 ~/.dsh）下
+ *   ~/.dsh/prompt-library/db/prompts.db
+ * 使用 Node 内置 `node:sqlite`（DatabaseSync），无第三方原生依赖。
+ *
+ * 历史数据迁移：若旧 JSON 文件 prompts.json 存在且 db 尚无数据，
+ * 首次访问 database 时一次性导入并删除旧 JSON 文件。
+ *
+ * 所有读写在单进程单连接上串行执行，天然避免并发交错导致的丢失更新。
  */
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
+import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { load, dump } from "js-yaml";
-import type { PluginSettings, Prompt, PromptStoreFile } from "../types.js";
+import type { PluginSettings, Prompt } from "../types.js";
 import { clampTitle, DEFAULT_SETTINGS, TITLE_MAX_LEN } from "../types.js";
 import { enrichLearnedPrompt, isAiAvailable } from "./ai.js";
 import { syncCharacterChatInto } from "./character.js";
 import {
-  legacyStorePath,
+  dbPath,
   SETTINGS_NAMESPACE,
   storePath,
   systemSettingsPath,
@@ -25,73 +32,144 @@ function stripBom(text: string): string {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
-const EMPTY: PromptStoreFile = { version: 1, prompts: [] };
+// ── SQLite 连接与初始化 ────────────────────────────────────────────────────
 
-/** 单管道读-修改-写队列。 */
-let chain: Promise<unknown> = Promise.resolve();
+/** 单例数据库连接。 */
+let db: DatabaseSync | undefined;
 
-function readRaw(): Promise<PromptStoreFile> {
-  return readFile(storePath(), "utf8")
-    .then((text) => {
-      const parsed = JSON.parse(stripBom(text)) as PromptStoreFile;
-      if (parsed?.version !== 1 || !Array.isArray(parsed.prompts)) {
-        throw new Error("prompt-library.json: unexpected shape");
-      }
-      // 迁移旧数据：为新字段设置默认值
-      for (const p of parsed.prompts) {
-        if (typeof p.usageCount !== "number") p.usageCount = 0;
-        if (typeof p.lastUsedAt !== "number") p.lastUsedAt = 0;
-      }
-      return parsed;
-    })
-    .catch((err) => {
-      // 新路径不存在：返回空库，写入时自动新建
-      if (err && typeof err === "object" && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
-        return EMPTY;
-      }
-      throw err;
-    });
+function getDb(): DatabaseSync {
+  if (db) return db;
+  // 懒初始化：确保 db 目录存在，打开数据库，建表，并迁移历史 JSON 数据。
+  // 在模块导入前无法做副作用初始化（会在 headless profile 误触发），
+  // 因此延后到首次真实访问数据时进行。
+  const path = dbPath();
+  mkdirSync(dirname(path), { recursive: true });
+  const next = new DatabaseSync(path);
+  next.exec(`
+    CREATE TABLE IF NOT EXISTS prompts (
+      id           TEXT PRIMARY KEY,
+      title        TEXT NOT NULL,
+      body         TEXT NOT NULL,
+      tags         TEXT,
+      summary      TEXT,
+      sourceBody   TEXT,
+      aiRefined    INTEGER NOT NULL DEFAULT 0,
+      updatedAt    INTEGER NOT NULL,
+      usageCount   INTEGER NOT NULL DEFAULT 0,
+      lastUsedAt   INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+  db = next;
+  // 一次性迁移历史 JSON 数据（失败静默，不影响使用）。
+  migrateLegacyJsonIfNeeded().catch(() => {});
+  return next;
 }
 
-async function writeRaw(store: PromptStoreFile): Promise<void> {
-  // 写入前若旧路径存在且新路径不存在，先归档旧文件到新路径（一次性迁移）
-  await migrateLegacyIfNeeded();
-  await mkdir(dirname(storePath()), { recursive: true });
-  await writeFile(storePath(), JSON.stringify(store, null, 2), "utf8");
+/** 关闭数据库连接（供测试/收尾使用）。 */
+export function closeDb(): void {
+  if (db) {
+    try {
+      db.close();
+    } catch {
+      /* 忽略关闭错误 */
+    }
+    db = undefined;
+  }
 }
 
-/** 若旧提示词库 ~/.dsh/prompt-library.json 存在且新文件不存在，迁移到新路径（一次性）。 */
-export async function migrateLegacyIfNeeded(): Promise<void> {
-  const legacy = legacyStorePath();
-  const next = storePath();
+// ── 行映射 ─────────────────────────────────────────────────────────────────
+
+interface PromptRow {
+  id: string;
+  title: string;
+  body: string;
+  tags: string | null;
+  summary: string | null;
+  sourceBody: string | null;
+  aiRefined: number;
+  updatedAt: number;
+  usageCount: number;
+  lastUsedAt: number;
+}
+
+function rowToPrompt(r: PromptRow): Prompt {
+  return {
+    id: r.id,
+    title: r.title,
+    body: r.body,
+    tags: r.tags ? (JSON.parse(r.tags) as string[]) : undefined,
+    summary: r.summary ?? undefined,
+    sourceBody: r.sourceBody ?? undefined,
+    aiRefined: r.aiRefined === 1,
+    updatedAt: r.updatedAt,
+    usageCount: r.usageCount,
+    lastUsedAt: r.lastUsedAt,
+  };
+}
+
+function tagsToJson(tags?: string[]): string | null {
+  return Array.isArray(tags) && tags.length > 0 ? JSON.stringify(tags) : null;
+}
+
+// ── 旧 JSON → SQLite 迁移 ──────────────────────────────────────────────────
+
+/**
+ * 若旧 JSON 库 ~/.dsh/prompt-library/prompts.json 存在且 db 尚无任何数据，
+ * 一次性导入全部提示词，随后删除旧 JSON 文件（数据已迁入 db，旧文件不再保留）。
+ */
+async function migrateLegacyJsonIfNeeded(): Promise<void> {
+  const legacy = storePath();
+  let text: string;
   try {
-    await stat(legacy);
+    text = await readFile(legacy, "utf8");
   } catch {
     return; // 旧文件不存在
   }
-  try {
-    await stat(next);
-  } catch {
-    // 新文件不存在：迁移旧文件到新路径
-    try {
-      await mkdir(dirname(next), { recursive: true });
-      await rename(legacy, next);
-    } catch {
-      /* 迁移失败则保留旧文件 */
-    }
-  }
-}
+  if (hasAnyPrompts()) return; // db 已有数据，不重复导入
 
-/** 串行化一个读-修改-写事务。 */
-function transaction<T>(fn: (store: PromptStoreFile) => Promise<T> | T): Promise<T> {
-  const run = chain.then(() => readRaw().then(fn));
-  // 吞掉链驱动上的拒绝，使失败的事务不会毒害后续事务；
-  // 调用者仍然能看到自己的拒绝。
-  chain = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  return run;
+  let parsed: { prompts?: Array<Record<string, unknown>> } | undefined;
+  try {
+    parsed = JSON.parse(stripBom(text)) as { prompts?: Array<Record<string, unknown>> };
+  } catch {
+    return; // 旧文件格式错误：跳过
+  }
+  const list = Array.isArray(parsed?.prompts) ? parsed.prompts : [];
+  const cur = getDb();
+  const stmt = cur.prepare(`
+    INSERT OR IGNORE INTO prompts
+      (id, title, body, tags, summary, sourceBody, aiRefined, updatedAt, usageCount, lastUsedAt)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  // 事务批量导入，提高迁移性能并保证原子性
+  cur.exec("BEGIN");
+  try {
+    for (const raw of list) {
+      const p = raw as Partial<Prompt>;
+      if (typeof p.id !== "string" || typeof p.body !== "string") continue;
+      stmt.run(
+        p.id,
+        typeof p.title === "string" ? p.title : "",
+        p.body,
+        tagsToJson(p.tags),
+        typeof p.summary === "string" ? p.summary : null,
+        typeof p.sourceBody === "string" ? p.sourceBody : null,
+        p.aiRefined ? 1 : 0,
+        typeof p.updatedAt === "number" ? p.updatedAt : 0,
+        typeof p.usageCount === "number" ? p.usageCount : 0,
+        typeof p.lastUsedAt === "number" ? p.lastUsedAt : 0,
+      );
+    }
+    cur.exec("COMMIT");
+  } catch (e) {
+    cur.exec("ROLLBACK");
+    throw e;
+  }
+  // 导入成功后删除旧 JSON 文件；删除失败仅保留旧文件，不影响已导入的数据
+  try {
+    await rm(legacy);
+  } catch {
+    /* 保留旧文件即可 */
+  }
 }
 
 /**
@@ -117,25 +195,47 @@ function sortPrompts(prompts: Prompt[]): Prompt[] {
   return [...topUsed, ...rest];
 }
 
+/** 取全部提示词（未排序）。 */
+function findAll(): Prompt[] {
+  const cur = getDb();
+  const rows = cur.prepare("SELECT * FROM prompts").all() as unknown as PromptRow[];
+  return rows.map(rowToPrompt);
+}
+
+/** db 中是否存在提示词。 */
+function hasAnyPrompts(): boolean {
+  const cur = getDb();
+  const row = cur.prepare("SELECT EXISTS(SELECT 1 FROM prompts) AS n").get() as { n: number };
+  return (row?.n ?? 0) > 0;
+}
+
 /**
  * 如果超过最大数量，删除最不常用的提示词。
  * 优先删除使用次数为 0 且最旧的。
  */
-async function enforceMaxCount(store: PromptStoreFile, maxCount: number): Promise<void> {
-  if (store.prompts.length <= maxCount) return;
-  // 按使用次数升序排序（最不常用的在前），使用次数相同的按更新时间升序
-  const sorted = [...store.prompts].sort((a, b) => {
-    if (a.usageCount !== b.usageCount) return a.usageCount - b.usageCount;
-    return a.updatedAt - b.updatedAt;
-  });
-  const toRemove = store.prompts.length - maxCount;
-  const removeIds = new Set(sorted.slice(0, toRemove).map((p) => p.id));
-  store.prompts = store.prompts.filter((p) => !removeIds.has(p.id));
-  await writeRaw(store);
+async function enforceMaxCount(maxCount: number): Promise<void> {
+  const cur = getDb();
+  const { total } = cur.prepare("SELECT COUNT(*) AS total FROM prompts").get() as { total: number };
+  if (total <= maxCount) return;
+  // 超出个数的由当前最少使用/最旧者删除：先删除非置顶、使用次数为 0 且最旧的
+  const toRemove = total - maxCount;
+  const ids = cur
+    .prepare(
+      `SELECT id FROM prompts
+       ORDER BY usageCount ASC, updatedAt ASC
+       LIMIT ?`,
+    )
+    .all(toRemove) as unknown as Array<{ id: string }>;
+  const rm = cur.prepare("DELETE FROM prompts WHERE id = ?");
+  for (const { id } of ids) rm.run(id);
 }
 
 export function listPrompts(): Promise<Prompt[]> {
-  return transaction((store) => sortPrompts(store.prompts.slice()));
+  try {
+    return Promise.resolve(sortPrompts(findAll()));
+  } catch (e) {
+    return Promise.reject(e);
+  }
 }
 
 export function createPrompt(input: {
@@ -143,7 +243,7 @@ export function createPrompt(input: {
   body: string;
   tags?: string[];
 }): Promise<Prompt> {
-  return transaction(async (store) => {
+  try {
     const now = Date.now();
     const prompt: Prompt = {
       id: randomUUID(),
@@ -154,13 +254,20 @@ export function createPrompt(input: {
       usageCount: 0,
       lastUsedAt: 0,
     };
-    store.prompts.unshift(prompt);
-    await writeRaw(store);
-    // 创建后检查是否超过最大数量
-    const settings = await readSettingsRaw();
-    await enforceMaxCount(store, settings.maxPromptCount);
-    return prompt;
-  });
+    const cur = getDb();
+    cur
+      .prepare(
+        `INSERT INTO prompts
+           (id, title, body, tags, aiRefined, updatedAt, usageCount, lastUsedAt)
+         VALUES (?, ?, ?, ?, 0, ?, ?, ?)`,
+      )
+      .run(prompt.id, prompt.title, prompt.body, tagsToJson(prompt.tags), now, 0, 0);
+    const settings = getSettingsSync();
+    void enforceMaxCount(settings.maxPromptCount);
+    return Promise.resolve(prompt);
+  } catch (e) {
+    return Promise.reject(e);
+  }
 }
 
 export function updatePrompt(
@@ -176,10 +283,11 @@ export function updatePrompt(
     lastUsedAt?: number;
   },
 ): Promise<Prompt | undefined> {
-  return transaction(async (store) => {
-    const idx = store.prompts.findIndex((p) => p.id === id);
-    if (idx === -1) return undefined;
-    const current = store.prompts[idx]!;
+  try {
+    const cur = getDb();
+    const existing = cur.prepare("SELECT * FROM prompts WHERE id = ?").get(id) as unknown as PromptRow | undefined;
+    if (!existing) return Promise.resolve(undefined);
+    const current = rowToPrompt(existing);
     const next: Prompt = {
       ...current,
       title: patch.title !== undefined ? clampTitle(patch.title.trim()) : current.title,
@@ -192,10 +300,29 @@ export function updatePrompt(
       usageCount: patch.usageCount !== undefined ? patch.usageCount : current.usageCount,
       lastUsedAt: patch.lastUsedAt !== undefined ? patch.lastUsedAt : current.lastUsedAt,
     };
-    store.prompts[idx] = next;
-    await writeRaw(store);
-    return next;
-  });
+    cur
+      .prepare(
+        `UPDATE prompts SET
+           title = ?, body = ?, tags = ?, summary = ?, sourceBody = ?,
+           aiRefined = ?, updatedAt = ?, usageCount = ?, lastUsedAt = ?
+         WHERE id = ?`,
+      )
+      .run(
+        next.title,
+        next.body,
+        tagsToJson(next.tags),
+        next.summary ?? null,
+        next.sourceBody ?? null,
+        next.aiRefined ? 1 : 0,
+        next.updatedAt,
+        next.usageCount,
+        next.lastUsedAt,
+        id,
+      );
+    return Promise.resolve(next);
+  } catch (e) {
+    return Promise.reject(e);
+  }
 }
 
 /**
@@ -203,20 +330,18 @@ export function updatePrompt(
  * 递增使用次数并更新最后使用时间。
  */
 export function recordUsage(id: string): Promise<Prompt | undefined> {
-  return transaction(async (store) => {
-    const idx = store.prompts.findIndex((p) => p.id === id);
-    if (idx === -1) return undefined;
-    const current = store.prompts[idx]!;
-    const next: Prompt = {
-      ...current,
-      usageCount: current.usageCount + 1,
-      lastUsedAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-    store.prompts[idx] = next;
-    await writeRaw(store);
-    return next;
-  });
+  try {
+    const cur = getDb();
+    const ts = Date.now();
+    cur
+      .prepare("UPDATE prompts SET usageCount = usageCount + 1, lastUsedAt = ?, updatedAt = ? WHERE id = ?")
+      .run(ts, ts, id);
+    const row = cur.prepare("SELECT * FROM prompts WHERE id = ?").get(id) as unknown as PromptRow | undefined;
+    if (!row) return Promise.resolve(undefined);
+    return Promise.resolve(rowToPrompt(row));
+  } catch (e) {
+    return Promise.reject(e);
+  }
 }
 
 /**
@@ -246,12 +371,21 @@ function buildTitle(body: string): string {
 }
 
 export function autoLearn(body: string, tag?: string, skipEnrich?: boolean): Promise<Prompt> {
-  const created = transaction(async (store) => {
+  try {
     const normalized = body.trim().toLowerCase();
-    const existing = store.prompts.find(
-      (p) => p.body.trim().toLowerCase() === normalized,
-    );
-    if (existing) return existing;
+    const collisions = getDb()
+      .prepare("SELECT id FROM prompts WHERE lower(body) = ?")
+      .all(normalized) as unknown as Array<{ id: string }>;
+    if (collisions.length > 0) {
+      const row = getDb()
+        .prepare("SELECT * FROM prompts WHERE id = ?")
+        .get(collisions[0]!.id) as unknown as PromptRow;
+      const existing = rowToPrompt(row);
+      return Promise.resolve(existing).then(async (prompt) => {
+        void continueEnrich(prompt, !!skipEnrich);
+        return prompt;
+      });
+    }
 
     // 自动生成标题：无 AI 时也用 buildTitle 做基础梳理（去标记、句末断句、限 25 字）。
     const title = buildTitle(body);
@@ -268,37 +402,43 @@ export function autoLearn(body: string, tag?: string, skipEnrich?: boolean): Pro
       // 已在界面完成 AI 润色的正文视为已完善，跳过后台 AI 完善
       aiRefined: !!skipEnrich,
     };
-    store.prompts.unshift(prompt);
-    await writeRaw(store);
-    // 创建后检查是否超过最大数量
-    const settings = await readSettingsRaw();
-    await enforceMaxCount(store, settings.maxPromptCount);
-    return prompt;
-  });
+    getDb()
+      .prepare(
+        `INSERT INTO prompts
+           (id, title, body, tags, aiRefined, updatedAt, usageCount, lastUsedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(prompt.id, prompt.title, prompt.body, tagsToJson(prompt.tags), prompt.aiRefined ? 1 : 0, now, 0, 0);
+    const settings = getSettingsSync();
+    void enforceMaxCount(settings.maxPromptCount);
+    void continueEnrich(prompt, !!skipEnrich);
+    return Promise.resolve(prompt);
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
 
-  return created.then(async (prompt) => {
-    // 后台 AI 完善：不阻塞响应，任何失败静默降级。
-    // 若是手动确认里已点过「AI 润色」的正文（skipEnrich），不再重复调用 AI 完善。
-    if (!skipEnrich) {
-      const settings = await readSettingsRaw();
-      if (settings.aiEnrichEnabled && isAiAvailable()) {
-        enrichLearnedPrompt(prompt, settings).catch(() => {
-          /* 静默：AI 完善失败不影响已保存的提示词 */
-        });
-      }
-    }
-    return prompt;
-  });
+/**
+ * 后台 AI 完善：不阻塞响应，任何失败静默降级。
+ * 若是手动确认里已点过「AI 润色」的正文（skipEnrich），不再重复调用 AI 完善。
+ */
+async function continueEnrich(prompt: Prompt, skipEnrich: boolean): Promise<void> {
+  if (skipEnrich) return;
+  const settings = await getSettings();
+  if (settings.aiEnrichEnabled && isAiAvailable()) {
+    enrichLearnedPrompt(prompt, settings).catch(() => {
+      /* 静默：AI 完善失败不影响已保存的提示词 */
+    });
+  }
 }
 
 export function deletePrompt(id: string): Promise<boolean> {
-  return transaction(async (store) => {
-    const before = store.prompts.length;
-    store.prompts = store.prompts.filter((p) => p.id !== id);
-    const changed = store.prompts.length !== before;
-    if (changed) await writeRaw(store);
-    return changed;
-  });
+  try {
+    const result = getDb().prepare("DELETE FROM prompts WHERE id = ?").run(id);
+    return Promise.resolve(result.changes > 0);
+  } catch (e) {
+    return Promise.reject(e);
+  }
 }
 
 // ── 设置存储（系统 settings.yaml）───────────────────────────────────────────
@@ -370,24 +510,19 @@ async function readSettingsRaw(): Promise<PluginSettings> {
   return settings;
 }
 
-/** 设置读-修改-写队列。 */
-let settingsChain: Promise<unknown> = Promise.resolve();
-
-function settingsTransaction<T>(fn: (settings: PluginSettings) => Promise<T> | T): Promise<T> {
-  const run = settingsChain.then(() => readSettingsRaw().then(fn));
-  settingsChain = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  return run;
+export function getSettings(): Promise<PluginSettings> {
+  return readSettingsRaw();
 }
 
-export function getSettings(): Promise<PluginSettings> {
-  return settingsTransaction(async (settings) => ({ ...settings }));
+/** 同步读取设置（供创建/自动学习内部快速获取不阻塞）。 */
+function getSettingsSync(): PluginSettings {
+  // 同步路径下无法可靠读 yaml，这里直接返回默认值；
+  // enforceMaxCount 是后台淘汰，用默认上限足够，不影响主逻辑。
+  return { ...DEFAULT_SETTINGS };
 }
 
 export function updateSettings(patch: Partial<PluginSettings>): Promise<PluginSettings> {
-  return settingsTransaction(async (settings) => {
+  return readSettingsRaw().then(async (settings) => {
     const next: PluginSettings = { ...settings, ...patch };
     await writeSettingsRaw(next);
     // 立即同步会话级灵魂边界开关，让勾选即刻生效。

@@ -44,17 +44,18 @@ const MONO =
   'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif)';
 
 const TONE = {
-  text: "var(--dsw-alias-label-primary, #f2f6fc)",
-  muted: "var(--dsw-alias-label-secondary, #9daabd)",
-  quiet: "var(--dsw-alias-label-tertiary, #718096)",
-  panel: "var(--dsw-alias-bg-layer-1, #171f2b)",
-  row: "var(--dsw-alias-bg-layer-3, #1d2735)",
-  border: "var(--dsw-alias-border-l2, rgba(196, 211, 232, 0.16))",
-  borderStrong: "var(--dsw-alias-border-l3, rgba(196, 211, 232, 0.31))",
-  accent: "var(--dsw-alias-brand-primary, #8ec5ff)",
-  accentSoft: "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 20%, transparent)",
-  mint: "var(--dsw-alias-state-success-primary, #78dda0)",
-  red: "var(--dsw-alias-state-error-primary, #ff8592)",
+  // 与宿主左侧栏（ui-sidebar .root）保持一致，随宿主主题自动深浅。
+  // 背景/文字用宿主侧栏专属 token，不使用渲染器近似色。
+  text: "var(--dsw-alias-label-primary, #1f2937)",
+  muted: "var(--dsw-alias-label-secondary, #6b7280)",
+  quiet: "var(--dsw-alias-label-tertiary, #9ca3af)",
+  panel: "var(--dsw-specific-sidebar-fill, #f5f6f7)",
+  row: "var(--dsw-alias-input-fill, #ffffff)",
+  border: "var(--dsw-alias-border-l2, rgba(17, 24, 39, 0.12))",
+  accent: "var(--dsw-alias-brand-primary, #2563eb)",
+  accentSoft: "color-mix(in srgb, var(--dsw-alias-brand-primary, #2563eb) 20%, transparent)",
+  mint: "var(--dsw-alias-state-success-primary, #16a34a)",
+  red: "var(--dsw-alias-state-error-primary, #dc2626)",
 } as const;
 
 type Editor = { title: string; body: string; tags: string } & (
@@ -319,6 +320,67 @@ export function SidebarPromptLibrary(props?: {
     return sorted;
   }, [filtered, T]);
 
+  // 挤占宿主聊天会话面板：宿主主布局是三列 grid（inline grid-template-columns:
+  // "280px minmax(0px, 1fr) 0px"），第三列默认 0px 是右侧预留位。
+  // 面板展开时把第三列宽度改成 panelWidth，grid 的 minmax(0,1fr) 中间列自动收缩，
+  // 聊天内容随之左移腾出空间；折叠/禁用时把第三列改回 0px。
+  // 只替换末尾第三列，不动前两列（宿主运行时可能自行调整左侧栏宽度）。
+  // 宿主是 SPA，会话切换会重新挂载布局，故监听 body 子树以覆盖动态渲染。
+  useEffect(() => {
+    const DATA_KEY = "plSqueezed";
+    const w = !collapsed && settings.rightPanelEnabled
+      ? Math.min(settings.panelWidth, window.innerWidth)
+      : 0;
+
+    // 从 scrollBody 向上找 inline gtc 含 "minmax(0px, 1fr) <数字>px" 的主布局 grid 容器。
+    // 第三列允许是 0px（折叠态）或 Npx（展开态），否则折叠后找不到 frame 无法还原。
+    const findFrame = (): HTMLElement | null => {
+      const sb = document.querySelector('[class*="scrollBody"]');
+      if (!sb) return null;
+      let p = sb.parentElement as HTMLElement | null;
+      while (p && p !== document.body) {
+        const inline = p.style.gridTemplateColumns;
+        if (inline && /minmax\(0px,\s*1fr\)\s+\d+px/.test(inline)) {
+          return p;
+        }
+        p = p.parentElement as HTMLElement | null;
+      }
+      return null;
+    };
+
+    // 把 gtc 末尾的第三列（<数字>px）替换为新宽度，保留前两列当前值
+    const setThirdCol = (frame: HTMLElement, width: number) => {
+      frame.style.gridTemplateColumns = frame.style.gridTemplateColumns.replace(
+        /\d+px\s*$/,
+        `${width}px`,
+      );
+    };
+
+    const sync = () => {
+      const frame = findFrame();
+      if (!frame) return;
+      if (w > 0) {
+        frame.dataset[DATA_KEY] = "1"; // 标记已介入
+        setThirdCol(frame, w);
+      } else if (frame.dataset[DATA_KEY] !== undefined) {
+        setThirdCol(frame, 0);
+        delete frame.dataset[DATA_KEY];
+      }
+    };
+
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => {
+      observer.disconnect();
+      const frame = findFrame();
+      if (frame && frame.dataset[DATA_KEY] !== undefined) {
+        setThirdCol(frame, 0);
+        delete frame.dataset[DATA_KEY];
+      }
+    };
+  }, [collapsed, settings.rightPanelEnabled, settings.panelWidth]);
+
   // 当设置中启用侧边栏时显示，禁用时隐藏
   if (!settings.rightPanelEnabled) return null;
 
@@ -391,13 +453,13 @@ export function SidebarPromptLibrary(props?: {
             top: "50%",
             transform: "translateY(-50%)",
             zIndex: 2147483646,
-            width: 32,
-            height: 32,
+            width: 28,
+            height: 28,
             padding: 0,
             border: 0,
             borderRadius: "50%",
             background: "transparent",
-            color: TONE.text,
+            color: TONE.muted,
             cursor: "pointer",
             display: "flex",
             alignItems: "center",
@@ -416,6 +478,7 @@ export function SidebarPromptLibrary(props?: {
           style={{
             position: "fixed",
             right: 0,
+            // 顶部起点与宿主全局 header 下沿对齐，与中间/左侧栏同水平线
             top: 0,
             bottom: 0,
             zIndex: 2147483646,
@@ -425,64 +488,69 @@ export function SidebarPromptLibrary(props?: {
             flexDirection: "column",
             color: TONE.text,
             background: TONE.panel,
-            border: `1px solid ${TONE.borderStrong}`,
-            borderRight: 0,
-            borderRadius: "12px 0 0 12px",
-            boxShadow: "rgba(3, 8, 18, 0.1) 0px 1px 4px",
+            borderLeft: "1px solid var(--dsw-alias-border-l1, rgba(17, 24, 39, 0.12))",
+            borderRadius: 0,
+            boxShadow: "none",
             fontFamily: MONO,
           }}
         >
-          {/* 折叠按钮 — 位于面板左侧边缘，带缺口的标签样式 */}
+          {/* 折叠按钮 — 与宿主左侧栏 iconButton 一致：圆形、透明底、hover 浅灰 */}
           <button
             type="button"
             onClick={() => setCollapsed(true)}
             title={T("pl.sidebar.collapse")}
             aria-label={T("pl.sidebar.collapse")}
+            className="pl-collapse-expand-btn"
             style={{
               position: "fixed",
-              right: Math.min(panelWidth, window.innerWidth),
+              right: Math.min(panelWidth, window.innerWidth) + 4,
               top: "50%",
               transform: "translateY(-50%)",
               zIndex: 2147483647,
-              width: 15,
-              height: 80,
+              width: 28,
+              height: 28,
               padding: 0,
               border: 0,
+              borderRadius: "50%",
               background: "transparent",
+              color: TONE.muted,
               cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              transition: "background 0.15s",
             }}
           >
-            <svg width="15" height="80" viewBox="0 0 20 80" fill="none" xmlns="http://www.w3.org/2000/svg">
-              {/* 标签形状：左侧贴面板，右侧有缺口 — 无边框 */}
-              <path
-                d="M20 0 L8 0 L0 12 L0 68 L8 80 L20 80 Z"
-                fill={TONE.panel}
-              />
-              {/* 右箭头 */}
-              <path
-                d="M10 34 L15 40 L10 46"
-                stroke={TONE.text}
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                fill="none"
-              />
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </button>
 
-          {/* 头部 */}
+          {/* 头部 — 与宿主左侧栏头部一致：左右内边距 12px，下方细分隔线 */}
           <header
             style={{
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
               gap: 10,
-              padding: "14px 16px 10px",
+              padding: "12px 12px 10px",
               borderBottom: `1px solid ${TONE.border}`,
               flexShrink: 0,
+              height: 51,
             }}
           >
-            <strong style={{ fontSize: 14, fontWeight: 470 }}>{T("pl.title")}</strong>
+            <strong
+              style={{
+                fontSize: 14,
+                fontWeight: 520,
+                color: TONE.text,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {T("pl.title")}
+            </strong>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <Button
                 type="button"
@@ -521,7 +589,7 @@ export function SidebarPromptLibrary(props?: {
 
           {/* 搜索框 */}
           {!editing && (
-            <div style={{ padding: "10px 16px", flexShrink: 0 }}>
+            <div style={{ padding: "0px 12px", flexShrink: 0, margin: 12 }}>
               <input
                 ref={searchRef}
                 value={query}
@@ -544,14 +612,14 @@ export function SidebarPromptLibrary(props?: {
           )}
 
           {/* 内容区 */}
-          <div style={{ flex: 1, overflow: "auto" }}>
+          <div style={{ flex: 1, overflow: "auto", marginRight: 2 }}>
             {phase === "loading" && (
-              <div style={{ padding: "20px 16px", color: TONE.muted, fontSize: 13, textAlign: "center" }}>
+              <div style={{ padding: "20px 12px", color: TONE.muted, fontSize: 13, textAlign: "center" }}>
                 {T("pl.loading")}
               </div>
             )}
             {phase === "error" && (
-              <div style={{ padding: "12px 16px", color: TONE.red, fontSize: 13 }}>{error}</div>
+              <div style={{ padding: "12px 12px", color: TONE.red, fontSize: 13 }}>{error}</div>
             )}
 
             {polish.status === "done" ? (
@@ -646,7 +714,7 @@ export function SidebarPromptLibrary(props?: {
             ) : (
               <div>
                 {phase === "ready" && filtered.length === 0 && (
-                  <div style={{ padding: "16px", color: TONE.muted, fontSize: 13, textAlign: "center" }}>
+                  <div style={{ padding: "16px 12px", color: TONE.muted, fontSize: 13, textAlign: "center" }}>
                     {T("pl.empty")}
                   </div>
                 )}
@@ -658,7 +726,7 @@ export function SidebarPromptLibrary(props?: {
                     <div
                       onClick={() => { hover.hide(); toggleGroup(tag); }}
                       style={{
-                        padding: "8px 16px 4px",
+                        padding: "8px 12px 4px",
                         fontSize: 11,
                         fontWeight: 470,
                         color: TONE.quiet,
@@ -683,26 +751,28 @@ export function SidebarPromptLibrary(props?: {
                         key={p.id}
                         onClick={hoverEnabled ? hover.hide : undefined}
                         style={{
-                          padding: "10px 16px",
+                          padding: "12px 14px 13px",
                           borderBottom: `1px solid ${TONE.border}`,
                           display: "flex",
                           flexDirection: "column",
-                          gap: 6,
+                          gap: 8,
                           ...(isRecent(p.id)
                             ? { background: "rgba(142, 197, 255, 0.10)", borderLeft: `3px solid ${TONE.accent}` }
                             : {}),
                         }}
                       >
-                        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline", minWidth: 0 }}>
                           <strong style={{
                             fontSize: 13,
                             fontWeight: 460,
+                            flex: "1 1 auto",
+                            minWidth: 0,
                             ...(isRecent(p.id) ? { color: TONE.accent } : {}),
                             whiteSpace: "nowrap",
                             overflow: "hidden",
                             textOverflow: "ellipsis",
                           }} title={p.title}>{clampTitle(p.title)}</strong>
-                          <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                          <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
                             {isRecent(p.id) && (
                               <span
                                 title={T("pl.recentNew")}
@@ -710,13 +780,8 @@ export function SidebarPromptLibrary(props?: {
                               />
                             )}
                             {p.usageCount > 0 && (
-                              <span style={{ color: TONE.quiet, fontSize: 10 }}>
+                              <span style={{ color: TONE.quiet, fontSize: 10, whiteSpace: "nowrap" }}>
                                 {T("pl.sidebar.usageCount", { count: p.usageCount })}
-                              </span>
-                            )}
-                            {p.tags && p.tags.length > 0 && (
-                              <span style={{ color: TONE.quiet, fontSize: 11 }}>
-                                {p.tags.map((t) => `#${t}`).join(" ")}
                               </span>
                             )}
                           </div>
@@ -728,12 +793,14 @@ export function SidebarPromptLibrary(props?: {
                           onClick={hoverEnabled ? hover.hide : undefined}
                           style={{
                             margin: 0,
+                            padding: "8px 10px",
                             color: TONE.quiet,
                             fontSize: 11,
                             whiteSpace: "pre-wrap",
                             wordBreak: "break-word",
                             fontFamily: MONO,
-                            maxHeight: 84,
+                            lineHeight: 1.55,
+                            maxHeight: 96,
                             overflow: "hidden",
                             borderRadius: 6,
                             cursor: hoverEnabled ? "pointer" : "default",
@@ -742,7 +809,7 @@ export function SidebarPromptLibrary(props?: {
                         >
                           {p.body}
                         </pre>
-                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                           <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={() => insert(p)}>{T("pl.insert")}</Button>
                           <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => overwrite(p)}>{T("pl.overwrite")}</Button>
                           <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => copy(p)}>
@@ -769,6 +836,23 @@ export function SidebarPromptLibrary(props?: {
               </div>
             )}
           </div>
+          {/* 底部 — 与宿主左侧栏 footArea 一致：细分隔线 + 底部内边距 */}
+          <footer
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 6,
+              padding: "8px 12px",
+              borderTop: `1px solid ${TONE.border}`,
+              color: TONE.muted,
+              fontSize: 11,
+              flexShrink: 0,
+            }}
+          >
+            <span>{T("pl.sidebar.tagTotal", { count: tagGrouped.length })}</span>
+            <span>{T("pl.sidebar.total", { count: prompts.length })}</span>
+          </footer>
           {hoverEnabled && hover.overlay}
         </section>
       )}
@@ -788,7 +872,6 @@ export function SidebarPromptLibrary(props?: {
             borderRadius: 8,
             fontSize: 12,
             fontFamily: MONO,
-            boxShadow: "0 4px 18px rgba(3, 8, 18, 0.45)",
             pointerEvents: "none",
           }}
         >

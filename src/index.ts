@@ -9,7 +9,6 @@ import type { Context } from "@deepseek-ai/cordis";
 import { makePromptRoutes } from "./host/routes.js";
 import { registerLlm, logAiInjected } from "./host/ai.js";
 import { characterSystemSync, ensureCharacterFiles, shouldInjectChatCharacter } from "./host/character.js";
-import { migrateLegacyIfNeeded } from "./host/store.js";
 
 export const name = "prompt-library";
 
@@ -26,9 +25,9 @@ export const inject: string[] = [];
 export function apply(ctx: Context): void {
   const routes = makePromptRoutes();
 
-  // 启动时一次性迁移：若旧提示词库 ~/.dsh/prompt-library.json 存在且新文件不存在，
-  // 迁移到 ~/.dsh/prompt-library/prompts.json。失败静默忽略，不影响其他功能。
-  migrateLegacyIfNeeded().catch(() => {});
+  // 数据库懒初始化：首次访问数据时自动创建 prompts.db 表，
+  // 并在 db 无数据时一次性迁移旧 prompts.json 到 SQLite（导入后删除旧文件）。
+  // 失败静默忽略，不影响其他功能，故此处无需显式初始化调用。
 
   // 确保 AI 人格/边界体系（OpenCLaW 式）五维文件存在（SOUL/AGENTS/USER/IDENTITY/MEMORY），
   // 缺失时写入默认模板，供 AI 润色/完善/洞察时遵守这些灵魂边界。

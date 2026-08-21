@@ -31,7 +31,6 @@ import {
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { PL_BUTTON_CSS, plBtn } from "./button-style.js";
 import { SidebarPromptLibrary } from "./SidebarPromptLibrary.js";
-import { useHoverDetail } from "./HoverDetail.js";
 import { AUTO_LEARN_TOAST_MS, useAutoLearn } from "./auto-learn.js";
 import { isRecent, markRecent } from "./recent-created.js";
 import { notifyDataChanged, useDataChanged } from "./data-sync.js";
@@ -290,7 +289,6 @@ function showOverlay(
     `background: ${TONE.panel}`,
     `border: 1px solid ${TONE.borderStrong}`,
     "border-radius: 8px",
-    "box-shadow: 0 8px 24px rgba(3, 8, 18, 0.38)",
     `font-family: ${MONO}`,
     "font-size: 12px",
     "padding: 4px",
@@ -507,9 +505,6 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   const [settings] = useSettings();
   const panelId = useId();
   const refreshController = useRef<AbortController | null>(null);
-  // 提示词行悬停详情（由设置控制，默认关闭）
-  const hover = useHoverDetail();
-  const hoverEnabled = settings.hoverDetailEnabled;
 
   const showToast = useCallback(() => {
     setToast({ visible: true });
@@ -675,7 +670,6 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
 
   // 按钮点击：始终弹出面板，与侧边栏独立显示
   const handleButtonClick = () => {
-    hover.hide();
     setOpen((v) => !v);
   };
 
@@ -741,7 +735,6 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
     background: TONE.panel,
     border: `1px solid ${TONE.borderStrong}`,
     borderRadius: 12,
-    boxShadow: "0 1px 4px rgba(3, 8, 18, 0.1)",
     fontFamily: MONO,
   };
 
@@ -830,7 +823,6 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
             background: TONE.panel,
             border: `1px solid ${TONE.borderStrong}`,
             borderRadius: 10,
-            boxShadow: "0 8px 24px rgba(3, 8, 18, 0.4)",
             fontFamily: MONO,
           }}
         >
@@ -1052,10 +1044,6 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                         )}
                       </div>
                       <pre
-                        onMouseEnter={hoverEnabled ? (e) => { e.currentTarget.style.background = "rgba(142, 197, 255, 0.08)"; hover.show(p, e.clientX, e.clientY); } : undefined}
-                        onMouseMove={hoverEnabled ? (e) => hover.show(p, e.clientX, e.clientY) : undefined}
-                        onMouseLeave={hoverEnabled ? (e) => { e.currentTarget.style.background = "transparent"; hover.leave(); } : undefined}
-                        onClick={hoverEnabled ? hover.hide : undefined}
                         style={{
                           margin: 0,
                           color: TONE.muted,
@@ -1066,8 +1054,6 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                           maxHeight: 54,
                           overflow: "hidden",
                           borderRadius: 6,
-                          cursor: hoverEnabled ? "pointer" : "default",
-                          transition: "background 0.15s ease",
                         }}
                       >
                         {p.body}
@@ -1088,7 +1074,6 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
       )}
       </>
       )}
-      {hoverEnabled && hover.overlay}
       <SidebarPromptLibrary inputActions={inputActions} draft={draft} t={t} />
     </span>
   );

@@ -6,11 +6,12 @@ DSH（DeepSeek Harness）提示词库插件：在聊天栏提供**提示词管�
 
 ### 提示词库
 
-- 管理常用提示词（标题 + 正文 + 标签），支持搜索、排序、标签分组
+- 管理常用提示词（标题 + 正文 + 标签），支持搜索、排序、标签分组、使用次数统计
+- 右侧面板与宿主左侧栏同款样式，自动挤占并收缩聊天区，展开/折叠自由切换
 - **插入**：追加到输入框已有内容之后
 - **覆盖**：用该提示词直接替换整段草稿
-- 输入 `#` 快速触发选择
-- 聊天栏弹窗 / 右侧侧边栏双入口，数据实时同步
+- 输入 `#` 快速触发选择，实时筛选
+- 底部实时显示标签总数与提示词总数
 
 ### AI 润色
 
@@ -43,14 +44,15 @@ DSH（DeepSeek Harness）提示词库插件：在聊天栏提供**提示词管�
 
 ## 数据存储
 
-统一存放在 `~/.dsh/prompt-library/`：
+提示词库采用 **SQLite**（`node:sqlite`），其余配置与日志统一存放在 `~/.dsh/prompt-library/`：
 
 ```
 ~/.dsh/prompt-library/
-├── prompts.json      # 提示词库
-├── settings.json     # 插件设置
-├── ai.log            # AI 调用诊断日志
-└── character/        # 五维灵魂边界
+├── db/prompts.db      # 提示词库（SQLite）
+├── settings.json      # 插件设置（写入系统配置）
+├── log/
+│   └── ai-YYYY-MM-DD.log   # AI 调用诊断日志（按日期分文件）
+└── character/         # 五维灵魂边界
     ├── SOUL.md
     ├── AGENTS.md
     ├── USER.md
@@ -58,7 +60,7 @@ DSH（DeepSeek Harness）提示词库插件：在聊天栏提供**提示词管�
     └── MEMORY.md
 ```
 
-> 旧路径数据（`~/.dsh/prompt-library.json` 等）会在首次启动时自动迁移到新目录。
+> 旧版 JSON 词库（`~/.dsh/prompt-library/prompts.json`）会在首次启动时自动一次性迁入 SQLite，迁移完成后旧文件即被删除。
 
 ## 安装
 

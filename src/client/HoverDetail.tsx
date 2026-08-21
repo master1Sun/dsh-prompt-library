@@ -119,7 +119,6 @@ export function useHoverDetail(): {
           background: TONE.panel,
           border: `1px solid ${TONE.borderStrong}`,
           borderRadius: 9,
-          boxShadow: "0 8px 24px rgba(3, 8, 18, 0.4)",
           fontFamily: MONO,
           fontSize: 11.5,
           lineHeight: 1.6,

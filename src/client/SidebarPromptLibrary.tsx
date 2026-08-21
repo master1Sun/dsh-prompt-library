@@ -437,42 +437,83 @@ export function SidebarPromptLibrary(props?: {
     <>
       <style>{`@keyframes pl-refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .pl-collapse-expand-btn:hover{background:var(--dsw-alias-interactive-bg-hover)}
-.pl-collapse-expand-btn:active{background:var(--dsw-alias-interactive-bg-active)}`}</style>
+.pl-collapse-expand-btn:active{background:var(--dsw-alias-interactive-bg-active)}
+.pl-collapse-expand-btn svg{transition:transform .2s cubic-bezier(.2,.8,.2,1),opacity .15s ease}
+.pl-collapse-expand-btn:hover svg{transform:translateX(1px)}
+.pl-collapse-expand-btn:active svg{transform:translateX(2px) scale(.9)}
+.pl-collapse-expand-btn.pl-arrow-left svg{transform:scaleX(-1)}
+.pl-collapse-expand-btn.pl-arrow-left:hover svg{transform:scaleX(-1) translateX(-1px)}
+.pl-collapse-expand-btn.pl-arrow-left:active svg{transform:scaleX(-1) translateX(-2px) scale(.9)}`}</style>
       <style>{PL_BUTTON_CSS}</style>
-      {/* 折叠状态：右侧展开按钮 — 仅箭头图标，紧凑圆形 */}
-      {collapsed ? (
-        <button
-          type="button"
-          onClick={() => setCollapsed(false)}
-          title={T("pl.sidebar.expand")}
-          aria-label={T("pl.sidebar.expand")}
-          className="pl-collapse-expand-btn"
-          style={{
-            position: "fixed",
-            right: 6,
-            top: "50%",
-            transform: "translateY(-50%)",
-            zIndex: 2147483646,
-            width: 28,
-            height: 28,
-            padding: 0,
-            border: 0,
-            borderRadius: "50%",
-            background: "transparent",
-            color: TONE.muted,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            transition: "background 0.15s",
-          }}
-        >
+      {/* 展开按钮：独立常渲染，面板收起时淡入，展开后淡出不可交互 */}
+      <button
+        type="button"
+        onClick={() => setCollapsed(false)}
+        title={T("pl.sidebar.expand")}
+        aria-label={T("pl.sidebar.expand")}
+        className="pl-collapse-expand-btn"
+        tabIndex={collapsed ? 0 : -1}
+        style={{
+          position: "fixed",
+          right: 6,
+          top: "50%",
+          transform: collapsed ? "translateY(-50%)" : "translateY(-50%) scale(.6)",
+          zIndex: 2147483647,
+          width: 28,
+          height: 28,
+          padding: 0,
+          border: 0,
+          borderRadius: "50%",
+          background: "transparent",
+          color: TONE.muted,
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          opacity: collapsed ? 1 : 0,
+          pointerEvents: collapsed ? "auto" : "none",
+          transition: "opacity .18s ease, transform .22s cubic-bezier(.22,1,.36,1)",
+        }}
+      >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
-        </button>
-      ) : (
-        <section
+      </button>
+      {/* 折叠按钮：独立常渲染（面板外部），面板展开时淡入、折叠后淡出，位置贴面板左缘 */}
+      <button
+        type="button"
+        onClick={() => setCollapsed(true)}
+        title={T("pl.sidebar.collapse")}
+        aria-label={T("pl.sidebar.collapse")}
+        className="pl-collapse-expand-btn pl-arrow-left"
+        tabIndex={collapsed ? -1 : 0}
+        style={{
+          position: "fixed",
+          right: Math.min(panelWidth, window.innerWidth) + 4,
+          top: "50%",
+          transform: collapsed ? "translateY(-50%) scale(.6)" : "translateY(-50%)",
+          zIndex: 2147483647,
+          width: 28,
+          height: 28,
+          padding: 0,
+          border: 0,
+          borderRadius: "50%",
+          background: "transparent",
+          color: TONE.muted,
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          opacity: collapsed ? 0 : 1,
+          pointerEvents: collapsed ? "none" : "auto",
+          transition: "opacity .18s ease, transform .22s cubic-bezier(.22,1,.36,1)",
+        }}
+      >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+      </button>
+      <section
           role="dialog"
           aria-label={T("pl.title")}
           style={{
@@ -486,6 +527,10 @@ export function SidebarPromptLibrary(props?: {
             maxHeight: "100vh",
             display: "flex",
             flexDirection: "column",
+            // 横向滑动动画：折叠时整体移出屏幕右侧，展开时滑入
+            transform: collapsed ? "translateX(100%)" : "translateX(0)",
+            transition: "transform .3s cubic-bezier(.22,1,.36,1)",
+            pointerEvents: collapsed ? "none" : "auto",
             color: TONE.text,
             background: TONE.panel,
             borderLeft: "1px solid var(--dsw-alias-border-l1, rgba(17, 24, 39, 0.12))",
@@ -494,38 +539,7 @@ export function SidebarPromptLibrary(props?: {
             fontFamily: MONO,
           }}
         >
-          {/* 折叠按钮 — 与宿主左侧栏 iconButton 一致：圆形、透明底、hover 浅灰 */}
-          <button
-            type="button"
-            onClick={() => setCollapsed(true)}
-            title={T("pl.sidebar.collapse")}
-            aria-label={T("pl.sidebar.collapse")}
-            className="pl-collapse-expand-btn"
-            style={{
-              position: "fixed",
-              right: Math.min(panelWidth, window.innerWidth) + 4,
-              top: "50%",
-              transform: "translateY(-50%)",
-              zIndex: 2147483647,
-              width: 28,
-              height: 28,
-              padding: 0,
-              border: 0,
-              borderRadius: "50%",
-              background: "transparent",
-              color: TONE.muted,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              transition: "background 0.15s",
-            }}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </button>
-
+          {/* 折叠按钮已外置为独立 fixed 节点（面板外），随面板展开淡入 */}
           {/* 头部 — 与宿主左侧栏头部一致：左右内边距 12px，下方细分隔线 */}
           <header
             style={{
@@ -853,9 +867,9 @@ export function SidebarPromptLibrary(props?: {
             <span>{T("pl.sidebar.tagTotal", { count: tagGrouped.length })}</span>
             <span>{T("pl.sidebar.total", { count: prompts.length })}</span>
           </footer>
-          {hoverEnabled && hover.overlay}
         </section>
-      )}
+        {/* 悬停详情卡片必须在面板 section 之外：面板带 transform 动画，会破坏内部 fixed 元素的定位 */}
+        {hoverEnabled && hover.overlay}
       {/* 成功提示浮层 */}
       {toast && (
         <div

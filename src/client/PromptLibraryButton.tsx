@@ -31,6 +31,7 @@ import {
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { PL_BUTTON_CSS, plBtn } from "./button-style.js";
 import { SidebarPromptLibrary } from "./SidebarPromptLibrary.js";
+import { SelectionAddPrompt } from "./SelectionAddPrompt.js";
 import { AUTO_LEARN_TOAST_MS, useAutoLearn } from "./auto-learn.js";
 import { isRecent, markRecent } from "./recent-created.js";
 import { notifyDataChanged, useDataChanged } from "./data-sync.js";
@@ -285,7 +286,8 @@ function showOverlay(
     "min-width: 280px",
     "max-width: 400px",
     "max-height: 300px",
-    "overflow-y: auto",
+    "display: flex",
+    "flex-direction: column",
     `background: ${TONE.panel}`,
     `border: 1px solid ${TONE.borderStrong}`,
     "border-radius: 8px",
@@ -293,10 +295,14 @@ function showOverlay(
     "font-size: 12px",
     "padding: 4px",
   ].join(";");
+  // 候选列表的独立滚动容器：底部快捷键不随列表滚动
+  const listBox = document.createElement("div");
+  listBox.style.cssText = ["overflow-y: auto", "flex: 1 1 auto", "min-height: 0"].join(";");
+  overlay.appendChild(listBox);
 
   /** 清除所有行的高亮背景。 */
   const clearHighlight = () => {
-    for (const child of overlay.children) {
+    for (const child of listBox.children) {
       (child as HTMLElement).style.background = "transparent";
     }
   };
@@ -305,7 +311,7 @@ function showOverlay(
   const highlightItem = (index: number) => {
     clearHighlight();
     highlightIndex = index;
-    const item = overlay.children[index] as HTMLElement | undefined;
+    const item = listBox.children[index] as HTMLElement | undefined;
     if (item) {
       item.style.background = TONE.accentSoft;
       item.scrollIntoView({ block: "nearest" });
@@ -321,7 +327,7 @@ function showOverlay(
       "font-size: 12px",
       `color: ${TONE.quiet}`,
     ].join(";");
-    overlay.appendChild(empty);
+    listBox.appendChild(empty);
   }
 
   filtered.forEach((p, i) => {
@@ -376,7 +382,7 @@ function showOverlay(
       if (highlightIndex === i) item.style.background = "transparent";
     };
 
-    overlay.appendChild(item);
+    listBox.appendChild(item);
   });
 
   // 底部快捷键提示（筛选模式下展示当前筛选词）
@@ -391,6 +397,7 @@ function showOverlay(
     "border-top: 1px solid " + TONE.border,
     "margin-top: 2px",
     "user-select: none",
+    "flex-shrink: 0",
   ].join(";");
   overlay.appendChild(hint);
 
@@ -722,7 +729,9 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
 
   const panelStyle: CSSProperties = {
     position: "absolute",
-    right: 0,
+    // 相对触发按钮水平居中
+    left: "50%",
+    transform: "translateX(-50%)",
     bottom: "calc(100% + 4px)",
     zIndex: 1000,
     width: Math.max(300, Math.min(700, settings.panelWidth)),
@@ -1075,6 +1084,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
       </>
       )}
       <SidebarPromptLibrary inputActions={inputActions} draft={draft} t={t} />
+      <SelectionAddPrompt t={t} enabled={settings.selectionAddEnabled} />
     </span>
   );
 }

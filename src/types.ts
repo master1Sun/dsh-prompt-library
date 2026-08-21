@@ -20,6 +20,8 @@ export interface Prompt {
   aiRefined?: boolean;
   /** 最后一次修改的纪元毫秒时间戳。 */
   updatedAt: number;
+  /** 创建时间的纪元毫秒时间戳。 */
+  createdAt: number;
   /** 使用次数（用于排序和淘汰）。 */
   usageCount: number;
   /** 最后一次使用的纪元毫秒时间戳。 */
@@ -95,6 +97,8 @@ export interface PluginSettings {
   maxPromptCount: number;
   /** 是否启用鼠标移入显示详情。 */
   hoverDetailEnabled: boolean;
+  /** 是否启用聊天内容选中文字后浮动「添加提示词」入口。 */
+  selectionAddEnabled: boolean;
   /** 是否启用 AI 智能完善（调用 harness LLM 生成标题/标签/摘要并改写正文）。 */
   aiEnrichEnabled: boolean;
   /** AI 调用使用的 provider 路由（留空则自动发现）。 */
@@ -119,6 +123,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   tildaTriggerEnabled: true,
   maxPromptCount: 100,
   hoverDetailEnabled: false,
+  selectionAddEnabled: false,
   aiEnrichEnabled: false,
   aiProvider: "",
   aiModel: "",

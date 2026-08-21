@@ -483,6 +483,16 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
 
         <div style={{ height: 1, background: TONE.border, margin: "8px 0" }} />
 
+        {/* 选中文字添加提示词开关 */}
+        <ToggleRow
+          label={T("pl.set.selectionAdd")}
+          desc={T("pl.set.selectionAddDesc")}
+          checked={draft.selectionAddEnabled}
+          onChange={(v) => updateAndSave({ selectionAddEnabled: v })}
+        />
+
+        <div style={{ height: 1, background: TONE.border, margin: "8px 0" }} />
+
         {/* 实验室功能 */}
         <div style={{ padding: "4px 0", display: "flex", flexDirection: "column", gap: 2 }}>
           <span
@@ -513,22 +523,49 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
-          gap: 4,
-          padding: "16px 0 8px",
+          gap: 8,
+          padding: "18px 0 12px",
           borderTop: `1px solid ${TONE.border}`,
-          fontSize: 11,
-          color: TONE.quiet,
           marginTop: 16,
         }}
       >
-        <span>master1Sun</span>
+        <span
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 13,
+            fontWeight: 600,
+            letterSpacing: 0.3,
+            color: TONE.text,
+          }}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 2l2.4 7.2H22l-6 4.6 2.3 7.2-6.3-4.4L5.7 21 8 13.8 2 9.2h7.6L12 2z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+          </svg>
+          master1Sun
+        </span>
         <a
           href="https://github.com/master1Sun/dsh-prompt-library"
           target="_blank"
           rel="noopener noreferrer"
-          style={{ color: TONE.accent, textDecoration: "none" }}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 5,
+            color: TONE.accent,
+            textDecoration: "none",
+            fontSize: 11,
+            opacity: 0.9,
+            transition: "opacity 0.15s ease",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
+          onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.9")}
         >
-          GitHub:https://github.com/master1Sun/dsh-prompt-library
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 0C5.37 0 0 5.4 0 12.06c0 5.33 3.44 9.84 8.21 11.43.6.11.82-.26.82-.58 0-.29-.01-1.04-.02-2.04-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.2.09 1.84 1.24 1.84 1.24 1.07 1.84 2.81 1.31 3.5 1 .1-.78.42-1.31.76-1.61-2.66-.3-5.47-1.34-5.47-5.95 0-1.31.47-2.39 1.24-3.23-.13-.3-.54-1.53.11-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.66 1.65.25 2.88.12 3.18.77.84 1.23 1.92 1.23 3.23 0 4.62-2.81 5.64-5.49 5.94.43.38.81 1.12.81 2.26 0 1.63-.02 2.94-.02 3.34 0 .32.22.7.83.58A12.4 12.4 0 0 0 24 12.06C24 5.4 18.63 0 12 0z" />
+          </svg>
+          <span>github.com/master1Sun/dsh-prompt-library</span>
         </a>
       </footer>
     </div>

@@ -59,6 +59,13 @@ function getDb(): DatabaseSync {
       lastUsedAt   INTEGER NOT NULL DEFAULT 0
     );
   `);
+  // 兼容早期的库：若缺少 createdAt 列则补建，并回填为 updatedAt（近似创建时间）。
+  try {
+    next.exec("ALTER TABLE prompts ADD COLUMN createdAt INTEGER NOT NULL DEFAULT 0");
+    next.exec("UPDATE prompts SET createdAt = updatedAt WHERE createdAt = 0");
+  } catch {
+    /* 列已存在，忽略 */
+  }
   db = next;
   // 一次性迁移历史 JSON 数据（失败静默，不影响使用）。
   migrateLegacyJsonIfNeeded().catch(() => {});
@@ -88,6 +95,7 @@ interface PromptRow {
   sourceBody: string | null;
   aiRefined: number;
   updatedAt: number;
+  createdAt: number;
   usageCount: number;
   lastUsedAt: number;
 }
@@ -102,6 +110,7 @@ function rowToPrompt(r: PromptRow): Prompt {
     sourceBody: r.sourceBody ?? undefined,
     aiRefined: r.aiRefined === 1,
     updatedAt: r.updatedAt,
+    createdAt: r.createdAt,
     usageCount: r.usageCount,
     lastUsedAt: r.lastUsedAt,
   };
@@ -137,8 +146,8 @@ async function migrateLegacyJsonIfNeeded(): Promise<void> {
   const cur = getDb();
   const stmt = cur.prepare(`
     INSERT OR IGNORE INTO prompts
-      (id, title, body, tags, summary, sourceBody, aiRefined, updatedAt, usageCount, lastUsedAt)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, title, body, tags, summary, sourceBody, aiRefined, updatedAt, usageCount, lastUsedAt, createdAt)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   // 事务批量导入，提高迁移性能并保证原子性
   cur.exec("BEGIN");
@@ -157,6 +166,11 @@ async function migrateLegacyJsonIfNeeded(): Promise<void> {
         typeof p.updatedAt === "number" ? p.updatedAt : 0,
         typeof p.usageCount === "number" ? p.usageCount : 0,
         typeof p.lastUsedAt === "number" ? p.lastUsedAt : 0,
+        typeof p.createdAt === "number"
+          ? p.createdAt
+          : typeof p.updatedAt === "number"
+            ? p.updatedAt
+            : 0,
       );
     }
     cur.exec("COMMIT");
@@ -174,25 +188,33 @@ async function migrateLegacyJsonIfNeeded(): Promise<void> {
 
 /**
  * 排序规则：
- * 1. 使用次数最高的前 3 个提示词固定置顶（常用优先）；
- * 2. 其余提示词按更新时间降序（新增的在最前面），更新时间相同的按使用次数降序。
+ * 1. 时效期内（创建未超过 FRESH_MS）的新提示词置顶，按创建时间降序（最新在前）；
+ * 2. 其余提示词：先用次数最高的前 3 个置顶，再按更新时间降序（新增在前），更新时间相同按使用次数降序。
  */
+const FRESH_MS = 7 * 24 * 60 * 60 * 1000;
+
 function sortPrompts(prompts: Prompt[]): Prompt[] {
-  // 使用次数最高的前 3 个（使用次数相同时，更新时间新的在前）
-  const byUsage = [...prompts].sort((a, b) => {
+  const now = Date.now();
+  // 时效期内的新提示词置顶（按创建时间降序）
+  const fresh = prompts
+    .filter((p) => now - p.createdAt < FRESH_MS)
+    .sort((a, b) => b.createdAt - a.createdAt);
+  const freshIds = new Set(fresh.map((p) => p.id));
+  // 其余提示词按原规则：次数最高的前 3 个置顶，其余按更新时间降序
+  const rest = prompts.filter((p) => !freshIds.has(p.id));
+  const byUsage = [...rest].sort((a, b) => {
     if (b.usageCount !== a.usageCount) return b.usageCount - a.usageCount;
     return b.updatedAt - a.updatedAt;
   });
   const topUsed = byUsage.slice(0, 3);
   const topUsedIds = new Set(topUsed.map((p) => p.id));
-  // 其余按更新时间降序
-  const rest = prompts
+  const others = rest
     .filter((p) => !topUsedIds.has(p.id))
     .sort((a, b) => {
       if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt;
       return b.usageCount - a.usageCount;
     });
-  return [...topUsed, ...rest];
+  return [...fresh, ...topUsed, ...others];
 }
 
 /** 取全部提示词（未排序）。 */
@@ -251,6 +273,7 @@ export function createPrompt(input: {
       body: input.body,
       tags: Array.isArray(input.tags) ? input.tags : [],
       updatedAt: now,
+      createdAt: now,
       usageCount: 0,
       lastUsedAt: 0,
     };
@@ -258,10 +281,10 @@ export function createPrompt(input: {
     cur
       .prepare(
         `INSERT INTO prompts
-           (id, title, body, tags, aiRefined, updatedAt, usageCount, lastUsedAt)
-         VALUES (?, ?, ?, ?, 0, ?, ?, ?)`,
+           (id, title, body, tags, aiRefined, updatedAt, usageCount, lastUsedAt, createdAt)
+         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)`,
       )
-      .run(prompt.id, prompt.title, prompt.body, tagsToJson(prompt.tags), now, 0, 0);
+      .run(prompt.id, prompt.title, prompt.body, tagsToJson(prompt.tags), now, 0, 0, now);
     const settings = getSettingsSync();
     void enforceMaxCount(settings.maxPromptCount);
     return Promise.resolve(prompt);
@@ -397,6 +420,7 @@ export function autoLearn(body: string, tag?: string, skipEnrich?: boolean): Pro
       body: body.trim(),
       tags: tag ? [tag] : ["auto-learned"],
       updatedAt: now,
+      createdAt: now,
       usageCount: 0,
       lastUsedAt: 0,
       // 已在界面完成 AI 润色的正文视为已完善，跳过后台 AI 完善
@@ -405,10 +429,10 @@ export function autoLearn(body: string, tag?: string, skipEnrich?: boolean): Pro
     getDb()
       .prepare(
         `INSERT INTO prompts
-           (id, title, body, tags, aiRefined, updatedAt, usageCount, lastUsedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, title, body, tags, aiRefined, updatedAt, usageCount, lastUsedAt, createdAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(prompt.id, prompt.title, prompt.body, tagsToJson(prompt.tags), prompt.aiRefined ? 1 : 0, now, 0, 0);
+      .run(prompt.id, prompt.title, prompt.body, tagsToJson(prompt.tags), prompt.aiRefined ? 1 : 0, now, 0, 0, now);
     const settings = getSettingsSync();
     void enforceMaxCount(settings.maxPromptCount);
     void continueEnrich(prompt, !!skipEnrich);

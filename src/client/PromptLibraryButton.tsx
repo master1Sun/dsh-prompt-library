@@ -32,10 +32,13 @@ import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { PL_BUTTON_CSS, plBtn } from "./button-style.js";
 import { SidebarPromptLibrary } from "./SidebarPromptLibrary.js";
 import { SelectionAddPrompt } from "./SelectionAddPrompt.js";
+import { Pagination } from "./Pagination.js";
+import { TagInput } from "./TagInput.js";
 import { AUTO_LEARN_TOAST_MS, useAutoLearn } from "./auto-learn.js";
 import { isRecent, markRecent } from "./recent-created.js";
 import { notifyDataChanged, useDataChanged } from "./data-sync.js";
 import { type PLT, type PLTranslate, usePLT } from "./i18n.js";
+import { SearchBox } from "./SearchBox.js";
 
 
 /**
@@ -103,6 +106,91 @@ function getCaretPosition(el: HTMLElement): number {
     return pre.toString().length;
   }
   return 0;
+}
+
+/**
+ * 获取光标（或选中区）在视口内的矩形，用于浮层定位。
+ * contenteditable 用 Selection 的 Range；textarea/input 用镜像元素测量光标行。
+ * 相比直接用整个输入框的矩形，可避免内容过多时输入框超出视口导致的定位错位/跳顶。
+ */
+function getCaretRect(el: HTMLElement): DOMRect {
+  if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
+    return measureFieldCaretRect(el);
+  }
+  if (el.isContentEditable) {
+    const sel = window.getSelection();
+    const range = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+    if (range) {
+      // 优先取多行/选区的第一个光标矩形；为空时退回选区整体矩形
+      const r = range.cloneRange();
+      const rects = r.getClientRects();
+      if (rects.length > 0) return rects.item(0)!;
+      const br = r.getBoundingClientRect();
+      if (br.width > 0 || br.height > 0) return br;
+    }
+  }
+  return el.getBoundingClientRect();
+}
+
+/**
+ * 用镜像元素测量 textarea/input 光标所在行的视口坐标。
+ * 文本过多时元素自身矩形可能超出视口，直接用它会错位/跳顶。
+ */
+function measureFieldCaretRect(el: HTMLTextAreaElement | HTMLInputElement): DOMRect {
+  const value = getEditableText(el) ?? "";
+  const pos = Math.min(el.selectionStart ?? value.length, value.length);
+  const style = window.getComputedStyle(el);
+  const elRect = el.getBoundingClientRect();
+
+  // 复制关键文本/盒模型样式，确保镜像排布与输入框一致
+  const mirror = document.createElement("div");
+  mirror.style.cssText = [
+    "position: fixed",
+    "left: 0",
+    "top: 0",
+    "visibility: hidden",
+    "pointer-events: none",
+    "white-space: pre-wrap",
+    "word-break: break-word",
+    "overflow-wrap: break-word",
+    // 盒模型关键项
+    `box-sizing: ${style.boxSizing}`,
+    `width: ${elRect.width}px`,
+    `padding-top: ${style.paddingTop}`,
+    `padding-right: ${style.paddingRight}`,
+    `padding-bottom: ${style.paddingBottom}`,
+    `padding-left: ${style.paddingLeft}`,
+    `border-top-width: ${style.borderTopWidth}`,
+    `border-bottom-width: ${style.borderBottomWidth}`,
+    `border-right-width: ${style.borderRightWidth}`,
+    `border-left-width: ${style.borderLeftWidth}`,
+    // 文本样式
+    `font: ${style.font}`,
+    `letter-spacing: ${style.letterSpacing}`,
+    `line-height: ${style.lineHeight}`,
+    `text-align: ${style.textAlign}`,
+    `text-indent: ${style.textIndent}`,
+  ].join(";");
+  const before = document.createElement("span");
+  before.textContent = value.slice(0, pos);
+  const caret = document.createElement("span");
+  caret.textContent = " ";
+  mirror.appendChild(before);
+  mirror.appendChild(caret);
+  document.body.appendChild(mirror);
+  const caretRect = caret.getBoundingClientRect();
+  document.body.removeChild(mirror);
+
+  // 文本框内部滚动后，光标行在可见区域内的实际坐标：
+  // 水平 = 镜像测量值 + 元素左偏移 - 横向滚动；垂直同理减去纵向滚动。
+  const scrollTop = el.scrollTop ?? 0;
+  const scrollLeft = el.scrollLeft ?? 0;
+  return new DOMRect(
+    caretRect.left + elRect.left - scrollLeft,
+    caretRect.top + elRect.top - scrollTop,
+    caretRect.width,
+    caretRect.height,
+  );
 }
 
 function useTildaTrigger(
@@ -268,14 +356,18 @@ function showOverlay(
   if (prompts.length === 0) return;
 
   // 按「#」之后的筛选内容实时过滤（标题/正文/标签任意包含）
+  // 每一项保留其在完整列表中的真实下标 idx，供 Enter/点击按完整数组回查
   const q = query.trim().toLowerCase();
-  const filtered = q
+  const filtered = (q
     ? prompts.filter((p) =>
         `${p.title} ${p.body} ${(p.tags ?? []).join(" ")}`.toLowerCase().includes(q),
       )
-    : prompts;
+    : prompts
+  ).map((p, idx) => ({ p, idx }));
 
-  const rect = target.getBoundingClientRect();
+  // 用光标（或选中区）在视口内的位置来定位浮层。
+  // 输入框内容过多时其自身矩形可能远超视口（top 为负），用它定位会错位/跳顶。
+  const rect = getCaretRect(target);
   const overlay = document.createElement("div");
   overlay.dataset.promptLibraryOverlay = "";
   overlay.style.cssText = [
@@ -330,10 +422,12 @@ function showOverlay(
     listBox.appendChild(empty);
   }
 
-  filtered.forEach((p, i) => {
+  filtered.forEach(({ p, idx }, i) => {
     const item = document.createElement("div");
     item.dataset.promptLibraryItem = "";
-    item.dataset.index = String(i);
+    item.dataset.index = String(idx);
+    // 把 prompt 对象直接绑定到该行，避免用下标回查全局数组（筛选/排序后容易错位）
+    (item as unknown as { _prompt: Prompt })._prompt = p;
     item.style.cssText = [
       "padding: 6px 10px",
       "cursor: pointer",
@@ -404,18 +498,15 @@ function showOverlay(
   highlightIndex = 0;
   document.body.appendChild(overlay);
 
-  // 智能定位：下方空间不足时翻转到输入框上方，避免弹窗被推出屏幕底部
-  const spaceBelow = window.innerHeight - rect.bottom - 4;
+  // 智能定位：让浮层始终贴合输入框。下方空间足够就在输入框下方显示；
+  // 不足时翻转到输入框上方显示，上方也不够则收缩高度贴近输入框（靠内部滚动），不跳到远离输入框的视口顶部。
+  const spaceBelow = window.innerHeight - (rect.bottom + 4);
   const overlayHeight = overlay.offsetHeight;
   if (spaceBelow < overlayHeight) {
-    const aboveTop = rect.top - overlayHeight - 4;
-    if (aboveTop >= 4) {
-      overlay.style.top = `${aboveTop}px`;
-    } else {
-      // 上下空间都不足：贴顶部显示，并收缩最大高度保证可见
-      overlay.style.top = "4px";
-      overlay.style.maxHeight = `${Math.max(120, rect.top - 8)}px`;
-    }
+    const spaceAbove = rect.top - 4;
+    const usable = Math.min(overlayHeight, spaceAbove);
+    overlay.style.maxHeight = `${Math.max(80, usable)}px`;
+    overlay.style.top = `${Math.max(4, rect.top - Math.max(80, usable) - 4)}px`;
   }
 }
 
@@ -441,10 +532,10 @@ function highlightNext(dir: number): void {
 
 function getSelectedPrompt(): Prompt | null {
   const items = getOverlayItems();
-  if (items.length === 0 || highlightIndex >= items.length) return null;
-  const item = items[highlightIndex];
-  const index = Number(item.dataset.index);
-  return lastPromptsForSelect[index] ?? null;
+  if (items.length === 0) return null;
+  // 读高亮行上直接绑定的 prompt 对象（渲染时绑定），任何筛选/排序下都精确命中
+  const idx = Math.min(highlightIndex, items.length - 1);
+  return (items[idx] as unknown as { _prompt?: Prompt })._prompt ?? null;
 }
 
 function applyPrompt(prompt: Prompt, inputActions: { setDraft: (text: string) => void }, draft: string): void {
@@ -498,6 +589,8 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   const [phase, setPhase] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  // 实时搜索：输入变化立即可用于过滤
+  const clearSearch = useCallback(() => setQuery(""), []);
   const [editor, setEditor] = useState<{ mode: "none" | "create" | "edit"; id?: string; title: string; body: string; tags: string }>({
     mode: "none", title: "", body: "", tags: ""
   });
@@ -608,6 +701,24 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
     });
   }, [prompts, query]);
 
+  // ── 翻页 ───────────────────────────────────────────────────────────────────
+  const PAGE_SIZE = 10;
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  // 搜索词或数据变化时回到第 1 页
+  useEffect(() => {
+    setPage(1);
+  }, [query, prompts]);
+  // 当前页数据切片
+  const pageItems = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  // 已有标签候选（去重排序），供标签输入下拉提示
+  const allTags = useMemo(() => {
+    const s = new Set<string>();
+    for (const p of prompts) for (const t of p.tags ?? []) s.add(t);
+    return Array.from(s).sort();
+  }, [prompts]);
+
   const insert = useCallback(
     async (prompt: Prompt) => {
       // 记录使用次数
@@ -638,7 +749,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   const startEdit = (p: Prompt) => setEditor({
     mode: "edit", id: p.id,
     title: p.title, body: p.body,
-    tags: (p.tags ?? []).join(", "),
+    tags: (p.tags ?? []).join("#"),
   });
 
   const saveEditor = () => {
@@ -648,7 +759,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
       setError(T("pl.requireTitleBody"));
       return;
     }
-    const tags = editor.tags.split(",").map((t) => t.trim()).filter(Boolean);
+    const tags = editor.tags.split("#").map((t) => t.trim()).filter(Boolean);
     const done = () => {
       setEditor(NO_EDITOR);
       // 通知两侧面板同步刷新（本面板通过事件统一重新加载）
@@ -736,7 +847,8 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
     zIndex: 1000,
     width: Math.max(300, Math.min(700, settings.panelWidth)),
     maxWidth: "calc(100vw - 24px)",
-    maxHeight: `${settings.panelHeight}px`,
+    // 固定高度：不随内容自动变化，列表在内部滚动（此前用 maxHeight 会随条目增多撑高）
+    height: `${settings.panelHeight}px`,
     overflow: "hidden",
     display: "flex",
     flexDirection: "column",
@@ -945,29 +1057,20 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
               </div>
             </header>
 
+            {/* 搜索框：输入即时生效（实时过滤） */}
             {!editing && (
               <div style={{ padding: "10px 16px", flexShrink: 0 }}>
-                <input
+                <SearchBox
                   value={query}
-                  onChange={(e) => setQuery(e.target.value)}
+                  onChange={setQuery}
+                  onSearch={() => setQuery(query)}
+                  onClear={clearSearch}
                   placeholder={T("pl.search")}
-                  style={{
-                    width: "100%",
-                    boxSizing: "border-box",
-                    padding: "7px 9px",
-                    color: TONE.text,
-                    background: TONE.row,
-                    border: `1px solid ${TONE.border}`,
-                    borderRadius: 7,
-                    fontFamily: MONO,
-                    fontSize: 13,
-                    outline: "none",
-                  }}
                 />
               </div>
             )}
 
-            <div style={{ flex: 1, overflow: "auto" }}>
+            <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
               {phase === "loading" && (
                 <div style={{ padding: "20px 16px", color: TONE.muted, fontSize: 13, textAlign: "center" }}>
                   {T("pl.loading")}
@@ -998,11 +1101,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                   </label>
                   <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
                     {T("pl.tagsField")}
-                    <input
-                      value={editor.tags}
-                      onChange={(e) => setEditor({ ...editor, tags: e.target.value })}
-                      style={inputStyle}
-                    />
+                    <TagInput value={editor.tags} onChange={(v) => setEditor({ ...editor, tags: v })} suggestions={allTags} inputStyle={inputStyle} />
                   </label>
                   {error && <div style={{ color: TONE.red, fontSize: 12 }}>{error}</div>}
                   <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
@@ -1021,7 +1120,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                       {T("pl.empty")}
                     </li>
                   )}
-                  {filtered.map((p) => (
+                  {pageItems.map((p) => (
                     <li
                       key={p.id}
                       style={{
@@ -1078,6 +1177,10 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                 </ul>
               )}
             </div>
+            {/* 翻页：按页展示，置于滚动区外、固定于面板底部 */}
+            {!editing && phase === "ready" && (
+              <Pagination page={page} totalPages={totalPages} onChange={setPage} />
+            )}
           </section>
         </>
       )}

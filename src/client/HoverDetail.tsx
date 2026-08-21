@@ -9,6 +9,7 @@
  */
 import { useRef, useState, type ReactNode } from "react";
 import type { Prompt } from "../types.js";
+import { clampTitle } from "../types.js";
 
 const MONO =
   '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "SimHei", "黑体", sans-serif';
@@ -16,16 +17,21 @@ const MONO =
 const TONE = {
   text: "var(--dsw-alias-label-primary, #f2f6fc)",
   muted: "var(--dsw-alias-label-secondary, #9daabd)",
+  quiet: "var(--dsw-alias-label-tertiary, #718096)",
   panel: "var(--dsw-alias-bg-layer-1, #171f2b)",
+  row: "var(--dsw-alias-bg-layer-3, #1d2735)",
+  border: "var(--dsw-alias-border-l2, rgba(196, 211, 232, 0.16))",
   borderStrong: "var(--dsw-alias-border-l3, rgba(196, 211, 232, 0.31))",
+  accent: "var(--dsw-alias-brand-primary, #8ec5ff)",
+  accentSoft: "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 20%, transparent)",
 } as const;
 
-/** 详情卡片宽度与最大高度（用于定位钳制与滚动）。 */
-const CARD_W = 280;
-const CARD_H = 220;
+/** 详情卡片宽度与正文最大高度（用于定位钳制与滚动）。 */
+const CARD_W = 300;
+const BODY_H = 200;
 const MARGIN = 10;
 /** 鼠标移出正文/卡片后，延迟隐藏的时间（毫秒），用于留出移入卡片滚动的时间。 */
-const HIDE_DELAY_MS = 160;
+const HIDE_DELAY_MS = 320;
 
 interface DetailState {
   prompt: Prompt;
@@ -79,12 +85,14 @@ export function useHoverDetail(): {
     }
     lastPos.current = { x: clientX, y: clientY };
 
+    // 卡片总高估算（标题/标签头部 + 正文上限）
+    const cardTotal = BODY_H + 78;
     // 默认显示在鼠标右下；空间不足时翻转到鼠标左侧，并钳制在视口内
     let x = clientX + 14;
     let y = clientY + 14;
     if (x + CARD_W > window.innerWidth - MARGIN) x = clientX - CARD_W - 14;
-    if (y + CARD_H > window.innerHeight - MARGIN)
-      y = Math.max(MARGIN, window.innerHeight - CARD_H - MARGIN);
+    if (y + cardTotal > window.innerHeight - MARGIN)
+      y = Math.max(MARGIN, window.innerHeight - cardTotal - MARGIN);
     x = Math.max(MARGIN, x);
     setDetail({ prompt, x, y });
   };
@@ -99,7 +107,7 @@ export function useHoverDetail(): {
 
   const overlay = detail ? (
     <>
-      <style>{`@keyframes pl-hover-pop{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}.pl-hover-card::-webkit-scrollbar{width:6px}.pl-hover-card::-webkit-scrollbar-thumb{background:rgba(196,211,232,0.25);border-radius:3px}.pl-hover-card::-webkit-scrollbar-thumb:hover{background:rgba(196,211,232,0.4)}`}</style>
+      <style>{`@keyframes pl-hover-pop{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}.pl-hover-card::-webkit-scrollbar{width:6px}.pl-hover-card::-webkit-scrollbar-thumb{background:rgba(196,211,232,0.25);border-radius:3px}.pl-hover-card::-webkit-scrollbar-thumb:hover{background:rgba(196,211,232,0.4)}`}</style>
       <div
         role="tooltip"
         className="pl-hover-card"
@@ -111,24 +119,90 @@ export function useHoverDetail(): {
           top: detail.y,
           zIndex: 2147483646,
           width: CARD_W,
-          maxHeight: CARD_H,
           boxSizing: "border-box",
-          overflowY: "auto",
           padding: "10px 12px",
-          color: TONE.muted,
+          color: TONE.text,
           background: TONE.panel,
           border: `1px solid ${TONE.borderStrong}`,
-          borderRadius: 9,
+          borderRadius: 10,
           fontFamily: MONO,
-          fontSize: 11.5,
+          fontSize: 12,
           lineHeight: 1.6,
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
           pointerEvents: "auto",
-          animation: "pl-hover-pop 0.12s ease-out",
+          animation: "pl-hover-pop 0.24s cubic-bezier(.22,1,.36,1)",
         }}
       >
-        {detail.prompt.body}
+        {/* 标题行 */}
+        {detail.prompt.title ? (
+          <div
+            style={{
+              fontWeight: 600,
+              fontSize: 13,
+              lineHeight: 1.4,
+              color: TONE.text,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              marginBottom: 6,
+            }}
+          >
+            {clampTitle(detail.prompt.title)}
+          </div>
+        ) : null}
+
+        {/* 标签行 */}
+        {detail.prompt.tags && detail.prompt.tags.length > 0 ? (
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 5,
+              marginBottom: 8,
+            }}
+          >
+            {detail.prompt.tags.slice(0, 4).map((tag) => (
+              <span
+                key={tag}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  padding: "1px 7px",
+                  borderRadius: 6,
+                  fontSize: 10.5,
+                  lineHeight: 1.7,
+                  background: TONE.accentSoft,
+                  color: TONE.accent,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {tag}
+              </span>
+            ))}
+            {detail.prompt.tags.length > 4 ? (
+              <span style={{ fontSize: 10.5, color: TONE.quiet, padding: "1px 0" }}>
+                +{detail.prompt.tags.length - 4}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* 分隔线 */}
+        {(detail.prompt.title || (detail.prompt.tags && detail.prompt.tags.length > 0)) ? (
+          <div style={{ height: 1, background: TONE.border, margin: "0 0 8px" }} />
+        ) : null}
+
+        {/* 正文（过长可滚动） */}
+        <div
+          style={{
+            maxHeight: BODY_H,
+            overflowY: "auto",
+            color: TONE.muted,
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+          }}
+        >
+          {detail.prompt.body}
+        </div>
       </div>
     </>
   ) : null;

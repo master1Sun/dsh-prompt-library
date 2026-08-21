@@ -39,6 +39,8 @@ import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { notifyDataChanged, useDataChanged } from "./data-sync.js";
 import { PL_BUTTON_CSS, plBtn } from "./button-style.js";
 import { type PLTranslate, usePLT } from "./i18n.js";
+import { SearchBox } from "./SearchBox.js";
+import { TagInput } from "./TagInput.js";
 
 const MONO =
   'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif)';
@@ -67,7 +69,11 @@ type Editor = { title: string; body: string; tags: string } & (
 const NO_EDITOR: Editor = { mode: "none", title: "", body: "", tags: "" };
 
 /** 分组折叠状态在 localStorage 中的存储键。 */
-const COLLAPSED_GROUPS_KEY = "pl:collapsed-groups";
+const EXPANDED_GROUPS_KEY = "pl:expanded-groups";
+
+/** 悬停详情卡片宽度（需与 HoverDetail.tsx 的 CARD_W 保持一致）与左侧间隙。 */
+const HOVER_W = 300;
+const HOVER_GAP = 12;
 
 function useSettings(): PluginSettings {
   const [settings, setSettings] = useState<PluginSettings>(DEFAULT_SETTINGS);
@@ -104,6 +110,8 @@ export function SidebarPromptLibrary(props?: {
   const [collapsed, setCollapsed] = useState(true);
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [query, setQuery] = useState("");
+  // 实时搜索：输入变化立即可用于过滤
+  const clearSearch = useCallback(() => setQuery(""), []);
   const [phase, setPhase] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const [editor, setEditor] = useState<Editor>(NO_EDITOR);
@@ -127,25 +135,26 @@ export function SidebarPromptLibrary(props?: {
     if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
     toastTimer.current = window.setTimeout(() => setToast(null), 2600);
   }, []);
-  // 每个分组的折叠状态（持久化到 localStorage，刷新后保持）
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
+  // 每个分组的展开状态（持久化到 localStorage，刷新后保持）。
+  // 默认全部折叠：集合中只记录「已展开」的分组，空集合即全部折叠。
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => {
     try {
-      const raw = localStorage.getItem(COLLAPSED_GROUPS_KEY);
+      const raw = localStorage.getItem(EXPANDED_GROUPS_KEY);
       if (raw) return new Set(JSON.parse(raw) as string[]);
     } catch {
-      // 读取失败时使用默认（全部展开）
+      // 读取失败时使用默认（全部折叠）
     }
     return new Set();
   });
 
   const toggleGroup = useCallback((tag: string) => {
-    setCollapsedGroups((prev) => {
+    setExpandedGroups((prev) => {
       const next = new Set(prev);
       if (next.has(tag)) next.delete(tag);
       else next.add(tag);
       // 同步保存到 localStorage
       try {
-        localStorage.setItem(COLLAPSED_GROUPS_KEY, JSON.stringify(Array.from(next)));
+        localStorage.setItem(EXPANDED_GROUPS_KEY, JSON.stringify(Array.from(next)));
       } catch {
         // 忽略存储失败
       }
@@ -158,6 +167,17 @@ export function SidebarPromptLibrary(props?: {
   // 提示词行悬停详情（由设置控制，默认关闭）
   const hover = useHoverDetail();
   const hoverEnabled = settings.hoverDetailEnabled;
+  // 面板根元素 ref：用于把悬停详情卡片固定在面板左侧
+  const panelRef = useRef<HTMLElement>(null);
+
+  // 固定显示在面板左侧的详情卡片：x 取面板左缘左侧，y 对齐所悬停行的顶部（位置确定可预期）
+  const showDetail = (p: Prompt, rowTop: number) => {
+    const panel = panelRef.current;
+    const leftEdge = panel
+      ? panel.getBoundingClientRect().left
+      : window.innerWidth - Math.min(settings.panelWidth, window.innerWidth);
+    hover.show(p, leftEdge - HOVER_W - HOVER_GAP, rowTop);
+  };
 
   const refresh = useCallback(() => {
     refreshController.current?.abort();
@@ -197,6 +217,69 @@ export function SidebarPromptLibrary(props?: {
       return hay.includes(q);
     });
   }, [prompts, query]);
+
+  // ── 搜索到内容自动展开分组；清空搜索恢复原状态 ───────────────
+  // 记录搜索前的展开状态，清空搜索时还原，不与"新增自动展开"互相干扰
+  const preSearchExpanded = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    const hasQuery = query.trim().length > 0;
+    if (hasQuery) {
+      // 首次搜索时记录当前（搜索前）展开状态，便于清空后还原
+      if (preSearchExpanded.current === null) {
+        preSearchExpanded.current = new Set(expandedGroups);
+      }
+      // 展开当前可见结果涉及的所有分组，让搜索结果展示出来
+      setExpandedGroups((prev) => {
+        const next = new Set(prev);
+        for (const p of filtered) {
+          if (p.tags && p.tags.length > 0) p.tags.forEach((t) => next.add(t));
+          else next.add(T("pl.sidebar.uncategorized"));
+        }
+        return next;
+      });
+    } else if (preSearchExpanded.current !== null) {
+      // 清空搜索：恢复搜索前的展开状态
+      setExpandedGroups(preSearchExpanded.current);
+      preSearchExpanded.current = null;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, filtered, T]);
+
+  // 已有标签候选（去重排序），供标签输入下拉提示
+  const allTags = useMemo(() => {
+    const s = new Set<string>();
+    for (const p of prompts) for (const t of p.tags ?? []) s.add(t);
+    return Array.from(s).sort();
+  }, [prompts]);
+
+  // ── 新增数据自动展开/定位 ──────────────────────────────────────────────────
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const seenIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    // 找出本次刷新相对上次新增、且处于「最近创建」的提示词
+    const fresh = prompts.filter((p) => !seenIdsRef.current.has(p.id) && isRecent(p.id));
+    // 更新已见集合：此后不再把它当新增处理
+    seenIdsRef.current = new Set(prompts.map((p) => p.id));
+    if (fresh.length === 0) return;
+    // 展开新增提示词所在的标签分组（无标签归"未分类"）
+    const tags = new Set<string>();
+    for (const p of fresh) {
+      if (p.tags && p.tags.length > 0) p.tags.forEach((t) => tags.add(t));
+      else tags.add(T("pl.sidebar.uncategorized"));
+    }
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      tags.forEach((t) => next.add(t));
+      return next;
+    });
+    // 展开后滚动到新增项，使其可见
+    const id = fresh[0].id;
+    window.setTimeout(() => {
+      scrollRef.current
+        ?.querySelector(`[data-pl-id="${CSS.escape(id)}"]`)
+        ?.scrollIntoView({ block: "nearest" });
+    }, 60);
+  }, [prompts, T]);
 
   // 把文本插入当前草稿；无草稿上下文时回退为复制到剪贴板
   const insertText = useCallback(
@@ -395,7 +478,7 @@ export function SidebarPromptLibrary(props?: {
       id: p.id,
       title: p.title,
       body: p.body,
-      tags: (p.tags ?? []).join(", "),
+      tags: (p.tags ?? []).join("#"),
     });
 
   const saveEditor = () => {
@@ -405,7 +488,7 @@ export function SidebarPromptLibrary(props?: {
       setError(T("pl.requireTitleBody"));
       return;
     }
-    const tags = editor.tags.split(",").map((t) => t.trim()).filter(Boolean);
+    const tags = editor.tags.split("#").map((t) => t.trim()).filter(Boolean);
     const done = () => {
       setEditor(NO_EDITOR);
       notifyDataChanged();
@@ -458,7 +541,7 @@ export function SidebarPromptLibrary(props?: {
           right: 6,
           top: "50%",
           transform: collapsed ? "translateY(-50%)" : "translateY(-50%) scale(.6)",
-          zIndex: 2147483647,
+          zIndex: 2147483645,
           width: 28,
           height: 28,
           padding: 0,
@@ -492,7 +575,7 @@ export function SidebarPromptLibrary(props?: {
           right: Math.min(panelWidth, window.innerWidth) + 4,
           top: "50%",
           transform: collapsed ? "translateY(-50%) scale(.6)" : "translateY(-50%)",
-          zIndex: 2147483647,
+          zIndex: 2147483645,
           width: 28,
           height: 28,
           padding: 0,
@@ -514,6 +597,7 @@ export function SidebarPromptLibrary(props?: {
           </svg>
       </button>
       <section
+          ref={panelRef}
           role="dialog"
           aria-label={T("pl.title")}
           style={{
@@ -601,32 +685,22 @@ export function SidebarPromptLibrary(props?: {
             </div>
           </header>
 
-          {/* 搜索框 */}
+          {/* 搜索框：输入即时生效（实时过滤） */}
           {!editing && (
             <div style={{ padding: "0px 12px", flexShrink: 0, margin: 12 }}>
-              <input
-                ref={searchRef}
+              <SearchBox
+                inputRef={searchRef}
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
+                onChange={setQuery}
+                onSearch={() => setQuery(query)}
+                onClear={clearSearch}
                 placeholder={T("pl.search")}
-                style={{
-                  width: "100%",
-                  boxSizing: "border-box",
-                  padding: "7px 9px",
-                  color: TONE.text,
-                  background: TONE.row,
-                  border: `1px solid ${TONE.border}`,
-                  borderRadius: 7,
-                  fontFamily: MONO,
-                  fontSize: 13,
-                  outline: "none",
-                }}
               />
             </div>
           )}
 
           {/* 内容区 */}
-          <div style={{ flex: 1, overflow: "auto", marginRight: 2 }}>
+          <div ref={scrollRef} style={{ flex: 1, overflow: "auto", marginRight: 2 }}>
             {phase === "loading" && (
               <div style={{ padding: "20px 12px", color: TONE.muted, fontSize: 13, textAlign: "center" }}>
                 {T("pl.loading")}
@@ -709,11 +783,7 @@ export function SidebarPromptLibrary(props?: {
                 </label>
                 <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
                   {T("pl.tagsField")}
-                  <input
-                    value={editor.tags}
-                    onChange={(e) => setEditor({ ...editor, tags: e.target.value })}
-                    style={inputStyle}
-                  />
+                  <TagInput value={editor.tags} onChange={(v) => setEditor({ ...editor, tags: v })} suggestions={allTags} inputStyle={inputStyle} />
                 </label>
                 {error && <div style={{ color: TONE.red, fontSize: 12 }}>{error}</div>}
                 <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
@@ -733,7 +803,7 @@ export function SidebarPromptLibrary(props?: {
                   </div>
                 )}
                 {tagGrouped.map(([tag, items]) => {
-                  const isCollapsed = collapsedGroups.has(tag);
+                  const isCollapsed = !expandedGroups.has(tag);
                   return (
                   <div key={tag}>
                     {/* 分组头 — 可点击折叠/展开 */}
@@ -763,6 +833,7 @@ export function SidebarPromptLibrary(props?: {
                     {!isCollapsed && items.map((p) => (
                       <div
                         key={p.id}
+                        data-pl-id={p.id}
                         onClick={hoverEnabled ? hover.hide : undefined}
                         style={{
                           padding: "12px 14px 13px",
@@ -801,8 +872,7 @@ export function SidebarPromptLibrary(props?: {
                           </div>
                         </div>
                         <pre
-                          onMouseEnter={hoverEnabled ? (e) => { e.currentTarget.style.background = "rgba(142, 197, 255, 0.08)"; hover.show(p, e.clientX, e.clientY); } : undefined}
-                          onMouseMove={hoverEnabled ? (e) => hover.show(p, e.clientX, e.clientY) : undefined}
+                          onMouseEnter={hoverEnabled ? (e) => { e.currentTarget.style.background = "rgba(142, 197, 255, 0.08)"; showDetail(p, e.currentTarget.getBoundingClientRect().top); } : undefined}
                           onMouseLeave={hoverEnabled ? (e) => { e.currentTarget.style.background = "transparent"; hover.leave(); } : undefined}
                           onClick={hoverEnabled ? hover.hide : undefined}
                           style={{

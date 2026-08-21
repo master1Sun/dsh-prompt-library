@@ -218,7 +218,7 @@ function systemPrompt(userDoc: string, memoryDoc: string): string {
     "",
     "要求：",
     "- title：简洁明了，不超过 30 字；",
-    "- tags：2~5 个，用于分类与筛选，可沿用 USER.md 中出现的高频主题；",
+    "- tags：1~3 个，用于分类与筛选，可沿用 USER.md 中出现的高频主题；",
     "- summary：一两句话说明这个提示词的用途与使用方法；",
     "- body：在保留原意的基础上润色，使表达更清晰、通用、可直接使用，不要丢失关键细节；",
     "- insight：用一句话描述这条提示词反映的用户写作风格或关注领域，用于持续完善用户档案。",
@@ -401,7 +401,8 @@ export async function enrichLearnedPrompt(prompt: Prompt, settings: PluginSettin
   const changed = result.body !== prompt.body;
   await updatePrompt(prompt.id, {
     title: result.title || prompt.title,
-    tags: result.tags.length ? result.tags : prompt.tags,
+    // AI 智能完善只创建一个标签，避免生成过多标签；手动多选标签走前端 TagInput，不受影响
+    tags: result.tags.length ? result.tags.slice(0, 1) : prompt.tags,
     summary: result.summary || undefined,
     body: changed ? result.body : prompt.body,
     sourceBody: changed ? prompt.body : undefined,

@@ -2,11 +2,12 @@
 // 不依赖右侧面板：开启开关后，在聊天区高亮选中文本会浮出「+ 添加提示词」按钮，
 // 点击弹出独立居中弹窗，选中文本预填到正文，保存即入库。
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
-import { createPrompt as apiCreate } from "./api.js";
+import { createPrompt as apiCreate, listPrompts as apiList } from "./api.js";
 import { markRecent } from "./recent-created.js";
 import { notifyDataChanged } from "./data-sync.js";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { plBtn } from "./button-style.js";
+import { TagInput } from "./TagInput.js";
 import { type PLTranslate, usePLT } from "./i18n.js";
 
 const MONO =
@@ -54,6 +55,20 @@ export function SelectionAddPrompt(props: Props): ReactNode {
   const [tags, setTags] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // 已有标签候选（下拉提示用）
+  const [allTags, setAllTags] = useState<string[]>([]);
+
+  // 加载已有标签；功能启用时拉取一次
+  useEffect(() => {
+    if (!enabled) return;
+    apiList()
+      .then((list) => {
+        const s = new Set<string>();
+        for (const p of list) for (const t of p.tags ?? []) s.add(t);
+        setAllTags(Array.from(s).sort());
+      })
+      .catch(() => {});
+  }, [enabled]);
 
   // 监听聊天区选区：仅在功能开启时生效
   useEffect(() => {
@@ -127,7 +142,7 @@ export function SelectionAddPrompt(props: Props): ReactNode {
       setError(T("pl.requireTitleBody"));
       return;
     }
-    const tTags = tags.split(",").map((x) => x.trim()).filter(Boolean);
+    const tTags = tags.split("#").map((x) => x.trim()).filter(Boolean);
     setSaving(true);
     apiCreate({ title: tTitle, body: tBody, tags: tTags }).then(
       (p) => {
@@ -227,7 +242,7 @@ export function SelectionAddPrompt(props: Props): ReactNode {
             </label>
             <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
               {T("pl.tagsField")}
-              <input value={tags} onChange={(e) => setTags(e.target.value)} style={inputStyle} />
+              <TagInput value={tags} onChange={setTags} suggestions={allTags} inputStyle={inputStyle} />
             </label>
             {error && <div style={{ color: TONE.red, fontSize: 12 }}>{error}</div>}
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingTop: 4 }}>

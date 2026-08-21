@@ -19,7 +19,7 @@
  * SOUL/AGENTS/USER/IDENTITY 是用户的显式设定，AI 只读引用、不擅自改写，
  * 避免算法覆盖用户手写的灵魂边界。
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { CharacterKind } from "./paths.js";
@@ -74,11 +74,6 @@ export function shouldInjectChatCharacter(contextScope: unknown): boolean {
   grantedScopes.add(contextScope);
   trimScopeSet(grantedScopes);
   return true;
-}
-
-/** 功能被关闭时重置已注入会话记录，避免下次开启后残留旧标记。 */
-export function resetChatCharacterGrants(): void {
-  grantedScopes.clear();
 }
 
 /** 去掉 UTF-8 BOM（Windows 工具可能写入），避免首行解析失败。 */
@@ -352,8 +347,42 @@ export async function noteInsight(insight: string): Promise<void> {
  * 与 readCharacterDocs 不同，这里是**同步**返回：宿主在组装对话提示时是同步
  * 回调 text 函数的，无法 await。文件缺失对应维度留空，所有维度都缺失时
  * 返回空字符串。
+ *
+ * 性能：对话组装每次都会走到这里（热路径）。为避免每次同步读 5 个文件，
+ * 用便宜的 stat（mtime/size）做失效判断——文件没变就复用上次拼接结果；
+ * 只有某文件 mtime 或 size 变化时才重新 readFileSync。
  */
+interface CharMeta {
+  mtimeMs: number;
+  size: number;
+}
+/** 面向热路径的组装结果缓存；mtime/size 变化时自动失效。 */
+let charSystemCache: { metas: Record<string, CharMeta | null>; assembled: string } | null = null;
+
+/** 查询某维度的 stat 元信息；文件缺失返回 null（用 null 相等表示「一直缺失」）。 */
+function kindMeta(kind: CharacterKind): CharMeta | null {
+  try {
+    const s = statSync(characterPath(kind));
+    return { mtimeMs: s.mtimeMs, size: s.size };
+  } catch {
+    return null;
+  }
+}
+
 export function characterSystemSync(): string {
+  const metas: Record<string, CharMeta | null> = {};
+  let unchanged = true;
+  for (const kind of CHARACTER_KINDS) {
+    const meta = kindMeta(kind);
+    metas[kind] = meta;
+    const cached = charSystemCache?.metas[kind];
+    // 双侧一致（都不存在，或 mtime/size 相同）视为未变化
+    if (cached && meta && cached.mtimeMs === meta.mtimeMs && cached.size === meta.size) continue;
+    if (!cached && !meta) continue;
+    unchanged = false;
+  }
+  if (unchanged && charSystemCache) return charSystemCache.assembled;
+
   const docs: Record<CharacterKind, string> = { SOUL: "", AGENTS: "", USER: "", IDENTITY: "", MEMORY: "" };
   for (const kind of CHARACTER_KINDS) {
     try {
@@ -362,5 +391,7 @@ export function characterSystemSync(): string {
       /* 文件缺失则留空 */
     }
   }
-  return buildCharacterSystem(docs);
+  const assembled = buildCharacterSystem(docs);
+  charSystemCache = { metas, assembled };
+  return assembled;
 }

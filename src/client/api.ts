@@ -69,6 +69,18 @@ export function learnPolished(body: string): Promise<{ learned: boolean }> {
   return send<{ learned: boolean }>("POST", "/api/prompt-library/ai/polish/learn", { body });
 }
 
+/** 设置界面用：单个提供方及其模型列表。 */
+export interface ClientAiSelectable {
+  provider: string;
+  name: string;
+  models: { id: string; name: string }[];
+}
+
+/** 读取系统中可用的 AI provider 及模型列表（设置界面下拉选择）。 */
+export function getAiSelectables(): Promise<ClientAiSelectable[]> {
+  return send<ClientAiSelectable[]>("GET", "/api/prompt-library/ai/providers");
+}
+
 const SETTINGS_BASE = "/api/prompt-library/settings";
 
 /** 获取插件设置。 */

@@ -17,7 +17,7 @@ import {
   type ReactNode,
 } from "react";
 import type { PluginSettings, Prompt } from "../types.js";
-import { DEFAULT_SETTINGS } from "../types.js";
+import { clampTitle, DEFAULT_SETTINGS } from "../types.js";
 import {
   createPrompt as apiCreate,
   deletePrompt as apiDelete,
@@ -110,6 +110,8 @@ function useTildaTrigger(
   draft: string,
 ): void {
   const activeRef = useRef(false);
+  // 触发浮层时「#」在正文中的位置；用于计算「#」之后的实时筛选内容
+  const triggerIdxRef = useRef(-1);
   const draftRef = useRef(draft);
   const inputActionsRef = useRef(inputActions);
   draftRef.current = draft;
@@ -132,7 +134,8 @@ function useTildaTrigger(
       const prevChar = selStart > 1 ? value[selStart - 2] : " ";
       if (prevChar !== " " && prevChar !== "\n") return;
       activeRef.current = true;
-      showOverlay(el, lastPromptsForSelect, inputActionsRef.current, draftRef.current);
+      triggerIdxRef.current = selStart - 1;
+      showOverlay(el, lastPromptsForSelect, inputActionsRef.current, draftRef.current, "");
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -142,6 +145,7 @@ function useTildaTrigger(
           e.preventDefault();
           e.stopPropagation();
           activeRef.current = false;
+          triggerIdxRef.current = -1;
           removeOverlay();
           return;
         }
@@ -160,6 +164,7 @@ function useTildaTrigger(
             applyPrompt(selected, inputActionsRef.current, draftRef.current);
           }
           activeRef.current = false;
+          triggerIdxRef.current = -1;
           removeOverlay();
           return;
         }
@@ -175,16 +180,31 @@ function useTildaTrigger(
 
     // input 事件：正常输入时触发
     const onInput = (e: Event) => {
-      // 已激活浮层时：若光标前已不是「#」（用户继续打字/删除），关闭浮层，允许下次再触发
+      // 已激活浮层时：把「#」之后、光标之前的文本作为实时筛选词，
+      // 继续输入会刷新筛选结果；输入空格则结束筛选并关闭浮层。
       if (activeRef.current) {
         const el = e.target as HTMLElement | null;
         if (el instanceof HTMLElement) {
           const value = getEditableText(el);
           const selStart = getCaretPosition(el);
-          if (value === null || selStart <= 0 || value[selStart - 1] !== "#") {
+          const tri = triggerIdxRef.current;
+          // 触发 # 被删除或光标位置异常 → 关闭浮层，允许下次再触发
+          if (value === null || tri < 0 || tri >= value.length || value[tri] !== "#" || selStart < tri) {
             activeRef.current = false;
+            triggerIdxRef.current = -1;
             removeOverlay();
+            return;
           }
+          const query = value.slice(tri + 1, selStart);
+          // 筛选内容中出现空格 → 结束筛选（空格保留在正文中）
+          if (query.includes(" ")) {
+            activeRef.current = false;
+            triggerIdxRef.current = -1;
+            removeOverlay();
+            return;
+          }
+          // 实时按筛选内容更新浮层
+          showOverlay(el, lastPromptsForSelect, inputActionsRef.current, draftRef.current, query);
         }
         return;
       }
@@ -238,9 +258,18 @@ function showOverlay(
   prompts: Prompt[],
   inputActions: { setDraft: (text: string) => void },
   draft: string,
+  query = "",
 ): void {
   removeOverlay();
   if (prompts.length === 0) return;
+
+  // 按「#」之后的筛选内容实时过滤（标题/正文/标签任意包含）
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? prompts.filter((p) =>
+        `${p.title} ${p.body} ${(p.tags ?? []).join(" ")}`.toLowerCase().includes(q),
+      )
+    : prompts;
 
   const rect = target.getBoundingClientRect();
   const overlay = document.createElement("div");
@@ -281,7 +310,19 @@ function showOverlay(
     }
   };
 
-  prompts.forEach((p, i) => {
+  // 无匹配结果时仍保留浮层，提示用户继续输入或输入空格结束筛选
+  if (filtered.length === 0) {
+    const empty = document.createElement("div");
+    empty.textContent = q ? `无匹配“${q}”` : "暂无提示词";
+    empty.style.cssText = [
+      "padding: 10px",
+      "font-size: 12px",
+      `color: ${TONE.quiet}`,
+    ].join(";");
+    overlay.appendChild(empty);
+  }
+
+  filtered.forEach((p, i) => {
     const item = document.createElement("div");
     item.dataset.promptLibraryItem = "";
     item.dataset.index = String(i);
@@ -295,9 +336,10 @@ function showOverlay(
       i === 0 ? `background: ${TONE.accentSoft}` : "",
     ].join(";");
 
-    // 标题行：加粗、主色、单行省略
+    // 标题行：加粗、主色、单行省略（仅显示前 TITLE_MAX_LEN 字，避免手动改文件后超长）
     const title = document.createElement("div");
-    title.textContent = p.title;
+    title.textContent = clampTitle(p.title);
+    title.title = p.title;
     title.style.cssText = [
       "font-size: 12px",
       "font-weight: 600",
@@ -335,9 +377,11 @@ function showOverlay(
     overlay.appendChild(item);
   });
 
-  // 底部快捷键提示
+  // 底部快捷键提示（筛选模式下展示当前筛选词）
   const hint = document.createElement("div");
-  hint.textContent = "↑↓ 选择 · Enter 确认 · Esc 关闭";
+  hint.textContent = q
+    ? `筛选“${q}” · ↑↓选择 · Enter确认 · 空格 结束 · Esc 关闭`
+    : "↑↓ 选择 · Enter 确认 · 继续输入筛选 · 空格 结束 · Esc 关闭";
   hint.style.cssText = [
     "padding: 6px 10px 3px",
     "font-size: 10px",
@@ -397,7 +441,8 @@ function getSelectedPrompt(): Prompt | null {
 function applyPrompt(prompt: Prompt, inputActions: { setDraft: (text: string) => void }, draft: string): void {
   const idx = draft.lastIndexOf("#");
   if (idx >= 0) {
-    inputActions.setDraft(`${draft.slice(0, idx)}${prompt.body}${draft.slice(idx + 1)}`);
+    // 用提示词正文替换「#」及其后的筛选内容（直接替换整段筛选文本）
+    inputActions.setDraft(`${draft.slice(0, idx)}${prompt.body}`);
   } else {
     inputActions.setDraft(draft && draft.trim() ? `${draft}\n\n${prompt.body}` : prompt.body);
   }
@@ -981,17 +1026,16 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                           fontSize: 13,
                           fontWeight: 460,
                           ...(isRecent(p.id) ? { color: TONE.accent } : {}),
-                        }}>{p.title}</strong>
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          maxWidth: 220,
+                        }} title={p.title}>{clampTitle(p.title)}</strong>
                         {isRecent(p.id) && (
                           <span
                             title="新增"
                             style={{ width: 8, height: 8, borderRadius: "50%", background: TONE.mint, display: "inline-block", flexShrink: 0 }}
                           />
-                        )}
-                        {p.tags && p.tags.length > 0 && (
-                          <span style={{ color: TONE.quiet, fontSize: 11 }}>
-                            {p.tags.map((t) => `#${t}`).join(" ")}
-                          </span>
                         )}
                       </div>
                       <pre

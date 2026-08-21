@@ -9,9 +9,9 @@ import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { PluginSettings, Prompt, PromptStoreFile } from "../types.js";
-import { DEFAULT_SETTINGS } from "../types.js";
+import { clampTitle, DEFAULT_SETTINGS, TITLE_MAX_LEN } from "../types.js";
 import { enrichLearnedPrompt, isAiAvailable } from "./ai.js";
-import { resetChatCharacterGrants, syncCharacterChatInto } from "./character.js";
+import { syncCharacterChatInto } from "./character.js";
 import { legacySettingsPath, legacyStorePath, settingsPath, storePath } from "./paths.js";
 
 /** 去掉 UTF-8 BOM（Windows 记事本/PowerShell 等工具可能写入），避免 JSON.parse 失败。 */
@@ -152,7 +152,7 @@ export function createPrompt(input: {
     const now = Date.now();
     const prompt: Prompt = {
       id: randomUUID(),
-      title: input.title.trim(),
+      title: clampTitle(input.title.trim()),
       body: input.body,
       tags: Array.isArray(input.tags) ? input.tags : [],
       updatedAt: now,
@@ -187,7 +187,7 @@ export function updatePrompt(
     const current = store.prompts[idx]!;
     const next: Prompt = {
       ...current,
-      title: patch.title !== undefined ? patch.title.trim() : current.title,
+      title: patch.title !== undefined ? clampTitle(patch.title.trim()) : current.title,
       body: patch.body !== undefined ? patch.body : current.body,
       tags: patch.tags !== undefined ? patch.tags : current.tags,
       summary: patch.summary !== undefined ? patch.summary : current.summary,
@@ -243,10 +243,10 @@ export function autoLearn(body: string, tag?: string): Promise<Prompt> {
     );
     if (existing) return existing;
 
-    // 自动生成标题：首行最多 40 个字符。
+    // 自动生成标题：首行最多 25 个字符（限制小标题）。
     const firstLine = (body.split("\n")[0] ?? "").trim();
     const title =
-      firstLine.length > 40 ? firstLine.slice(0, 37) + "..." : firstLine || "Learned Prompt";
+      firstLine.length > TITLE_MAX_LEN ? clampTitle(firstLine + "...") : firstLine || "Learned Prompt";
 
     const now = Date.now();
     const prompt: Prompt = {
@@ -290,28 +290,47 @@ export function deletePrompt(id: string): Promise<boolean> {
 
 // ── 设置存储 ────────────────────────────────────────────────────────────────
 
-/** 读取设置，如果文件不存在则返回默认值。 */
+/** 读取设置，如果文件不存在则返回默认值；格式错误时写回默认数据并返回默认值，避免功能报错。 */
 async function readSettingsRaw(): Promise<PluginSettings> {
+  let text: string | undefined;
   try {
-    const text = await readFile(settingsPath(), "utf8").catch((err) => {
+    text = await readFile(settingsPath(), "utf8").catch((err) => {
       // 新路径不存在：回退读取旧路径 ~/.dsh/prompt-library-settings.json
       if (err && typeof err === "object" && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
         return readFile(legacySettingsPath(), "utf8");
       }
       throw err;
     });
-    const parsed = JSON.parse(stripBom(text)) as Partial<PluginSettings>;
+    const parsed: unknown = JSON.parse(stripBom(text));
+    // 校验结构：必须是普通对象（非 null、非数组）
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error("prompt-library-settings.json: unexpected shape");
+    }
     // 合并默认值，确保所有字段都存在
-    const settings: PluginSettings = { ...DEFAULT_SETTINGS, ...parsed };
+    const settings: PluginSettings = { ...DEFAULT_SETTINGS, ...(parsed as Partial<PluginSettings>) };
     syncCharacterChatInto(settings.applyCharacterToChat ?? false);
     return settings;
   } catch (err) {
+    // 文件不存在：创建默认设置文件后返回默认值
     if (err && typeof err === "object" && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
       const settings: PluginSettings = { ...DEFAULT_SETTINGS };
+      try {
+        await writeSettingsRaw(settings);
+      } catch {
+        /* 写入失败也照常返回默认值，不影响本次读取 */
+      }
       syncCharacterChatInto(settings.applyCharacterToChat);
       return settings;
     }
-    throw err;
+    // 文件存在但内容/格式非法：写回默认设置，防止后续功能反复报错并让功能保持可用
+    const fresh: PluginSettings = { ...DEFAULT_SETTINGS };
+    try {
+      await writeSettingsRaw(fresh);
+    } catch {
+      /* 写入失败也照常返回默认值，不影响本次读取 */
+    }
+    syncCharacterChatInto(fresh.applyCharacterToChat);
+    return fresh;
   }
 }
 
@@ -341,9 +360,9 @@ export function updateSettings(patch: Partial<PluginSettings>): Promise<PluginSe
   return settingsTransaction(async (settings) => {
     const next: PluginSettings = { ...settings, ...patch };
     await writeSettingsRaw(next);
-    // 立即同步会话级灵魂边界开关，让勾选即刻生效；关闭时重置已注入会话记录
+    // 立即同步会话级灵魂边界开关，让勾选即刻生效。
+    // 关闭只阻止「新会话」注入，已注入的会话永久保持注入，不受中途开关影响。
     syncCharacterChatInto(next.applyCharacterToChat ?? false);
-    if (!next.applyCharacterToChat) resetChatCharacterGrants();
     return next;
   });
 }

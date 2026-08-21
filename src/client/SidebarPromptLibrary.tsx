@@ -22,7 +22,7 @@ import {
   type ReactNode,
 } from "react";
 import type { PluginSettings, Prompt } from "../types.js";
-import { DEFAULT_SETTINGS } from "../types.js";
+import { clampTitle, DEFAULT_SETTINGS } from "../types.js";
 import {
   createPrompt as apiCreate,
   deletePrompt as apiDelete,
@@ -694,7 +694,10 @@ export function SidebarPromptLibrary(props?: {
                             fontSize: 13,
                             fontWeight: 460,
                             ...(isRecent(p.id) ? { color: TONE.accent } : {}),
-                          }}>{p.title}</strong>
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }} title={p.title}>{clampTitle(p.title)}</strong>
                           <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                             {isRecent(p.id) && (
                               <span

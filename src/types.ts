@@ -42,6 +42,14 @@ export interface ApiResponse<T> {
   error?: string;
 }
 
+/** 小标题（title）允许的最大字符数。 */
+export const TITLE_MAX_LEN = 25;
+
+/** 把小标题限制在 TITLE_MAX_LEN 个字符内（中文按字计，超长直接截断）。 */
+export function clampTitle(title: string): string {
+  return title.slice(0, TITLE_MAX_LEN);
+}
+
 /** 创建请求的请求体。 */
 export interface PromptInput {
   title: string;

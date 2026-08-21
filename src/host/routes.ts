@@ -13,7 +13,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { WebRoute } from "@deepseek-ai/dsh-host-webserver";
 import type { ApiResponse, PluginSettings, Prompt, PromptInput, PromptPatch } from "../types.js";
-import { learnPolished, polishPromptBody } from "./ai.js";
+import { learnPolished, listAiSelectables, polishPromptBody } from "./ai.js";
 import {
   autoLearn,
   createPrompt,
@@ -143,6 +143,12 @@ export function makePromptRoutes(): WebRoute[] {
         const updated = await recordUsage(id);
         if (!updated) return json(res, 404, { ok: false, error: "not found" });
         return json(res, 200, { ok: true, data: updated });
+      }
+
+      // GET /ai/providers — 获取系统中可用的 AI provider 及模型列表（设置界面下拉选择）
+      if (method === "GET" && tail === "/ai/providers") {
+        const data = await listAiSelectables();
+        return json(res, 200, { ok: true, data });
       }
 
       // POST /ai/polish — AI 润色提示词正文（只返回结果，不写回、不学习）

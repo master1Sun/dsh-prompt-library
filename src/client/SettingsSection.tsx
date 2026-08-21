@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { PluginSettings } from "../types.js";
 import { DEFAULT_SETTINGS } from "../types.js";
-import { getSettings, updateSettings as apiUpdateSettings } from "./api.js";
+import { getAiSelectables, getSettings, updateSettings as apiUpdateSettings, type ClientAiSelectable } from "./api.js";
 
 const MONO =
   '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "SimHei", "黑体", sans-serif';
@@ -196,10 +196,67 @@ function TextRow({
   );
 }
 
+/** 下拉选择行组件（选项 value 与显示名可为不同值）。 */
+function SelectRow({
+  label,
+  value,
+  options,
+  onChange,
+  desc,
+}: {
+  label: string;
+  value: string;
+  options: { value: string; label: string }[];
+  onChange: (v: string) => void;
+  desc?: string;
+}): ReactNode {
+  return (
+    <div style={{ padding: "8px 0" }}>
+      <label
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 12,
+        }}
+      >
+        <span style={{ fontSize: 13 }}>{label}</span>
+        <select
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          style={{
+            width: 180,
+            padding: "4px 6px",
+            color: TONE.text,
+            background: TONE.row,
+            border: `1px solid ${TONE.border}`,
+            borderRadius: 5,
+            fontFamily: MONO,
+            fontSize: 12,
+            outline: "none",
+          }}
+        >
+          {options.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      {desc && (
+        <div style={{ fontSize: 11, color: TONE.quiet, marginTop: 4, lineHeight: 1.5 }}>
+          {desc}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** 设置面板组件，修改后立即生效。 */
 export function SettingsSection(): ReactNode {
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState<PluginSettings>(DEFAULT_SETTINGS);
+  const [selectables, setSelectables] = useState<ClientAiSelectable[]>([]);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -207,6 +264,10 @@ export function SettingsSection(): ReactNode {
       .then((s) => setDraft(s))
       .catch(() => { /* 使用默认值 */ })
       .finally(() => setLoading(false));
+    // 加载系统 AI provider/模型列表，用于 AI Provider/模型下拉选择
+    getAiSelectables()
+      .then(setSelectables)
+      .catch(() => setSelectables([]));
   }, []);
 
   // 保存设置到后台并通知其他组件
@@ -235,6 +296,28 @@ export function SettingsSection(): ReactNode {
         加载中…
       </div>
     );
+  }
+
+  // 组装 AI Provider 下拉选项：系统列表 + “留空自动发现” + 若已保存值不在列表则保留
+  const providerOptions: { value: string; label: string }[] = [{ value: "", label: "留空自动发现" }];
+  for (const s of selectables) {
+    if (s.provider && !providerOptions.some((o) => o.value === s.provider)) {
+      providerOptions.push({ value: s.provider, label: s.name || s.provider });
+    }
+  }
+  if (draft.aiProvider && !providerOptions.some((o) => o.value === draft.aiProvider)) {
+    providerOptions.push({ value: draft.aiProvider, label: `${draft.aiProvider}（未发现）` });
+  }
+  // 组装 AI 模型下拉选项：当前已选 provider 的模型列表 + “留空自动发现” + 已保存值不在列表则保留
+  const activeProvider = selectables.find((s) => s.provider === draft.aiProvider);
+  const modelOptions: { value: string; label: string }[] = [{ value: "", label: "留空自动发现" }];
+  for (const m of activeProvider?.models ?? []) {
+    if (m.id && !modelOptions.some((o) => o.value === m.id)) {
+      modelOptions.push({ value: m.id, label: m.name || m.id });
+    }
+  }
+  if (draft.aiModel && !modelOptions.some((o) => o.value === draft.aiModel)) {
+    modelOptions.push({ value: draft.aiModel, label: `${draft.aiModel}（未发现）` });
   }
 
   return (
@@ -293,18 +376,18 @@ export function SettingsSection(): ReactNode {
             />
             {draft.aiEnrichEnabled && (
               <div style={{ paddingLeft: 24 }}>
-                <TextRow
+                <SelectRow
                   label="AI Provider"
                   value={draft.aiProvider}
-                  placeholder="留空自动发现"
-                  desc="模型服务供应商，例如 DeepSeek、OpenAI 兼容服务等；留空时自动发现首个可用的 provider。"
+                  options={providerOptions}
+                  desc="模型服务供应商，从系统已连接的 LLM 服务中读取；选择“留空自动发现”时自动查找首个可用的 provider。"
                   onChange={(v) => updateAndSave({ aiProvider: v })}
                 />
-                <TextRow
+                <SelectRow
                   label="AI 模型"
                   value={draft.aiModel}
-                  placeholder="留空自动发现"
-                  desc="该 provider 下的模型 id，例如 DeepSeek-V4-Flash、DeepSeek-V4-Pro；留空时自动选择 id 含 deepseek 的模型。"
+                  options={modelOptions}
+                  desc="该 provider 下的模型 id，从系统读取；选择“留空自动发现”时自动选择 id 含 deepseek 的模型。"
                   onChange={(v) => updateAndSave({ aiModel: v })}
                 />
               </div>
@@ -379,7 +462,7 @@ export function SettingsSection(): ReactNode {
         {/* # 触发开关 */}
         <ToggleRow
           label="输入 # 触发词库选择"
-          desc="在输入框中输入 # 时弹出词库选择"
+          desc="输入 # 后弹出词库；继续输入可实时筛选，↑↓ 选择、回车插入，输入空格或 Esc 结束筛选"
           checked={draft.tildaTriggerEnabled}
           onChange={(v) => updateAndSave({ tildaTriggerEnabled: v })}
         />

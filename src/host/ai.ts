@@ -16,6 +16,7 @@ import { updatePrompt } from "./store.js";
 import { appendFileSync } from "node:fs";
 import { appendMemory, buildCharacterSystem, noteInsight, readCharacterDocs } from "./character.js";
 import { aiLogPath } from "./paths.js";
+import type { CharacterKind } from "./paths.js";
 
 /** 单次 AI 完善调用的超时（毫秒）。 */
 const AI_TIMEOUT_MS = 30_000;
@@ -51,6 +52,41 @@ export function isAiAvailable(): boolean {
   return llm !== undefined;
 }
 
+/** 设置界面用：单个提供方可选择的模型。 */
+export interface AiSelectableModel {
+  id: string;
+  name: string;
+}
+/** 设置界面用：单个提供方及其模型列表。 */
+export interface AiSelectable {
+  provider: string;
+  name: string;
+  models: AiSelectableModel[];
+}
+
+/**
+ * 读取系统中可用的 AI provider 及其模型列表，供设置界面下拉选择。
+ * 只返回「能成功列出模型」的提供方分类数据；llm 未注入时返回空数组。
+ */
+export async function listAiSelectables(): Promise<AiSelectable[]> {
+  if (!llm) return [];
+  const out: AiSelectable[] = [];
+  for (const provider of llm.listProviders()) {
+    let models: readonly LlmModelInfo[] = [];
+    try {
+      models = await llm.listModels(provider.id);
+    } catch {
+      /* 某提供方无法列出模型，跳过即可，不影响其它提供方 */
+    }
+    out.push({
+      provider: provider.id,
+      name: provider.name || provider.id,
+      models: models.map((m) => ({ id: m.id, name: m.name || m.id })),
+    });
+  }
+  return out;
+}
+
 /** AI 完善结果：AI 生成的标题/标签/摘要/正文，以及用于画像的一句话洞察。 */
 export interface AiRefineResult {
   title: string;
@@ -61,39 +97,81 @@ export interface AiRefineResult {
 }
 
 /**
- * 解析 provider/model 路由：
- * 优先使用设置中显式配置的 aiProvider/aiModel；
- * 否则自动发现首个可用 provider 的模型（优先选 id 含 chat/deepseek 的）。
- * 无法确定路由时返回 undefined（跳过 AI 完善）。
+ * 判断一个手工配置的 provider/model 是否当前可用：
+ * 能成功列出模型，且模型 id（忽略大小写）在列表中。
  */
-async function resolveRoute(
+async function isModelAvailable(
+  runtime: LlmRuntime,
+  provider: string,
+  model: string,
+): Promise<boolean> {
+  try {
+    const models = await runtime.listModels(provider);
+    return models.some((m) => m.id.toLowerCase() === model.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 解析 provider/model 候选路由（按优先级排列，供失败时自动轮询）：
+ * 1. 设置中显式配置的 aiProvider/aiModel——先校验该模型当前是否可用，
+ *    不可用时记录日志并跳过，进入自动发现；
+ * 2. 否则按顺序遍历各 provider，选第一个「有可用模型」的，并优先挑 id 含
+ *    chat/deepseek 的模型。首个 provider 无模型时继续尝试后续，避免固定失败。
+ *
+ * 返回有序候选列表；所有 provider 都无可用模型时返回空数组。
+ * 每次路由判断（手动不可用、自动发现、失败）都会写入 ai.log。
+ */
+async function resolveCandidates(
   runtime: LlmRuntime,
   settings: PluginSettings,
-): Promise<{ provider: string; model: string } | undefined> {
+): Promise<{ provider: string; model: string }[]> {
+  const candidates: { provider: string; model: string }[] = [];
+  const seen = new Set<string>();
+
+  // 1. 手动配置的路由：只有确认该模型可用才采用，否则轮询可用模型
   if (settings.aiProvider && settings.aiModel) {
-    logAI(`route: 使用手动配置 provider=${settings.aiProvider} model=${settings.aiModel}`);
-    return { provider: settings.aiProvider, model: settings.aiModel };
+    const avail = await isModelAvailable(runtime, settings.aiProvider, settings.aiModel);
+    if (avail) {
+      candidates.push({ provider: settings.aiProvider, model: settings.aiModel });
+      seen.add(`${settings.aiProvider}/${settings.aiModel}`);
+      logAI(`route: 手动配置可用 provider=${settings.aiProvider} model=${settings.aiModel}`);
+    } else {
+      logAI(
+        `route: 手动配置模型 ${settings.aiProvider}/${settings.aiModel} 不可用，自动轮询可用模型`,
+      );
+    }
   }
+
+  // 2. 自动发现：遍历各 provider，选第一个有可用模型的
   const providers = runtime.listProviders();
   if (providers.length === 0) {
     logAI("route: listProviders() 返回空（harness 无可用 provider）");
-    return undefined;
   }
-  const provider = providers[0]!.id;
-  let models: readonly LlmModelInfo[];
-  try {
-    models = await runtime.listModels(provider);
-  } catch (e) {
-    logAI(`route: listModels(${provider}) 失败：${String(e)}`);
-    return undefined;
+  for (const provider of providers) {
+    let models: readonly LlmModelInfo[];
+    try {
+      models = await runtime.listModels(provider.id);
+    } catch (e) {
+      logAI(`route: listModels(${provider.id}) 失败：${String(e)}，尝试下一个 provider`);
+      continue;
+    }
+    if (models.length === 0) {
+      logAI(`route: provider=${provider.id} 无可用模型，尝试下一个`);
+      continue;
+    }
+    const pick = models.find((m) => /chat|deepseek/i.test(m.id)) ?? models[0]!;
+    const key = `${provider.id}/${pick.id}`;
+    if (seen.has(key)) continue;
+    candidates.push({ provider: provider.id, model: pick.id });
+    seen.add(key);
+    logAI(`route: 自动发现 provider=${provider.id} model=${pick.id}`);
   }
-  if (models.length === 0) {
-    logAI(`route: listModels(${provider}) 返回空模型列表`);
-    return undefined;
+  if (candidates.length === 0) {
+    logAI("route: 未找到任何可用模型");
   }
-  const pick = models.find((m) => /chat|deepseek/i.test(m.id)) ?? models[0]!;
-  logAI(`route: 自动发现 provider=${provider} model=${pick.id}`);
-  return { provider, model: pick.id };
+  return candidates;
 }
 
 /** 组装 system prompt：把 USER.md 与 MEMORY.md 作为上下文，让 AI 越用越懂用户。 */
@@ -132,11 +210,14 @@ function userMessage(rawBody: string, tag?: string): string {
  * 把五维灵魂边界（SOUL/AGENTS/USER/IDENTITY/MEMORY）注入 AI 的 system prompt，
  * 让 AI 在润色 / 完善 / 洞察时都遵守这些边界（OpenCLaW 式自学习的前置条件）。
  * 读取失败时静默忽略，不影响本次调用。
+ *
+ * 调用方若已用 readCharacterDocs() 读过 docs，应直接传入复用，避免重复读盘；
+ * docs 为空时回退到自行读取。
  */
-async function withCharacterSystem(system: string): Promise<string> {
+async function withCharacterSystem(system: string, docs?: Record<CharacterKind, string>): Promise<string> {
   try {
-    const docs = await readCharacterDocs();
-    const boundary = buildCharacterSystem(docs);
+    const boundaryDocs = docs ?? (await readCharacterDocs());
+    const boundary = buildCharacterSystem(boundaryDocs);
     if (!boundary) return system;
     return [
       system,
@@ -200,6 +281,34 @@ async function collectText(
   return text;
 }
 
+/**
+ * 带自动轮询的 LLM 调用：按候选路由顺序依次调用 collectText，
+ * 第一个成功返回文本的路由即采用；每个候选的开始、失败、成功都写入 ai.log。
+ * 全部候选都失败时返回 undefined。
+ */
+async function collectTextWithFallback(
+  runtime: LlmRuntime,
+  candidates: { provider: string; model: string }[],
+  system: string,
+  content: string,
+): Promise<string | undefined> {
+  if (candidates.length === 0) {
+    logAI("fallback: 无可用候选路由，跳过本次调用");
+    return undefined;
+  }
+  for (const route of candidates) {
+    logAI(`fallback: 尝试 provider=${route.provider} model=${route.model}`);
+    const text = await collectText(runtime, route, system, content);
+    if (text !== undefined) {
+      logAI(`fallback: 采用 provider=${route.provider} model=${route.model}`);
+      return text;
+    }
+    logAI(`fallback: provider=${route.provider} model=${route.model} 失败，轮询下一个`);
+  }
+  logAI("fallback: 所有候选模型均失败");
+  return undefined;
+}
+
 /** 从模型输出中容错解析 JSON：剥离 markdown 围栏，截取首个对象。 */
 function parseJson(text: string): AiRefineResult | undefined {
   let json = text.trim();
@@ -243,14 +352,14 @@ export async function enrichLearnedPrompt(prompt: Prompt, settings: PluginSettin
     logAI(`enrich: 跳过（llm 服务未注入）prompt=${prompt.title}`);
     return;
   }
-  const route = await resolveRoute(llm, settings);
-  if (!route) return;
+  const candidates = await resolveCandidates(llm, settings);
+  if (candidates.length === 0) return;
   const docs = await readCharacterDocs();
   logAI(`enrich: 灵魂上下文 USER=${docs.USER.length} 字 MEMORY=${docs.MEMORY.length} 字`);
-  const text = await collectText(
+  const text = await collectTextWithFallback(
     llm,
-    route,
-    await withCharacterSystem(systemPrompt(docs.USER, docs.MEMORY)),
+    candidates,
+    await withCharacterSystem(systemPrompt(docs.USER, docs.MEMORY), docs),
     userMessage(prompt.body, prompt.tags?.[0]),
   );
   if (!text) return;
@@ -273,10 +382,10 @@ export async function enrichLearnedPrompt(prompt: Prompt, settings: PluginSettin
     aiRefined: true,
   });
   // 自学习都写入灵魂文件：风格洞察进 USER.md，学习经验进 MEMORY.md（有界维护）
-  noteInsight(result.insight).catch(() => {});
+  noteInsight(result.insight).catch((e) => logAI(`写 USER.md 洞察失败：${String(e)}`));
   appendMemory(
     `自动学习了提示词「${result.title || prompt.title}」，并提炼出用户风格洞察：${result.insight || "（无）"}`,
-  ).catch(() => {});
+  ).catch((e) => logAI(`写 MEMORY.md 经验失败：${String(e)}`));
   logAI(
     `enrich: 完成 prompt="${result.title || prompt.title}" body ${changed ? "已改写" : "未改写"} 洞察="${result.insight}"`,
   );
@@ -298,8 +407,8 @@ export async function polishPromptBody(
     logAI("polish: 跳过（llm 服务未注入）");
     return undefined;
   }
-  const route = await resolveRoute(llm, settings);
-  if (!route) return undefined;
+  const candidates = await resolveCandidates(llm, settings);
+  if (candidates.length === 0) return undefined;
   // 读取灵魂文件（USER.md / MEMORY.md）作为上下文，让润色更贴合用户（越用越准）
   const docs = await readCharacterDocs();
   logAI(`polish: 灵魂上下文 USER=${docs.USER.length} 字 MEMORY=${docs.MEMORY.length} 字`);
@@ -320,7 +429,12 @@ export async function polishPromptBody(
     "- 直接输出润色后的提示词正文，不要任何解释或 Markdown 代码块。",
   ].join("\n");
   const content = `请润色以下提示词内容：\n\n${body}`;
-  const text = await collectText(llm, route, await withCharacterSystem(system), content);
+  const text = await collectTextWithFallback(
+    llm,
+    candidates,
+    await withCharacterSystem(system, docs),
+    content,
+  );
   if (!text) return undefined;
   logAI(`polish: 完成 结果长度=${text.length}（等待用户确认许可后并入 USER/MEMORY 学习）`);
   return text;
@@ -335,8 +449,10 @@ export async function polishPromptBody(
 export async function learnPolished(body: string, settings: PluginSettings): Promise<void> {
   const sampleTitle = body.split("\n")[0]?.trim().slice(0, 30) || "AI 润色";
   const insight = await generateInsight(body, settings);
-  noteInsight(insight).catch(() => {});
-  appendMemory(`用户确认学习了润色内容「${sampleTitle}」。洞察：${insight || "（无）"}`).catch(() => {});
+  noteInsight(insight).catch((e) => logAI(`写 USER.md 洞察失败（人工润色）：${String(e)}`));
+  appendMemory(`用户确认学习了润色内容「${sampleTitle}」。洞察：${insight || "（无）"}`).catch((e) =>
+    logAI(`写 MEMORY.md 经验失败（人工润色）：${String(e)}`),
+  );
   logAI(
     `polish: 用户确认学习 "${sampleTitle}" 长度=${body.length} 洞察长度=${insight.length}（已写入 USER/MEMORY）`,
   );
@@ -348,8 +464,8 @@ export async function learnPolished(body: string, settings: PluginSettings): Pro
  */
 async function generateInsight(body: string, settings: PluginSettings): Promise<string> {
   if (!llm) return "";
-  const route = await resolveRoute(llm, settings);
-  if (!route) return "";
+  const candidates = await resolveCandidates(llm, settings);
+  if (candidates.length === 0) return "";
   const docs = await readCharacterDocs();
   const system = [
     "你是一名用户洞察助手，擅长从用户使用的提示词中提炼用户的写作风格与关注领域。",
@@ -366,6 +482,11 @@ async function generateInsight(body: string, settings: PluginSettings): Promise<
     "- 直接输出这一句话，不要任何解释或 Markdown 代码块。",
   ].join("\n");
   const content = `请提炼以下提示词反映的用户风格或关注领域：\n\n${body}`;
-  const text = await collectText(llm, route, await withCharacterSystem(system), content);
+  const text = await collectTextWithFallback(
+    llm,
+    candidates,
+    await withCharacterSystem(system, docs),
+    content,
+  );
   return text?.trim() ?? "";
 }

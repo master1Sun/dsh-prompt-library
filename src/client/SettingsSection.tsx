@@ -254,6 +254,18 @@ export function SettingsSection(): ReactNode {
           onChange={(v) => updateAndSave({ autoLearnEnabled: v })}
         />
 
+        {/* 手动确认开关（仅在自动学习开启时可用） */}
+        {draft.autoLearnEnabled && (
+          <div style={{ paddingLeft: 0 }}>
+            <ToggleRow
+              label="手动确认"
+              desc="学习到提示词时在聊天框弹出保存/取消，确认后才入库（勾选 AI 智能完善时自动入库，忽略该选项）"
+              checked={draft.autoLearnManualConfirm}
+              onChange={(v) => updateAndSave({ autoLearnManualConfirm: v })}
+            />
+          </div>
+        )}
+
         {/* 自动学习标签 */}
         {draft.autoLearnEnabled && (
           <div style={{ paddingLeft: 24 }}>

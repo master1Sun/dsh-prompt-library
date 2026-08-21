@@ -29,17 +29,22 @@ export function isLearnWorthy(text: string, minLength: number): boolean {
 }
 
 /**
- * 自动学习钩子：草稿文本满足条件且停顿足够时长后，自动保存到提示词库。
- * 客户端（内存）与 host（持久化）双侧去重，避免重复保存。
+ * 自动学习钩子：草稿文本满足条件且停顿足够时长后，把文本交给回调处理。
+ * 支持两种模式：
+ * - 自动入库：直接调用 /learn 保存到词库（客户端与 host 双侧去重）。
+ * - 手动确认：不自动保存，把文本交给 onManual，由界面弹出保存/取消（AI 智能完善开启时忽略此模式，行为同自动入库）。
  */
 export function useAutoLearn(
   draft: string,
   existingPrompts: Prompt[],
   settings: PluginSettings,
   onLearned: (learned: Prompt) => void,
+  onManual?: (text: string) => void,
 ): void {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const submittedRef = useRef<Set<string>>(new Set());
+  // 手动确认仅在未开启 AI 智能完善时生效（开启时保持原自动入库逻辑）
+  const manualActive = !!onManual && settings.autoLearnManualConfirm && !settings.aiEnrichEnabled;
 
   useEffect(() => {
     if (!settings.autoLearnEnabled) return;
@@ -54,6 +59,11 @@ export function useAutoLearn(
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(async () => {
       submittedRef.current.add(normalized);
+      // 手动确认模式：不自动保存，交由界面处理
+      if (manualActive) {
+        onManual?.(text);
+        return;
+      }
       try {
         const learned = await apiLearn(text, settings.autoLearnTag);
         markRecent(learned.id);
@@ -66,7 +76,7 @@ export function useAutoLearn(
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [draft, existingPrompts, settings.autoLearnEnabled, settings.autoLearnMinLength, settings.autoLearnTag, onLearned]);
+  }, [draft, existingPrompts, settings.autoLearnEnabled, settings.autoLearnMinLength, settings.autoLearnTag, manualActive, onLearned, onManual]);
 
   useEffect(() => {
     return () => {

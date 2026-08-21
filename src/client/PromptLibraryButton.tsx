@@ -25,6 +25,8 @@ import {
   listPrompts as apiList,
   updatePrompt as apiUpdate,
   usePrompt as apiUse,
+  learnPrompt as apiLearn,
+  polishPrompt as apiPolish,
 } from "./api.js";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { PL_BUTTON_CSS, plBtn } from "./button-style.js";
@@ -445,6 +447,10 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
     mode: "none", title: "", body: "", tags: ""
   });
   const [toast, setToast] = useState<{ visible: boolean }>({ visible: false });
+  // 手动确认模式：记录待确认入库的正文，聊天框弹出保存/取消
+  const [pendingConfirm, setPendingConfirm] = useState<string | null>(null);
+  // 确认卡片内的 AI 润色加载状态
+  const [polishConfirmLoading, setPolishConfirmLoading] = useState(false);
 
   const [settings] = useSettings();
   const panelId = useId();
@@ -509,7 +515,11 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
         // 拉取失败忽略，等待下一轮
       }
     }, 4000);
-  }, [showToast, settings.aiEnrichEnabled]));
+  }, [showToast, settings.aiEnrichEnabled]),
+  // 手动确认模式回调：学习到正文后不自动保存，交由界面弹出保存/取消
+  useCallback((text: string) => {
+    setPendingConfirm(text);
+  }, []));
 
   // ~ 键触发
   useTildaTrigger(settings, prompts, inputActions, draft);
@@ -606,6 +616,42 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
     setOpen((v) => !v);
   };
 
+  // 手动确认：保存选中正文到词库
+  const confirmLearn = useCallback(async () => {
+    const text = pendingConfirm;
+    if (!text) return;
+    setPendingConfirm(null);
+    try {
+      const learned = await apiLearn(text, settings.autoLearnTag);
+      markRecent(learned.id);
+      notifyDataChanged();
+      showToast();
+    } catch {
+      /* 静默失败 */
+    }
+  }, [pendingConfirm, settings.autoLearnTag, showToast]);
+
+  // 手动确认：放弃保存
+  const cancelLearn = useCallback(() => {
+    setPendingConfirm(null);
+    setPolishConfirmLoading(false);
+  }, []);
+
+  // 手动确认卡片：AI 润色确认中的正文，完成后直接把润色结果填充回卡片预览
+  const polishLearnText = useCallback(async () => {
+    if (!pendingConfirm || polishConfirmLoading) return;
+    setPolishConfirmLoading(true);
+    try {
+      const res = await apiPolish(pendingConfirm);
+      // 润色完直接填充到框内（预览与待保存正文一起更新）
+      setPendingConfirm(res.polished);
+    } catch {
+      /* 静默失败 */
+    } finally {
+      setPolishConfirmLoading(false);
+    }
+  }, [pendingConfirm, polishConfirmLoading]);
+
   const containerStyle: CSSProperties = {
     display: "inline-flex",
     position: "relative",
@@ -693,6 +739,84 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
           }}
         >
           &#10003; 已自动学习
+        </span>
+      )}
+
+      {/* 手动确认卡片：学习到提示词后在聊天框弹出保存/取消 */}
+      {pendingConfirm !== null && (
+        <span
+          role="dialog"
+          aria-label="确认保存提示词"
+          style={{
+            position: "absolute",
+            bottom: "calc(100% + 6px)",
+            right: 0,
+            zIndex: 1002,
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            width: 280,
+            boxSizing: "border-box",
+            padding: "10px 12px",
+            color: TONE.text,
+            background: TONE.panel,
+            border: `1px solid ${TONE.borderStrong}`,
+            borderRadius: 10,
+            boxShadow: "0 8px 24px rgba(3, 8, 18, 0.4)",
+            fontFamily: MONO,
+          }}
+        >
+          <div style={{ fontSize: 12, fontWeight: 600 }}>检测到可学习提示词</div>
+          <div
+            style={{
+              maxHeight: 96,
+              overflowY: "auto",
+              padding: "6px 8px",
+              fontSize: 11,
+              lineHeight: 1.5,
+              color: TONE.muted,
+              background: TONE.row,
+              border: `1px solid ${TONE.border}`,
+              borderRadius: 6,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}
+          >
+            {pendingConfirm}
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={plBtn("ghost", "sm")}
+              onClick={polishLearnText}
+              disabled={polishConfirmLoading}
+              title={polishConfirmLoading ? "AI 润色中…" : "调用 AI 润色正文"}
+            >
+              {polishConfirmLoading ? "润色中…" : "AI 润色"}
+            </Button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className={plBtn("ghost", "sm")}
+                onClick={cancelLearn}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                className={plBtn("primary", "sm")}
+                onClick={confirmLearn}
+              >
+                保存
+              </Button>
+            </div>
+          </div>
         </span>
       )}
 

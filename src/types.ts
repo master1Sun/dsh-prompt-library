@@ -91,6 +91,8 @@ export interface PluginSettings {
   autoLearnTag: string;
   /** 自动学习最小长度。 */
   autoLearnMinLength: number;
+  /** 是否开启自动学习手动确认（聊天框弹出保存/取消，AI 智能完善开启时忽略）。 */
+  autoLearnManualConfirm: boolean;
   /** 面板宽度（px）。 */
   panelWidth: number;
   /** 面板高度（px）。 */
@@ -120,6 +122,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   autoLearnEnabled: true,
   autoLearnTag: "auto-learned",
   autoLearnMinLength: 60,
+  autoLearnManualConfirm: false,
   panelWidth: 380,
   panelHeight: 500,
   rightPanelEnabled: false,

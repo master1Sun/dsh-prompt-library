@@ -52,6 +52,56 @@ export function hasVariables(body: string): boolean {
   return /\{\{\s*[^{}]+\s*\}\}/.test(body);
 }
 
+/** 高亮样式：把已填入的变量值用主题品牌色弱底标出，未填的占位符用弱色保留。 */
+const HL_STRONG = {
+  background: "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 22%, transparent)",
+  color: "var(--dsw-alias-label-primary, #f2f6fc)",
+  borderRadius: 4,
+  padding: "0 2px",
+  fontWeight: 550,
+} as const;
+
+const HL_PLACEHOLDER = {
+  background: "transparent",
+  color: TONE.accent,
+  borderRadius: 4,
+  padding: "0 2px",
+} as const;
+
+/**
+ * 实时预览正文：把 `{{变量}}` 替换为已填值，并将填入内容高亮标出；
+ * 未填写的变量保留原占位符（用品牌色提示）。
+ */
+function renderPreview(body: string, values: Record<string, string>): ReactNode[] {
+  const re = /\{\{\s*([^{}]+?)\s*\}\}/g;
+  const nodes: ReactNode[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let key = 0;
+  while ((m = re.exec(body)) !== null) {
+    if (m.index > last) nodes.push(body.slice(last, m.index));
+    const name = m[1]!.trim();
+    const val = Object.prototype.hasOwnProperty.call(values, name) ? values[name] ?? "" : "";
+    if (val && val.trim()) {
+      nodes.push(
+        <span key={`f${key++}`} style={HL_STRONG} title={`{{${name}}}`}>
+          {val}
+        </span>,
+      );
+    } else {
+      // 占位符原样保留，但用品牌色突显，提示此处可被替换
+      nodes.push(
+        <span key={`p${key++}`} style={HL_PLACEHOLDER}>
+          {`{{${name}}}`}
+        </span>,
+      );
+    }
+    last = m.index + m[0]!.length;
+  }
+  if (last < body.length) nodes.push(body.slice(last));
+  return nodes;
+}
+
 /** 变量填充记忆的本地存储键。 */
 const VAR_MEMORY_KEY = "pl:template-var-memory";
 
@@ -121,6 +171,8 @@ interface Props {
   open: boolean;
   /** 待填充的变量名列表。 */
   variables: string[];
+  /** 提示词正文（含 {{变量}}），用于实时预览。 */
+  body: string;
   /** 取消填充（不插入）。 */
   onCancel: () => void;
   /** 确认填充：以 { 变量名: 值 } 提交。 */
@@ -133,6 +185,7 @@ interface Props {
 export function TemplateFillModal({
   open,
   variables,
+  body,
   onCancel,
   onConfirm,
   t,
@@ -233,6 +286,36 @@ export function TemplateFillModal({
               />
             </label>
           ))}
+        </div>
+        {/* 实时预览：随输入即时替换 {{变量}}，高亮已填入内容 */}
+        <div
+          style={{
+            flexShrink: 0,
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+          }}
+        >
+          <span style={{ fontSize: 11, color: TONE.muted }}>{t("pl.template.preview")}</span>
+          <div
+            style={{
+              maxHeight: 160,
+              overflowY: "auto",
+              boxSizing: "border-box",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              padding: "8px 10px",
+              fontSize: 13,
+              lineHeight: 1.7,
+              color: TONE.text,
+              background: TONE.row,
+              border: `1px solid ${TONE.border}`,
+              borderRadius: 7,
+              fontFamily: MONO,
+            }}
+          >
+            {renderPreview(body, values)}
+          </div>
         </div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingTop: 6, flexShrink: 0 }}>
           <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={onCancel}>

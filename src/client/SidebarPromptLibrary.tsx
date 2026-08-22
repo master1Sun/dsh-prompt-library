@@ -1101,6 +1101,7 @@ export function SidebarPromptLibrary(props?: {
       <TemplateFillModal
         open={template !== null}
         variables={template ? extractVariables(template.prompt.body) : []}
+        body={template ? template.prompt.body : ""}
         onCancel={() => setTemplate(null)}
         onConfirm={applyTemplate}
         t={T}

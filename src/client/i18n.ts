@@ -147,6 +147,7 @@ export const zh = {
   // 模板变量占位符
   "pl.template.title": "填充模板变量",
   "pl.template.desc": "该提示词包含变量占位符，插入前请填写实际内容；留空的变量将保留为 {{变量名}}。",
+  "pl.template.preview": "实时预览（高亮为填入内容）",
 
   // 选中添加提示词
   "pl.copySelected": "复制选中文字",
@@ -334,6 +335,7 @@ export const en: Record<keyof typeof zh, string> = {
   // Template variables
   "pl.template.title": "Fill template variables",
   "pl.template.desc": "This prompt contains variable placeholders. Fill in the actual values before inserting; empty ones stay as {{variable}}.",
+  "pl.template.preview": "Live preview (highlighted = filled in)",
 
   // Add from selection
   "pl.copySelected": "Copy selected text",

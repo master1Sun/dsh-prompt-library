@@ -1314,6 +1314,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
       <TemplateFillModal
         open={template !== null}
         variables={template ? extractVariables(template.prompt.body) : []}
+        body={template ? template.prompt.body : ""}
         onCancel={() => setTemplate(null)}
         onConfirm={applyTemplate}
         t={T}

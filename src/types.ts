@@ -117,7 +117,7 @@ export interface PluginSettings {
 
 /** 设置的默认值。 */
 export const DEFAULT_SETTINGS: PluginSettings = {
-  autoLearnEnabled: true,
+  autoLearnEnabled: false,
   autoLearnTag: "auto-learned",
   autoLearnMinLength: 60,
   autoLearnManualConfirm: false,

@@ -41,6 +41,24 @@ export function startDataChangedSubscription(): void {
       if (!body) return;
       window.dispatchEvent(new CustomEvent(FILL_DRAFT_EVENT, { detail: { body } }));
     });
+    // host 侧 `/prompts -e` 推送的 JSON 备份：直接在浏览器本地触发下载。
+    es.addEventListener("export-download", (ev) => {
+      try {
+        const { name, json } = JSON.parse(ev.data) as { name?: string; json?: string };
+        if (!json) return;
+        const blob = new Blob([json], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = name || `prompt-library-backup-${Date.now()}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } catch {
+        /* 解析失败则静默忽略，不打断其他事件。 */
+      }
+    });
     // 连接断开由 EventSource 自动重连；无需手动处理。
   } catch {
     /* 忽略：个别环境不支持注入时降级为手动刷新。 */

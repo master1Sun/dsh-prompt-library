@@ -132,7 +132,7 @@ function seedDefaultPromptIfEmpty(cur: DatabaseSync): void {
     "这是你保存的第一条提示词，也是提示词库的上手引导。",
     "",
     "你可以这样使用本插件：",
-    "· 在输入框输入 `/prompts 把这段好的提示词保存下来`，不错过任何好词；",
+    "· 在输入框输入 `/prompts -add 把这段好的提示词保存下来`，不错过任何好词；",
     "· 输入 `/prompts -AI 请把这段润色得更专业`，AI 润色后填入聊天框；",
     "· 输入 `/prompts -h` 查看完整使用手册。",
     "",
@@ -167,7 +167,7 @@ const WELCOME_SYSTEM = [
   "（首次使用引导）本会话是你与带「提示词库」插件的助手第一次对话。",
   "请在本次会话的【第一条回复】中用一段简洁、自然、友好的开场白欢迎用户，并说明：",
   "1. 你具备提示词库能力：能随时把值得复用的内容保存成带标题、标签、{{变量}}的提示词；",
-  "2. 告诉用户三种用法：输入“/prompts 正文”保存；“/prompts -AI 正文”由 AI 润色后填入聊天框；“/prompts -h”查看完整使用手册；",
+  "2. 告诉用户多种用法：输入“/prompts -add 正文”保存；“/prompts -AI 正文”由 AI 润色后填入聊天框；“/prompts -s 关键词”检索；“/prompts -h”查看完整使用手册；",
   "3. 提示词库已预置一条「欢迎使用提示词库」示例，可在右侧侧边栏查看。",
   "开场白只需一段，明确提及以上三点即可，不要复述整本手册，也不要在此后回复中重复欢迎。",
 ].join("\n");
@@ -971,6 +971,60 @@ export function listTags(): Promise<Array<{ name: string; count: number }>> {
     const tags = Array.from(counts.entries()).map(([name, count]) => ({ name, count }));
     tags.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
     return Promise.resolve(tags);
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+/** 提示词库的使用统计（供 /prompts -data 输出 + AI 点评）。 */
+export interface LibraryStats {
+  /** 提示词总数。 */
+  total: number;
+  /** 累计使用次数。 */
+  totalUsage: number;
+  /** 曾使用过的提示词数量。 */
+  usedCount: number;
+  /** 从未使用过的提示词数量。 */
+  unusedCount: number;
+  /** 最常用的前 5 条（按使用次数降序）。 */
+  topUsed: Array<{ title: string; usageCount: number; lastUsedAt: number }>;
+  /** 最近使用的前 5 条（按最后使用时间降序）。 */
+  recentUsed: Array<{ title: string; lastUsedAt: number }>;
+  /** 标签及其被引用次数（复用 listTags）。 */
+  tagStats: Array<{ name: string; count: number }>;
+  /** 回收站条数。 */
+  trashCount: number;
+}
+
+/** 汇总词库的使用统计（SQLite live 数据）。 */
+export async function computeLibraryStats(): Promise<LibraryStats> {
+  try {
+    const cur = getDb();
+    const all = findAll();
+    const total = all.length;
+    const totalUsage = all.reduce((s, p) => s + p.usageCount, 0);
+    const used = all.filter((p) => p.usageCount > 0);
+    const topUsed = [...used]
+      .sort((a, b) => b.usageCount - a.usageCount || b.lastUsedAt - a.lastUsedAt)
+      .slice(0, 5)
+      .map((p) => ({ title: p.title, usageCount: p.usageCount, lastUsedAt: p.lastUsedAt }));
+    const recentUsed = used
+      .filter((p) => p.lastUsedAt > 0)
+      .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+      .slice(0, 5)
+      .map((p) => ({ title: p.title, lastUsedAt: p.lastUsedAt }));
+    const trashRow = cur.prepare("SELECT COUNT(*) AS c FROM trash").get() as { c: number };
+    const tagStats = await listTags();
+    return Promise.resolve({
+      total,
+      totalUsage,
+      usedCount: used.length,
+      unusedCount: total - used.length,
+      topUsed,
+      recentUsed,
+      tagStats,
+      trashCount: trashRow?.c ?? 0,
+    });
   } catch (e) {
     return Promise.reject(e);
   }

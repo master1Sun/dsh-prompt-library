@@ -143,25 +143,26 @@ function rememberVarValues(values: Record<string, string>): void {
   }
 }
 
-/** 在正文输入框光标处插入 `{{变量}}` 标签（新建/编辑提示词时使用）。
+/** 在正文输入框光标处插入 `{{变量名}}` 标签（新建/编辑提示词时使用）。
  * - 有选中文本时，以选中内容作为变量名，光标移到标签末尾；
- * - 无选区时插入空的 `{{}}`，光标停在括号内便于直接输入变量名。
+ * - 无选区时插入 `{{默认名}}`（defaultName 为已本地化的默认占位名），光标停在名称末尾便于改名。
  */
 export function insertVariableAt(
   el: HTMLTextAreaElement | null | undefined,
   value: string,
   setValue: (next: string) => void,
+  defaultName?: string,
 ): void {
   const start = el?.selectionStart ?? value.length;
   const end = el?.selectionEnd ?? value.length;
   const selected = value.slice(start, end).trim();
-  const inject = selected ? `{{${selected}}}` : "{{}}";
+  const inject = selected ? `{{${selected}}}` : `{{${defaultName ?? ""}}}`;
   setValue(value.slice(0, start) + inject + value.slice(end));
   requestAnimationFrame(() => {
     if (!el) return;
     el.focus();
-    // 无选区时光标停在括号内，便于直接输入变量名
-    const pos = selected ? end + inject.length : start + 2;
+    // 有选区时光标停在标签末尾；无选区时光标停在默认名之后（仍在括号内），便于直接改名/续写
+    const pos = selected ? end + inject.length : start + 2 + (defaultName?.length ?? 0);
     el.setSelectionRange(pos, pos);
   });
 }

@@ -91,3 +91,22 @@ export function emitFillDraft(body: string): void {
     }
   }
 }
+
+/**
+ * 向客户端推送一次 `export-download` 事件，触发浏览器下载 JSON 备份文件。
+ * data 携带 `{ name, json }`：name 为下载文件名，json 为序列化后的备份内容。
+ * @returns 是否成功推送到至少一个订阅者（true 时客户端会发起下载）。
+ */
+export function emitExportDownload(name: string, json: string): boolean {
+  if (clients.size === 0) return false;
+  const payload = JSON.stringify({ name, json });
+  const frame = `event: export-download\ndata: ${payload}\n\n`;
+  for (const res of clients) {
+    try {
+      res.write(frame);
+    } catch {
+      clients.delete(res);
+    }
+  }
+  return true;
+}

@@ -1187,11 +1187,13 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                         size="sm"
                         className={plBtn("ghost", "sm")}
                         style={{ flex: "0 0 auto" }}
+                        onMouseDown={(e) => e.preventDefault()}
                         onClick={(e: ReactMouseEvent<HTMLButtonElement>) => {
+                          // 阻止 mousedown 默认行为以免抢夺正文框焦点，确保光标位置有效、不会回滚到顶部。
                           // 仅点击「{{}}」按钮本身才插入，阻止 label/行内其他点击误触发
                           e.preventDefault();
                           e.stopPropagation();
-                          insertVariableAt(bodyRef.current, editor.body, (v) => setEditor({ ...editor, body: v }));
+                          insertVariableAt(bodyRef.current, editor.body, (v) => setEditor({ ...editor, body: v }), T("pl.insertVariableDefault"));
                         }}
                         title={T("pl.insertVariableTitle")}
                       >

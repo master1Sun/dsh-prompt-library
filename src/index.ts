@@ -7,9 +7,24 @@
  */
 import type { Context } from "@deepseek-ai/cordis";
 import { makePromptRoutes } from "./host/routes.js";
-import { dataChangedRoute, emitFillDraft } from "./host/events.js";
-import { autoLearn, getSettings, readGlobalLocale, welcomePromptOnce } from "./host/store.js";
-import { isAiAvailable, polishPromptBody, registerLlm, logAiInjected } from "./host/ai.js";
+import { dataChangedRoute, emitExportDownload, emitFillDraft } from "./host/events.js";
+import {
+  autoLearn,
+  computeLibraryStats,
+  exportPrompts,
+  getSettings,
+  listPrompts,
+  readGlobalLocale,
+  welcomePromptOnce,
+} from "./host/store.js";
+import {
+  commentOnStats,
+  enrichPromptProfessional,
+  isAiAvailable,
+  logAiInjected,
+  polishPromptBody,
+  registerLlm,
+} from "./host/ai.js";
 import { characterSystemSync, ensureCharacterFiles, shouldInjectChatCharacter } from "./host/character.js";
 // 操作手册：纯文本字符串，聊天消息按纯文本渲染（markdown/HTML 都无法解析），用换行符排版
 import { manualEn, manualZh } from "./manual.js";
@@ -104,27 +119,65 @@ export function apply(ctx: Context): void {
       const isZh = locale.startsWith("zh") || locale === "";
       const copy = isZh
         ? {
-            description: "保存内容到提示词库，AI 自动判断标题与标签",
-            hint: "输入要保存为提示词的正文",
-            empty: "内容为空，未保存",
+            description: "保存/润色/完善提示词，并输出词库统计",
+            hint: "输入命令或要保存/处理的正文，直接输入 /prompts 可查看命令示例",
+            cmdExamples: [
+              "/prompts 可用命令（不区分大小写，可写简化别名）：",
+              "  -add / -ad 保存： /prompts -add 把这段好的提示词保存下来",
+              "  -tag / -t 按标签保存： /prompts -tag 写作 请写一段产品介绍",
+              "  -s 检索： /prompts -s 写作",
+              "  -enrich / -en AI专业完善： /prompts -enrich 请把这段完善得更全面专业",
+              "  -e / -exp 导出： /prompts -e",
+              "  -data / -d 统计： /prompts -data",
+              "  -AI / -a AI润色： /prompts -AI 请把这段润色得更简洁",
+              "  -h 帮助： /prompts -h",
+            ].join("\n"),
+            unknownFlag: "未知指令。可用：-add/-ad 保存 / -AI/-a 润色 / -s 检索 / -tag/-t 按标签保存 / -enrich/-en AI专业完善 / -e/-exp 导出 / -data/-d 统计 / -h 帮助",
             saved: "已保存到提示词库",
-            failed: "保存失败",
+            failed: "操作失败",
+            addEmpty: "请在 -add 后输入要保存的正文",
+            tagEmpty: "用法：/prompts -tag <标签> <正文>",
+            searchEmpty: "未找到匹配的提示词",
+            exportEmpty: "词库为空，无内容可导出",
             aiSuffix: "--dsh-prompt-library 为您服务",
             aiNoInput: "请在 -AI 后输入要润色的正文",
-            aiUnavailable: "AI 服务不可用，无法润色",
+            aiUnavailable: "AI 服务不可用，无法处理",
             aiDone: "已 AI 润色并填充到聊天框",
+            enrichNoInput: "请在 -enrich 后输入要完善的正文",
+            enrichFailed: "AI 完善失败",
+            enrichSuffix: "--dsh-prompt-library 更专业",
+            enrichDone: "已 AI 专业完善并填充到聊天框（扩写完善，与 -AI 润色相反）",
             help: manualZh,
           }
         : {
-            description: "Save content to the prompt library; AI decides the title and tags",
-            hint: "Enter the prompt body to save",
-            empty: "Content is empty, nothing saved",
+            description: "Save/polish/enrich prompts and output library stats",
+            hint: "Enter a command or the body to save/process; type /prompts alone to see command examples",
+            cmdExamples: [
+              "/prompts available commands (case-insensitive, shorter aliases ok):",
+              "  -add / -ad save: /prompts -add save this great prompt",
+              "  -tag / -t save with tag: /prompts -tag writing write a product intro",
+              "  -s search: /prompts -s writing",
+              "  -enrich / -en AI professional enrichment: /prompts -enrich make this more comprehensive and professional",
+              "  -e / -exp export: /prompts -e",
+              "  -data / -d stats: /prompts -data",
+              "  -AI / -a AI polish: /prompts -AI make this more concise",
+              "  -h help: /prompts -h",
+            ].join("\n"),
+            unknownFlag: "Unknown command. Available: -add/-ad save / -AI/-a polish / -s search / -tag/-t save with tag / -enrich/-en professional enrich / -e/-exp export / -data/-d stats / -h help",
             saved: "Saved to the prompt library",
-            failed: "Failed to save",
+            failed: "Operation failed",
+            addEmpty: "Enter the body to save after -add",
+            tagEmpty: "Usage: /prompts -tag <tag> <body>",
+            searchEmpty: "No matching prompts found",
+            exportEmpty: "The library is empty, nothing to export",
             aiSuffix: "--dsh-prompt-library at your service",
             aiNoInput: "Enter the text to polish after -AI",
-            aiUnavailable: "AI service is unavailable, polish failed",
+            aiUnavailable: "AI service is unavailable, cannot process",
             aiDone: "Polished by AI and filled into the chat box",
+            enrichNoInput: "Enter the body to enrich after -enrich",
+            enrichFailed: "AI enrichment failed",
+            enrichSuffix: "--dsh-prompt-library more professional",
+            enrichDone: "Professionally enriched by AI and filled into the chat box (expands, opposite of -AI polish)",
             help: manualEn,
           };
       dispose = commands.register({
@@ -133,30 +186,170 @@ export function apply(ctx: Context): void {
         input: { hint: copy.hint },
         handler: async (invocation) => {
           const text = (invocation.rawInput ?? "").trim();
-          if (text === "-h" || text === "-help" || text === "--help") {
+          if (!text) {
+            // 不带任何命令时，输出各命令示例
+            return { kind: "success", text: copy.cmdExamples };
+          }
+          if (/^-(?:h|help)$/i.test(text) || text === "--help") {
             return { kind: "success", text: copy.help };
           }
-          // AI 模式：`-AI`/`-ai`/`-a`/`-A` 后的内容先 AI 润色，再连同服务宣言填充到聊天框。
-          const flag = text.split(/\s+/, 1)[0];
-          if (flag && /^-a(?:i)?$/i.test(flag)) {
-            const body = text.slice(flag.length).trim();
-            if (!body) return { kind: "error", text: copy.aiNoInput };
+
+          // 首个以 `-` 开头的 token 作为指令，其余为该指令的入参
+          const flagMatch = text.match(/^(-\S+)(?:\s+([\s\S]*))?$/);
+          if (!flagMatch) {
+            return { kind: "error", text: copy.unknownFlag };
+          }
+          // 归一化指令：大小写不敏感，并支持简化别名
+          const flag = flagMatch[1]!.toLowerCase();
+          const arg = (flagMatch[2] ?? "").trim();
+          const alias: Record<string, string> = {
+            "-ai": "ai",
+            "-a": "ai",
+            "-add": "add",
+            "-ad": "add",
+            "-t": "tag",
+            "-tag": "tag",
+            "-s": "search",
+            "-en": "enrich",
+            "-enrich": "enrich",
+            "-e": "export",
+            "-exp": "export",
+            "-d": "data",
+            "-data": "data",
+            "-h": "help",
+            "-help": "help",
+          };
+          const cmd = alias[flag] ?? flag;
+
+          // -AI / -a（-a 为简化）：AI 润色后连同服务宣言填充到聊天框
+          if (cmd === "ai") {
+            if (!arg) return { kind: "error", text: copy.aiNoInput };
             if (!isAiAvailable()) return { kind: "error", text: copy.aiUnavailable };
             const settings = await getSettings();
-            const polished = await polishPromptBody(body, settings).catch(() => undefined);
+            const polished = await polishPromptBody(arg, settings, { keepVariables: false }).catch(() => undefined);
             if (!polished) return { kind: "error", text: copy.aiUnavailable };
             emitFillDraft(`${polished.trim()}\n\n${copy.aiSuffix}`);
             return { kind: "success", text: copy.aiDone };
           }
-          if (!text) {
-            return { kind: "error", text: copy.empty };
+
+          // -add：保存正文到词库，AI 自动判断标题与标签
+          if (cmd === "add") {
+            if (!arg) return { kind: "error", text: copy.addEmpty };
+            try {
+              await autoLearn(arg);
+              return { kind: "success", text: copy.saved };
+            } catch (e) {
+              return { kind: "error", text: `${copy.failed}：${String(e)}` };
+            }
           }
-          try {
-            await autoLearn(text);
-            return { kind: "success", text: copy.saved };
-          } catch (e) {
-            return { kind: "error", text: `${copy.failed}：${String(e)}` };
+
+          // -tag <标签> <正文>：按指定标签保存到词库
+          if (cmd === "tag") {
+            const m = arg.match(/^(\S+)\s+([\s\S]+)$/);
+            if (!m) return { kind: "error", text: copy.tagEmpty };
+            const [, tagName, body] = m;
+            try {
+              await autoLearn(body.trim(), tagName.trim());
+              return { kind: "success", text: copy.saved };
+            } catch (e) {
+              return { kind: "error", text: `${copy.failed}：${String(e)}` };
+            }
           }
+
+          // -s <关键词>：检索词库，列出匹配的提示词
+          if (cmd === "search") {
+            const keyword = arg.toLowerCase();
+            if (!keyword) return { kind: "error", text: copy.unknownFlag };
+            const prompts = await listPrompts().catch(() => []);
+            const matches = prompts.filter(
+              (p) =>
+                p.title.toLowerCase().includes(keyword) || p.body.toLowerCase().includes(keyword),
+            );
+            if (matches.length === 0) return { kind: "success", text: copy.searchEmpty };
+            const lines = matches.slice(0, 15).map((p, i) => {
+              const tag = p.tags?.[0] ? `[${p.tags[0]}]` : "";
+              const usage = `${p.usageCount}次`;
+              const summary = p.summary ? `\n   摘要：${p.summary}` : "";
+              return `${i + 1}. ${p.title} ${tag}（使用${usage}）${summary}`;
+            });
+            return {
+              kind: "success",
+              text: `匹配 ${matches.length} 条：\n${lines.join("\n")}`,
+            };
+          }
+
+          // -enrich <正文>：AI 专业完善（与 -AI 润色完全相反：扩写完善，而非精简润色），
+          // 把完善后的正文连同服务宣言填充到聊天框
+          if (cmd === "enrich") {
+            if (!arg) return { kind: "error", text: copy.enrichNoInput };
+            if (!isAiAvailable()) return { kind: "error", text: copy.aiUnavailable };
+            const settings = await getSettings();
+            const enriched = await enrichPromptProfessional(arg, settings).catch(() => undefined);
+            if (!enriched) return { kind: "error", text: copy.enrichFailed };
+            emitFillDraft(`${enriched.trim()}\n\n${copy.enrichSuffix}`);
+            return { kind: "success", text: copy.enrichDone };
+          }
+
+          // -e：导出全部提示词。优先把 JSON 备份推送到浏览器本地下载；无订阅者时回退为纯文本聊天输出。
+          if (cmd === "export") {
+            const backup = await exportPrompts().catch(() => undefined);
+            if (!backup) return { kind: "error", text: copy.failed };
+            if (backup.prompts.length === 0) return { kind: "success", text: copy.exportEmpty };
+            const d = new Date();
+            const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+            const sent = emitExportDownload(
+              `prompt-library-backup-${stamp}.json`,
+              JSON.stringify(backup, null, 2),
+            );
+            if (sent) {
+              return {
+                kind: "success",
+                text: `已导出 ${backup.prompts.length} 条提示词：JSON 备份文件已下载到浏览器本地。`,
+              };
+            }
+            const blocks = backup.prompts.map((p) => {
+              const tag = p.tags?.[0] ? ` [${p.tags[0]}]` : "";
+              return `【${p.title}】${tag}\n${p.body}`;
+            });
+            return {
+              kind: "success",
+              text: `提示词库导出（共 ${backup.prompts.length} 条）：\n\n${blocks.join("\n\n")}`,
+            };
+          }
+
+          // -data：输出 prompts.db 的使用统计，末尾追加 AI 点评
+          if (cmd === "data") {
+            const stats = await computeLibraryStats().catch(() => undefined);
+            if (!stats) return { kind: "error", text: copy.failed };
+            const usedPct = stats.total ? Math.round((stats.usedCount / stats.total) * 100) : 0;
+            const lines = [
+              "提示词库数据统计：",
+              `- 提示词总数：${stats.total}`,
+              `- 累计使用次数：${stats.totalUsage}`,
+              `- 曾使用 / 从未使用：${stats.usedCount} / ${stats.unusedCount}（使用率 ${usedPct}%）`,
+              stats.topUsed.length
+                ? `- 最常用 Top ${stats.topUsed.length}：\n${stats.topUsed
+                    .map((p) => `    ${p.title}（${p.usageCount}次）`)
+                    .join("\n")}`
+                : "- 尚无使用记录",
+              stats.recentUsed.length
+                ? `- 最近使用：${stats.recentUsed.map((p) => p.title).join("、")}`
+                : "",
+              stats.tagStats.length
+                ? `- 标签分布：${stats.tagStats.slice(0, 6).map((t) => `${t.name}(${t.count})`).join("、")}`
+                : "- 暂无标签",
+              `- 回收站条数：${stats.trashCount}`,
+            ];
+            let output = lines.filter((l) => l !== "").join("\n");
+            if (isAiAvailable()) {
+              const settings = await getSettings();
+              const comment = await commentOnStats(output, settings).catch(() => "");
+              if (comment) output += `\n\n【AI 点评】\n${comment}`;
+            }
+            return { kind: "success", text: output };
+          }
+
+          return { kind: "error", text: copy.unknownFlag };
         },
       });
     });

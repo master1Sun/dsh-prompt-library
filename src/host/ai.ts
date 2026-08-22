@@ -13,6 +13,7 @@ import { BlockAssembler, createUserMessage } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, LlmRuntime, LlmModelInfo } from "@deepseek-ai/dsh-llm";
 import type { PluginSettings, Prompt } from "../types.js";
 import { listTags, updatePrompt } from "./store.js";
+import { parseRefineResult, type AiRefineResult } from "./refine.js";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { appendMemory, buildCharacterSystem, noteInsight, readCharacterDocs } from "./character.js";
@@ -111,15 +112,6 @@ export async function listAiSelectables(): Promise<AiSelectable[]> {
     });
   }
   return out;
-}
-
-/** AI 完善结果：AI 生成的标题/标签/摘要/正文，以及用于画像的一句话洞察。 */
-export interface AiRefineResult {
-  title: string;
-  tags: string[];
-  summary: string;
-  body: string;
-  insight: string;
 }
 
 /**
@@ -354,33 +346,9 @@ async function collectTextWithFallback(
   return undefined;
 }
 
-/** 从模型输出中容错解析 JSON：剥离 markdown 围栏，截取首个对象。 */
+/** 从模型输出中容错解析完善结果；具体实现见 refine.ts（可脱离 AI 单独测试）。 */
 function parseJson(text: string): AiRefineResult | undefined {
-  let json = text.trim();
-  const fence = json.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fence) json = fence[1]!.trim();
-  const start = json.indexOf("{");
-  const end = json.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) return undefined;
-  try {
-    const parsed = JSON.parse(json.slice(start, end + 1)) as Partial<AiRefineResult>;
-    const body = typeof parsed.body === "string" ? parsed.body.trim() : "";
-    if (!body) return undefined;
-    const tags = Array.isArray(parsed.tags)
-      ? parsed.tags
-          .filter((t): t is string => typeof t === "string" && !!t.trim())
-          .map((t) => t.trim())
-      : [];
-    return {
-      title: typeof parsed.title === "string" ? parsed.title.trim() : "",
-      tags,
-      summary: typeof parsed.summary === "string" ? parsed.summary.trim() : "",
-      body,
-      insight: typeof parsed.insight === "string" ? parsed.insight.trim() : "",
-    };
-  } catch {
-    return undefined;
-  }
+  return parseRefineResult(text);
 }
 
 /**
@@ -446,6 +414,57 @@ export async function enrichLearnedPrompt(prompt: Prompt, settings: PluginSettin
   logAI(
     `enrich: 完成 prompt="${result.title || prompt.title}" body ${changed ? "已改写" : "未改写"} 洞察="${result.insight}"`,
   );
+}
+
+/**
+ * AI 专业完善一段提示词正文（只返回结果，不写回词库）。
+ *
+ * 与「润色」（polishPromptBody：换得更简洁精炼、保持原长度甚至更短）完全相反：
+ * 此处扩写完善 —— 在保留原意与核心要求的前提下，补充方法、步骤、约束与自查要点，
+ * 用清晰结构组织，使提示词更全面、更专业、更可执行。
+ * 与 -AI 一样不特殊处理 {{}} 模板变量，交由 AI 正常处理。
+ * 供 `/prompts -enrich` 使用，把完善后的正文填入聊天框。
+ * 无可用 LLM / 无法解析路由 / 调用失败时返回 undefined。
+ */
+export async function enrichPromptProfessional(
+  body: string,
+  settings: PluginSettings,
+): Promise<string | undefined> {
+  logAI(`enrich: 开始 正文长度=${body.length}`);
+  if (!llm) {
+    logAI("enrich: 跳过（llm 服务未注入）");
+    return undefined;
+  }
+  const candidates = await resolveCandidates(llm, settings);
+  if (candidates.length === 0) return undefined;
+  const docs = await readCharacterDocs();
+  logAI(`enrich: 灵魂上下文 USER=${docs.USER.length} 字 MEMORY=${docs.MEMORY.length} 字`);
+  const system = [
+    "你是一名专业的提示词完善助手，擅长把用户的提示词完善成更全面、更专业、结构完整、可直接执行的高质量作品。",
+    "",
+    "【用户档案 USER.md】这是用户习惯、偏好与关注领域，请贴合（可能为空）：",
+    docs.USER.trim() || "（暂无）",
+    "",
+    "【长期记忆 MEMORY.md】这是此前沉淀的用户风格与经验洞察，供你参考（可能为空）：",
+    docs.MEMORY.trim() || "（暂无）",
+    "",
+    "要求（与「润色」相反：润色是把内容换得更简洁精炼；此处是扩写完善，使其更完整专业）：",
+    "- 只完善提示词正文本身，不要涉及标题、标签、分类；",
+    "- 保留原意与核心要求，在此基础上扩写完善：补充必要的方法、步骤、约束、边界与自查要点，使提示词更全面、更专业、更可执行；",
+    "- 用清晰的结构组织内容（分步骤 / 分要点 / 分阶段），方便使用者逐项落实；",
+    "- 使用专业、精准、规范的表达，避免含糊与口语化；",
+    "- 不要刻意缩短或压缩内容，适当扩充细节以提升完成度；",
+    "- 直接输出完善后的提示词正文，不要任何解释或 Markdown 代码块。",
+  ].join("\n");
+  const text = await collectTextWithFallback(
+    llm,
+    candidates,
+    await withCharacterSystem(system, docs),
+    `请把以下提示词完善成更专业、更全面、结构完整的版本：\n\n${body}`,
+  );
+  if (!text) return undefined;
+  logAI(`enrich: 完成 结果长度=${text.length}`);
+  return text;
 }
 
 /**
@@ -557,6 +576,39 @@ async function generateInsight(body: string, settings: PluginSettings): Promise<
     "- 直接输出这一句话，不要任何解释或 Markdown 代码块。",
   ].join("\n");
   const content = `请提炼以下提示词反映的用户风格或关注领域：\n\n${body}`;
+  const text = await collectTextWithFallback(
+    llm,
+    candidates,
+    await withCharacterSystem(system, docs),
+    content,
+  );
+  return text?.trim() ?? "";
+}
+
+/**
+ * 依据「提示词库使用统计」文本调用 AI 生成一段中文点评（总结现状 + 给出可执行建议）。
+ * 供 `/prompts -data` 在统计数字之后追加「AI 点评」。AI 不可用或失败时返回空字符串。
+ */
+export async function commentOnStats(
+  statsText: string,
+  settings: PluginSettings,
+): Promise<string> {
+  if (!llm) return "";
+  const candidates = await resolveCandidates(llm, settings);
+  if (candidates.length === 0) return "";
+  const docs = await readCharacterDocs();
+  const system = [
+    "你是一名提示词库运营分析助手，擅长根据统计数据给出简洁、可执行的点评与改进建议。",
+    "",
+    "【用户档案 USER.md】这是用户习惯、偏好与关注领域（可能为空）：",
+    docs.USER.trim() || "（暂无）",
+    "",
+    "要求：",
+    "- 用一段中文点评以上统计数据（100 字以内），指出亮点与可优化点；",
+    "- 结合用户档案给出接地气、可执行的建议，不要空话套话；",
+    "- 直接输出点评文本，不要标题、编号或 Markdown 代码块，不要复述原始统计数据。",
+  ].join("\n");
+  const content = `以下是提示词库的使用统计数据，请点评：\n\n${statsText}`;
   const text = await collectTextWithFallback(
     llm,
     candidates,

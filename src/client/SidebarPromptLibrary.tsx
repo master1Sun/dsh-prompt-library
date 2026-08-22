@@ -914,9 +914,6 @@ export function SidebarPromptLibrary(props?: {
                           display: "flex",
                           flexDirection: "column",
                           gap: 8,
-                          ...(isRecent(p.id)
-                            ? { background: "rgba(142, 197, 255, 0.10)", borderLeft: `3px solid ${TONE.accent}` }
-                            : {}),
                         }}
                       >
                         <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", minWidth: 0 }}>
@@ -925,7 +922,6 @@ export function SidebarPromptLibrary(props?: {
                             fontWeight: 460,
                             flex: "1 1 auto",
                             minWidth: 0,
-                            ...(isRecent(p.id) ? { color: TONE.accent } : {}),
                             whiteSpace: "nowrap",
                             overflow: "hidden",
                             textOverflow: "ellipsis",

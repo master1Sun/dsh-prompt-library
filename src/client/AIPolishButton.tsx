@@ -3,19 +3,19 @@
  *
  * 注册到 `conversation.input.left` 插槽：composer 工具栏中「提示词库」旁的
  * 一个润色星星按钮。点击后获取当前输入框草稿，调用 harness AI 润色，
- * 处理中按钮图标显示旋转动画；润色完成后弹出结果面板，支持一键覆盖输入框内容，
- * 并自动把润色内容并入用户画像（AI 自学习），越用越贴合用户风格。
+ * 处理中按钮图标显示旋转动画；润色完成后弹出结果面板，支持一键覆盖输入框内容。
  *
- * AI 能力完全复用 host 侧 ai.ts（polishPromptBody / learnPolished），
+ * AI 能力完全复用 host 侧 ai.ts（polishPromptBody），
  * 本组件只做浏览器端编排，不重复实现 AI 调用逻辑。
  */
 import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { PL_BUTTON_CSS, plBtn } from "./button-style.js";
-import { getSettings as apiGetSettings, learnPolished, polishPrompt } from "./api.js";
+import { getSettings as apiGetSettings, polishPrompt } from "./api.js";
 import type { PluginSettings } from "../types.js";
 import { DEFAULT_SETTINGS } from "../types.js";
 import { type PLTranslate, usePLT } from "./i18n.js";
+import { useFillDraft } from "./data-sync.js";
 
 /**
  * `conversation.input.left` 的最小属性合约（与 PromptLibraryButton 一致）。
@@ -101,6 +101,13 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
 
   const settings = useSettings();
 
+  // 兜底监听 host 推送的 fill-draft（/prompts -AI / -enrich 结果）：
+  // 与 PromptLibraryButton 同slot挂载，任一方存在都能把内容填进聊天框。
+  useFillDraft((body) => {
+    console.log("[prompt-library] AIPolishButton 应用 fill-draft 到输入框", body.length);
+    if (body) inputActions.setDraft(body);
+  });
+
   const [status, setStatus] = useState<"idle" | "polishing" | "done" | "error">("idle");
   const [result, setResult] = useState("");
   const [error, setError] = useState("");
@@ -121,7 +128,7 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
     setError("");
   }, []);
 
-  /** 点击润色：取输入框内容 → 调 AI 润色 → 展示结果并纳入画像自学习。 */
+  /** 点击润色：取输入框内容 → 调 AI 润色 → 展示结果供用户复制/插入。 */
   const handlePolish = useCallback(() => {
     const text = draft.trim();
     if (!text) {
@@ -135,8 +142,6 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
       .then(({ polished }) => {
         setResult(polished);
         setStatus("done");
-        // 把润色能力写回用户画像，作为学习能力储存（AI 自学习）
-        learnPolished(polished).catch(() => {});
         showToast(T("pl.polishDoneLearn"));
       })
       .catch((err: unknown) => {

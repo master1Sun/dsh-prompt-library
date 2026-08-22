@@ -1,10 +1,10 @@
 // 聊天内容选中文字后的「添加提示词」独立入口。
 // 不依赖右侧面板：开启开关后，在聊天区高亮选中文本会浮出「+ 添加提示词」按钮，
 // 点击弹出独立居中弹窗，选中文本预填到正文，保存即入库。
-import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import { createPrompt as apiCreate, listPrompts as apiList } from "./api.js";
+import { useEffect, useCallback, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { createPrompt as apiCreate, listTags as apiListTags } from "./api.js";
 import { markRecent } from "./recent-created.js";
-import { notifyDataChanged } from "./data-sync.js";
+import { notifyDataChanged, useDataChanged } from "./data-sync.js";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { plBtn } from "./button-style.js";
 import { TagInput } from "./TagInput.js";
@@ -112,17 +112,18 @@ export function SelectionAddPrompt(props: Props): ReactNode {
   // 已有标签候选（下拉提示用）
   const [allTags, setAllTags] = useState<string[]>([]);
 
-  // 加载已有标签；功能启用时拉取一次
-  useEffect(() => {
+  // 加载已有标签作为下拉候选；功能启用时拉取一次，并在词库/标签数据变化时刷新
+  //（保证「设置里新增的标签」能立即出现在候选里）。
+  const loadTags = useCallback(() => {
     if (!enabled) return;
-    apiList()
-      .then((list) => {
-        const s = new Set<string>();
-        for (const p of list) for (const t of p.tags ?? []) s.add(t);
-        setAllTags(Array.from(s).sort());
-      })
+    apiListTags()
+      .then((list) => setAllTags(list.map((t) => t.name).sort()))
       .catch(() => {});
   }, [enabled]);
+  useDataChanged(loadTags);
+  useEffect(() => {
+    loadTags();
+  }, [loadTags]);
 
   // 监听聊天区选区：仅在功能开启时生效
   useEffect(() => {
@@ -349,7 +350,7 @@ export function SelectionAddPrompt(props: Props): ReactNode {
                     size="sm"
                     className={plBtn("ghost", "sm")}
                     style={{ flex: "0 0 auto" }}
-                    onMouseDown={(e) => e.preventDefault()}
+                    onMouseDown={(e: ReactMouseEvent<HTMLButtonElement>) => e.preventDefault()}
                     onClick={(e: ReactMouseEvent<HTMLButtonElement>) => {
                       // 阻止 mousedown 默认行为以免抢夺正文框焦点，确保光标位置有效、不会回滚到顶部。
                       // 仅点击「{{}}」按钮本身才插入，阻止 label/行内其他点击误触发

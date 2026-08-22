@@ -33,7 +33,6 @@ import {
   updatePrompt as apiUpdate,
   usePrompt as apiUse,
   polishPrompt,
-  learnPolished,
 } from "./api.js";
 import { isRecent, markRecent } from "./recent-created.js";
 import { useHoverDetail } from "./HoverDetail.js";
@@ -85,7 +84,7 @@ const HOVER_W = 300;
 const HOVER_GAP = 12;
 
 /** 右侧边栏固定宽度：不随共享的 panelWidth 设置变化。 */
-const SIDEBAR_WIDTH = 360;
+const SIDEBAR_WIDTH = 380;
 
 function useSettings(): PluginSettings {
   const [settings, setSettings] = useState<PluginSettings>(DEFAULT_SETTINGS);
@@ -140,16 +139,6 @@ export function SidebarPromptLibrary(props?: {
   >({ status: "idle" });
   // AI 润色结果（可编辑）
   const [polishResult, setPolishResult] = useState("");
-  // 当前润色结果是否已获用户确认并纳入画像学习
-  const [polishLearned, setPolishLearned] = useState(false);
-  // 轻量成功提示（toast），短暂显示后自动消失
-  const [toast, setToast] = useState<string | null>(null);
-  const toastTimer = useRef<number | null>(null);
-  const showToast = useCallback((msg: string) => {
-    setToast(msg);
-    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setToast(null), 2600);
-  }, []);
   // 模板变量填充弹窗：插入前填写 {{变量}} 占位符
   const [template, setTemplate] = useState<{ prompt: Prompt; mode: "insert" | "overwrite" } | null>(null);
   // 待确认删除的提示词（自定义确认弹窗，替代系统 confirm）
@@ -380,32 +369,20 @@ export function SidebarPromptLibrary(props?: {
       .catch(() => {});
   }, []);
 
-  // 调用 AI 润色提示词正文，成功后进入润色结果视图。
-  // 勾选「AI 智能完善」时，润色结果自动纳入 AI 自学习，无需用户确认；
-  // 未勾选时，仅展示结果，由用户点击「确认学习」后再纳入画像。
+  // 调用 AI 润色提示词正文，成功后进入润色结果视图，用户自行选择复制/插入/保存。
   const startPolish = useCallback((p: Prompt) => {
     setPolish({ status: "loading", id: p.id });
     polishPrompt(p.body).then(
       (res) => {
         setPolishResult(res.polished);
-        setPolishLearned(false);
         setPolish({ status: "done", id: p.id });
-        if (settings.aiEnrichEnabled) {
-          learnPolished(res.polished).then(
-            () => {
-              setPolishLearned(true);
-              showToast(T("pl.learnSuccessAuto"));
-            },
-            (e: unknown) => setError(e instanceof Error ? e.message : String(e)),
-          );
-        }
       },
       (e: unknown) => {
         setError(e instanceof Error ? e.message : String(e));
         setPolish({ status: "idle" });
       },
     );
-  }, [settings.aiEnrichEnabled, showToast, T]);
+  }, []);
 
   // 关闭润色结果视图
   const closePolish = useCallback(() => {
@@ -427,18 +404,6 @@ export function SidebarPromptLibrary(props?: {
       notifyDataChanged();
     }, (e: unknown) => setError(e instanceof Error ? e.message : String(e)));
   }, [polish, polishResult, prompts, closePolish]);
-
-  // 用户确认许可：把润色结果并入用户画像学习
-  const confirmLearn = useCallback(() => {
-    if (polish.status !== "done" || polishLearned) return;
-    learnPolished(polishResult).then(
-      () => {
-        setPolishLearned(true);
-        showToast(T("pl.learnSuccessManual"));
-      },
-      (e: unknown) => setError(e instanceof Error ? e.message : String(e)),
-    );
-  }, [polish, polishResult, polishLearned, showToast, T]);
 
   // 分组渲染顺序：
   // 1. 最近使用分组（30 天内有使用记录，按使用次数降序取前 10 条）固定在列表最前，
@@ -804,11 +769,6 @@ export function SidebarPromptLibrary(props?: {
                   <strong style={{ fontSize: 13 }}>{T("pl.polishResult")}</strong>
                   <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={closePolish}>{T("pl.close")}</Button>
                 </div>
-                <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5 }}>
-                  {settings.aiEnrichEnabled
-                    ? T("pl.polishResultDescAuto")
-                    : T("pl.polishResultDescManual")}
-                </div>
                 <textarea
                   value={polishResult}
                   onChange={(e) => setPolishResult(e.target.value)}
@@ -825,29 +785,6 @@ export function SidebarPromptLibrary(props?: {
                   <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={savePolish}>
                     {T("pl.saveToLibrary")}
                   </Button>
-                  {settings.aiEnrichEnabled ? (
-                    <span
-                      style={{
-                        ...smallGhostStyle,
-                        color: polishLearned ? TONE.quiet : TONE.accent,
-                        borderStyle: "dashed",
-                        opacity: polishLearned ? 0.7 : 1,
-                      }}
-                    >
-                      {polishLearned ? T("pl.autoLearnedTag") : T("pl.autoLearning")}
-                    </span>
-                  ) : (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className={plBtn("ghost", "sm")}
-                      onClick={confirmLearn}
-                      disabled={polishLearned}
-                    >
-                      {polishLearned ? T("pl.learned") : T("pl.confirmLearn")}
-                    </Button>
-                  )}
                 </div>
               </div>
             ) : (
@@ -1011,7 +948,7 @@ export function SidebarPromptLibrary(props?: {
                     size="sm"
                     className={plBtn("ghost", "sm")}
                     style={{ flex: "0 0 auto" }}
-                    onMouseDown={(e) => e.preventDefault()}
+                    onMouseDown={(e: ReactMouseEvent<HTMLButtonElement>) => e.preventDefault()}
                     onClick={(e: ReactMouseEvent<HTMLButtonElement>) => {
                       // 阻止 mousedown 默认行为以免抢夺正文框焦点，确保光标位置有效、不会回滚到顶部。
                       // 仅点击「{{}}」按钮本身才插入，阻止 label/行内其他点击误触发
@@ -1073,28 +1010,6 @@ export function SidebarPromptLibrary(props?: {
         </section>
         {/* 悬停详情卡片必须在面板 section 之外：面板带 transform 动画，会破坏内部 fixed 元素的定位 */}
         {hoverEnabled && hover.overlay}
-      {/* 成功提示浮层 */}
-      {toast && (
-        <div
-          role="status"
-          style={{
-            position: "fixed",
-            left: "50%",
-            bottom: 24,
-            transform: "translateX(-50%)",
-            zIndex: 2147483647,
-            padding: "9px 16px",
-            background: "rgba(46, 160, 67, 0.94)",
-            color: "#ffffff",
-            borderRadius: 8,
-            fontSize: 12,
-            fontFamily: MONO,
-            pointerEvents: "none",
-          }}
-        >
-          {toast}
-        </div>
-      )}
       {/* 模板变量填充弹窗：插入含 {{变量}} 的提示词前弹出 */}
       <TemplateFillModal
         open={template !== null}
@@ -1132,17 +1047,4 @@ const inputStyle: CSSProperties = {
   fontFamily: MONO,
   fontSize: 13,
   outline: "none",
-};
-
-const smallGhostStyle: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  padding: "3px 9px",
-  color: "var(--dsw-alias-label-secondary, #9daabd)",
-  background: "transparent",
-  border: "1px solid var(--dsw-alias-border-l2, rgba(196, 211, 232, 0.16))",
-  borderRadius: 7,
-  cursor: "default",
-  fontFamily: MONO,
-  fontSize: 11,
 };

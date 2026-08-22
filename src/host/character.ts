@@ -6,18 +6,16 @@
  * - AGENTS.md   工作手册：做事流程、任务规则、执行步骤
  * - USER.md     用户档案：用户习惯、偏好、环境信息
  * - IDENTITY.md 对外身份：名字、头衔、对外展示形象
- * - MEMORY.md   长期记忆：跨会话沉淀的经验（AI 可维护）
+ * - MEMORY.md   长期记忆：跨会话沉淀的经验（用户手动维护）
  *
  * 能力：
  * - ensureCharacterFiles：文件缺失时用默认模板初始化，并创建目录；
  * - readCharacterDocs：读取全部维度的当前内容；
  * - buildCharacterSystem：把各维度组装成追加到 AI system prompt 的边界段落，
- *   让 AI 在润色 / 完善 / 洞察时遵守这些灵魂边界；
- * - appendMemory：AI 维护长期记忆 —— 把一条经验追加写入 MEMORY.md。
+ *   让 AI 在润色 / 完善 / 洞察时遵守这些灵魂边界。
  *
- * AI 可维护全部文件：真正由 AI 自动写入的是 MEMORY（跨会话经验沉淀）；
- * SOUL/AGENTS/USER/IDENTITY 是用户的显式设定，AI 只读引用、不擅自改写，
- * 避免算法覆盖用户手写的灵魂边界。
+ * 上述文件均为用户的显式设定（含缺省模板），AI 只读引用、不擅自改写：
+ * 不提供任何「自学习写回 USER.md / MEMORY.md」的能力。
  */
 import { readFileSync, statSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -81,45 +79,7 @@ function stripBom(text: string): string {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
-// ── AI 维护的大小与结构约束（让自学习文件始终精简有界）────────────────────
-/** MEMORY.md 的大标题。 */
-const MEMORY_H1 = "# MEMORY · 长期记忆";
-/** MEMORY.md 的引言。 */
-const MEMORY_INTRO = "> AI 跨会话沉淀的经验与洞察，越用越熟练。由系统维护：修改、补充、裁剪。";
-/** MEMORY.md 最多保留的经验条数，超出裁掉最旧的。 */
-const MAX_MEMORY_ENTRIES = 20;
-/** USER.md 里 AI 维护的「学习到的风格与偏好」小节标题。 */
-const USER_INSIGHT_HEADING = "## 学习到的风格与偏好";
-/** USER.md 里学习到的洞察最多保留条数，超出裁掉最旧的。 */
-const MAX_USER_INSIGHTS = 20;
-
-// ── 填充价值边界：只把有价值的内容写入灵魂文件，避免噪音污染 ──────────────
-/** 过短文本视为噪音（如「无」「好」），不沉淀。 */
-const MIN_INSIGHT_LENGTH = 8;
-/** 超过该长度说明不是「一句话洞察」，也不写入。 */
-const MAX_INSIGHT_LENGTH = 60;
-/** 命中这些占位 / 空壳文本时不写入。 */
-const INSIGHT_NOISE = ["（暂无）", "（无）", "暂无", "无", "待补充", "none", "n/a"];
-
-/** 判断一段自学习文本是否有价值：长度适中且非占位噪音。 */
-function isValuable(text: string, lenient = false): boolean {
-  const t = text.trim();
-  if (t.length < MIN_INSIGHT_LENGTH) return false;
-  if (!lenient && t.length > MAX_INSIGHT_LENGTH) return false;
-  const low = t.toLowerCase();
-  return !INSIGHT_NOISE.some((n) => low.includes(n));
-}
-
-/** 读取文件内容；文件缺失或读取失败返回空字符串。 */
-async function readUnsafe(path: string): Promise<string> {
-  try {
-    return stripBom(await readFile(path, "utf8"));
-  } catch {
-    return "";
-  }
-}
-
-/** 各维度的默认模板：提供一套通用助手人设，用户可直接编辑，AI 据此遵守并自学习。 */
+/** 各维度的默认模板：提供一套通用助手人设，用户可直接编辑，AI 据此遵守。 */
 const DEFAULT_TEMPLATES: Record<CharacterKind, string> = {
   SOUL: `# SOUL · 灵魂
 
@@ -160,25 +120,27 @@ const DEFAULT_TEMPLATES: Record<CharacterKind, string> = {
 - 相似内容优先复用既有记忆，不重复造轮子。
 
 ## 执行步骤
-1. 读取用户待学习 / 待润色的内容。
+1. 读取用户待润色 / 待整理的内容。
 2. 参考 USER.md 的风格与 MEMORY.md 的经验。
-3. 产出结果，并把有价值的洞察沉淀到 USER/MEMORY（有界）。
+3. 产出清晰、通用、可直接复用、贴合用户风格的结果。
 `,
   USER: `# USER · 用户档案
 
-> 用户的习惯、偏好、环境信息。AI 据此贴合用户风格；本文件随自学习持续补充。
+> 用户的习惯、偏好、环境信息。AI 据此贴合用户风格；可随时修改补充。
 
 ## 习惯
-- 写作风格 / 偏好格式：由 AI 根据你的使用习惯自动学习
+- 写作风格：简洁、务实、条理清晰
+- 偏好格式：清晰小标题配合分点列举
 
 ## 常用领域 / 场景
-- 由 AI 根据你的提示词自动归纳
+- 提示词梳理：把零散输入整理成清晰、通用、可复用的提示词
+- AI 润色 / 完善：让表达更专业、内容更完整
 
 ## 环境信息
-- 由 AI 在学习中补充
+- 语言：中文为主，兼容英文术语
 
-## 学习到的风格与偏好
-（AI 会根据你的使用习惯持续补充有价值的洞察，始终有上限）
+## 补充说明
+（在此记录你在使用中的个性化习惯、偏好与环境信息）
 `,
   IDENTITY: `# IDENTITY · 对外身份
 
@@ -195,7 +157,10 @@ const DEFAULT_TEMPLATES: Record<CharacterKind, string> = {
 `,
   MEMORY: `# MEMORY · 长期记忆
 
-> AI 跨会话沉淀的经验与洞察，越用越懂用户。由系统自动维护：修改、补充、裁剪。
+> 供 AI 跨会话参考的经验与洞察，帮助 AI 持续理解你。由用户手动维护：修改、补充、裁剪。
+
+## 用户在意的点
+- （可记录你希望 AI 跨会话记住的偏好、经验与注意事项）
 `,
 };
 
@@ -259,89 +224,6 @@ export function buildCharacterSystem(docs: Record<CharacterKind, string>): strin
 }
 
 /**
- * 把一条经验**修改/补充**写入 MEMORY.md（AI 维护长期记忆，有界）。
- *
- * 维护策略（让技能越用越熟练、文件不过大）：
- * - 内容高度相似的条目会被替换，而不是无限追加（修改式）；
- * - 只保留最近 MAX_MEMORY_ENTRIES 条，超出裁掉最旧的（补充式 + 有界）；
- * - 保留带时间戳的历史，跨会话持续累积但始终有上限。
- */
-export async function appendMemory(entry: string): Promise<void> {
-  const path = characterPath("MEMORY");
-  const text = entry.trim();
-  if (!text) return;
-  // 价值边界：过短或占位噪音不沉淀为经验
-  if (!isValuable(text, true)) return;
-  const existing = await readUnsafe(path);
-  const stamp = new Date().toISOString().replace("T", " ").slice(0, 19);
-  const block = `## ${stamp}\n${text}`;
-
-  // 按顶层 `## ` 标题拆分出已有条目（保留首个 # H1 大标题与引言）
-  const sections = existing
-    .split(/(?=^## )/m)
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  // 相似去重：正文前若干字符撞到已有条目则替换之（只记一种写法，收紧记忆）
-  const key = text.slice(0, 40);
-  const dupIdx = sections.findIndex((s) => s.startsWith("## ") && s.includes(key));
-  if (dupIdx >= 0) sections.splice(dupIdx, 1, block);
-  else sections.push(block);
-
-  // 有界：只保留最近 MAX_MEMORY_ENTRIES 条经验
-  const kept = sections.slice(-MAX_MEMORY_ENTRIES);
-
-  await mkdir(dirname(path), { recursive: true });
-  const body = [MEMORY_H1, "", MEMORY_INTRO, "", kept.join("\n\n")].join("\n");
-  await writeFile(path, `${body}\n`, "utf8");
-}
-
-/**
- * 把一条 AI 洞察**补充**进 USER.md 的「学习到的风格与偏好」小节（有界）。
- *
- * 维护策略：
- * - 高度相似的洞察会被更新，而不是无限堆叠（修改式）；
- * - 只保留最近 MAX_USER_INSIGHTS 条，超出裁掉最旧的（有界）；
- * - AI 越用越懂用户，但始终有上限，不让文件膨胀。
- */
-export async function noteInsight(insight: string): Promise<void> {
-  const text = insight.trim();
-  if (!text) return;
-  // 价值边界：太短/太长或占位噪音不写入，只填有价值洞察
-  if (!isValuable(text)) return;
-  const key = text.slice(0, 30);
-  const path = characterPath("USER");
-  await mkdir(dirname(path), { recursive: true });
-  const existing = await readUnsafe(path);
-
-  // 去掉旧小节内已有列表，重建
-  const lines = existing.split("\n");
-  const sectionStart = lines.findIndex((l) => l.trim() === USER_INSIGHT_HEADING);
-  const keep: string[] = [];
-  if (sectionStart >= 0) {
-    // 收集该小节内已有的洞察行
-    let end = sectionStart + 1;
-    while (end < lines.length && !lines[end]!.trim().startsWith("#")) {
-      const t = lines[end]!.trim();
-      if (t.startsWith("- ")) keep.push(t);
-      end++;
-    }
-    // 移除旧小节（从标题到下一个标题）
-    lines.splice(sectionStart, end - sectionStart);
-  }
-  // 相似去重
-  const sameIdx = keep.findIndex((l) => l.includes(key));
-  if (sameIdx >= 0) keep.splice(sameIdx, 1, `- ${text}`);
-  else keep.push(`- ${text}`);
-  // 有界：只保留最近 MAX_USER_INSIGHTS 条
-  const capped = keep.slice(-MAX_USER_INSIGHTS);
-
-  lines.push(USER_INSIGHT_HEADING, "", ...capped, "");
-  const body = lines.filter(Boolean).join("\n").replace(/\n{3,}/g, "\n\n");
-  await writeFile(path, `${body}\n`, "utf8");
-}
-
-/**
  * 同步读取五维灵魂边界文本（供每次对话组装 system prompt 时调用）。
  *
  * 与 readCharacterDocs 不同，这里是**同步**返回：宿主在组装对话提示时是同步
@@ -384,14 +266,18 @@ export function characterSystemSync(): string {
   if (unchanged && charSystemCache) return charSystemCache.assembled;
 
   const docs: Record<CharacterKind, string> = { SOUL: "", AGENTS: "", USER: "", IDENTITY: "", MEMORY: "" };
+  let missing = false;
   for (const kind of CHARACTER_KINDS) {
     try {
       docs[kind] = stripBom(readFileSync(characterPath(kind), "utf8")).trim();
     } catch {
-      /* 文件缺失则留空 */
+      // 文件缺失则留空；并在组装后触发默认模板重建，保证删掉的文件会自动找回
+      missing = true;
     }
   }
   const assembled = buildCharacterSystem(docs);
   charSystemCache = { metas, assembled };
+  // 发现缺失的灵魂文件时，后台重建默认模板（幂等：只补缺失的文件）
+  if (missing) void ensureCharacterFiles().catch(() => {});
   return assembled;
 }

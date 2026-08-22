@@ -20,6 +20,7 @@ import { AIPolishButton } from "./AIPolishButton.js";
 import { SettingsSection } from "./SettingsSection.js";
 import { SettingsDataSection } from "./SettingsDataSection.js";
 import { en, NS, zh } from "./i18n.js";
+import { startDataChangedSubscription } from "./data-sync.js";
 import {
   registerSettingsNavIcon,
   SETTINGS_NAV_CSS,
@@ -59,6 +60,16 @@ export function apply(ctx: ClientCtx): void {
     () => ctx.locale.register(NS, { zh, en }),
     "prompt-library: dictionaries",
   );
+  // 页面加载即建立到 host 的 SSE 订阅，从而在组件挂载前就具备接收
+  // `/prompts -AI`（fill-draft）/ `/prompts -e`（export-download）的能力，
+  // 避免依赖某个按钮的 useEffect 才建连而漏再接早到的推送。
+  ctx.effect(
+    () => {
+      startDataChangedSubscription();
+      return () => {};
+    },
+    "prompt-library: sse subscription",
+  );
   // 绑定命名空间的翻译函数，用于设置导航标签（每次读取当前语言）
   const t = ctx.locale.bind(NS);
 
@@ -76,7 +87,7 @@ export function apply(ctx: ClientCtx): void {
   );
 
   // 注册 AI 润色按钮：紧邻提示词库按钮（order 61），复用同一输入框插槽。
-  // AI 能力复用 host 侧 ai.ts（polishPromptBody / learnPolished）。
+  // AI 能力复用 host 侧 ai.ts（polishPromptBody）。
   ctx.slots.inject("conversation.input.left", () =>
     ctx.slots.register(
       {

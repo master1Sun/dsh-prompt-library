@@ -153,11 +153,6 @@ export function polishPrompt(
   });
 }
 
-/** 用户确认许可后，把润色内容并入用户画像（AI 自学习）。 */
-export function learnPolished(body: string): Promise<{ learned: boolean }> {
-  return send<{ learned: boolean }>("POST", "/api/prompt-library/ai/polish/learn", { body });
-}
-
 /** 设置界面用：单个提供方及其模型列表。 */
 export interface ClientAiSelectable {
   provider: string;

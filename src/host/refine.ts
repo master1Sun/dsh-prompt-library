@@ -6,13 +6,12 @@
  * （见 refine.test.ts）。host 的 ai.ts 复用本模块完成同一段 JSON 解析逻辑。
  */
 
-/** AI 完善结果：AI 生成的标题/标签/摘要/正文，以及用于画像的一句话洞察。 */
+/** AI 完善结果：AI 生成的标题/标签/摘要/正文。 */
 export interface AiRefineResult {
   title: string;
   tags: string[];
   summary: string;
   body: string;
-  insight: string;
 }
 
 /**
@@ -47,7 +46,6 @@ export function parseRefineResult(text: string): AiRefineResult | undefined {
       tags: tags.slice(0, 1),
       summary: typeof parsed.summary === "string" ? parsed.summary.trim() : "",
       body,
-      insight: typeof parsed.insight === "string" ? parsed.insight.trim() : "",
     };
   } catch {
     return undefined;

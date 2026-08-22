@@ -1,13 +1,13 @@
 /**
- * Host 侧 AI 自学习完善模块。
+ * Host 侧 AI 润色 / 完善模块。
  *
  * 封装 harness 的 LLM 服务（ctx.llm.stream()）：
  * - registerLlm / isAiAvailable：由 host 入口在 llm 服务可用时注入引用；
- * - enrichLearnedPrompt：自动学习到新提示词后，在后台调用 AI 生成/完善
- *   标题、标签/分类、摘要/使用说明，并优化改写正文，同时把洞察写回用户画像，
- *   实现「越学越聪明」。
+ * - enrichLearnedPrompt：保存到词库后，在后台调用 AI 生成/完善
+ *   标题、标签/分类、摘要/使用说明，并优化改写正文（仅供词库内完善，不回写灵魂文件）；
+ * - polishPromptBody / enrichPromptProfessional：供界面与 /prompts 命令调用的润色与完善。
  *
- * 所有 AI 调用都带超时；任何失败都静默降级，绝不阻塞或破坏自动学习主流程。
+ * 所有 AI 调用都带超时；任何失败都静默降级，绝不阻塞或破坏主流程。
  */
 import { BlockAssembler, createUserMessage } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, LlmRuntime, LlmModelInfo } from "@deepseek-ai/dsh-llm";
@@ -16,7 +16,7 @@ import { listTags, updatePrompt } from "./store.js";
 import { parseRefineResult, type AiRefineResult } from "./refine.js";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { appendMemory, buildCharacterSystem, noteInsight, readCharacterDocs } from "./character.js";
+import { buildCharacterSystem, readCharacterDocs } from "./character.js";
 import { logDir } from "./paths.js";
 import type { CharacterKind } from "./paths.js";
 
@@ -64,9 +64,35 @@ function logAI(msg: string): void {
 /** 模块级持有的 harness LLM 服务（由 host 入口注入，可能为 undefined）。 */
 let llm: LlmRuntime | undefined;
 
+/**
+ * 候选路由的 TTL 缓存（秒级），避免每次 AI 调用都重新遍历 provider / listModels。
+ * 以「provider/model 手动配置」为缓存键；注册的 llm 服务变化时会清掉缓存。
+ */
+const ROUTE_CACHE_TTL_MS = 30_000;
+let routeCache: { key: string; ts: number; value: { provider: string; model: string }[] } | undefined;
+
+/** 清空路由缓存（llm 服务注入/注销、或设置变化时调用）。 */
+function clearRouteCache(): void {
+  routeCache = undefined;
+}
+
+/**
+ * AI 调用串行锁：同一时刻最多只有一个 LLM 网络调用在跑，
+ * 避免连续自动学习时瞬时并发打爆模型配额/拖慢主流程。
+ */
+let llmQueue: Promise<unknown> = Promise.resolve();
+function withLlmLock<T>(task: () => Promise<T>): Promise<T> {
+  const run = llmQueue.then(() => task());
+  // 无论任务成败都不中断后续排队任务（失败仅让当前调用降级）
+  llmQueue = run.catch(() => {});
+  return run;
+}
+
 /** 由 host 入口在 llm 服务可用/不可用时调用。 */
 export function registerLlm(runtime: LlmRuntime | undefined): void {
   llm = runtime;
+  // llm 服务变化后，旧 provider/模型列表不再可信，作废路由缓存
+  clearRouteCache();
 }
 
 /** 记录 llm 服务注入状态（供入口调用，用于排查 AI 完善未生效）。 */
@@ -145,6 +171,11 @@ async function resolveCandidates(
   runtime: LlmRuntime,
   settings: PluginSettings,
 ): Promise<{ provider: string; model: string }[]> {
+  const key = `${settings.aiProvider}|${settings.aiModel}`;
+  // 命中未过期的路由缓存时直接复用，避免反复 listModels
+  if (routeCache && routeCache.key === key && Date.now() - routeCache.ts < ROUTE_CACHE_TTL_MS) {
+    return routeCache.value;
+  }
   const candidates: { provider: string; model: string }[] = [];
   const seen = new Set<string>();
 
@@ -189,6 +220,7 @@ async function resolveCandidates(
   if (candidates.length === 0) {
     logAI("route: 未找到任何可用模型");
   }
+  routeCache = { key, ts: Date.now(), value: candidates };
   return candidates;
 }
 
@@ -204,7 +236,7 @@ function systemPrompt(
   // 标签库：优先复用已有标签，避免重复创建
   const tagLib = existingTags.length ? existingTags.join("、") : "（暂无）";
   return [
-    "你是一名提示词库整理助手，帮助用户把原始输入整理成高质量、可复用的提示词，并洞察用户的写作风格与关注领域。",
+    "你是一名提示词库整理助手，帮助用户把原始输入整理成高质量、可复用的提示词。",
     "",
     "【用户档案 USER.md】这是用户习惯、偏好与关注领域，请贴合（可能为空，越用越准）：",
     user,
@@ -216,7 +248,7 @@ function systemPrompt(
     tagLib,
     "",
     "请严格输出一个 JSON 对象，不要 Markdown 代码块，不要任何多余文字：",
-    '{ "title": "简洁标题", "tags": ["标签"], "summary": "用途摘要与使用说明", "body": "优化改写后的提示词正文", "insight": "一句话总结用户写作风格或关注领域" }',
+    '{ "title": "简洁标题", "tags": ["标签"], "summary": "用途摘要与使用说明", "body": "优化改写后的提示词正文" }',
     "",
     "要求：",
     "- title：简洁明了，不超过 30 字；",
@@ -229,7 +261,6 @@ function systemPrompt(
         ]
       : []),
     "- 若正文某处内容会因使用场景而变化（如角色、对象、主题、风格、细节等），可在那处新增命名清晰、贴合语境的 {{变量名}} 占位符，提升提示词可复用性；没有这种需求时不要画蛇添足；",
-    "- insight：用一句话描述这条提示词反映的用户写作风格或关注领域，用于持续完善用户档案。",
   ].join("\n");
 }
 
@@ -335,7 +366,8 @@ async function collectTextWithFallback(
   }
   for (const route of candidates) {
     logAI(`fallback: 尝试 provider=${route.provider} model=${route.model}`);
-    const text = await collectText(runtime, route, system, content);
+    // 通过全局锁串行执行，保证同一时刻只有一个 LLM 调用
+    const text = await withLlmLock(() => collectText(runtime, route, system, content));
     if (text !== undefined) {
       logAI(`fallback: 采用 provider=${route.provider} model=${route.model}`);
       return text;
@@ -354,8 +386,7 @@ function parseJson(text: string): AiRefineResult | undefined {
 /**
  * 后台完善一条自动学习到的提示词：
  * 1. 读取用户画像作为上下文，调用 harness LLM 生成标题/标签/摘要/改写正文；
- * 2. 把结果写回提示词库（标记 aiRefined，改写时保留 sourceBody）；
- * 3. 把洞察合并进用户画像（累积摘要、主题频次、最近样本）。
+ * 2. 把结果写回提示词库（标记 aiRefined，改写时保留 sourceBody）。
  *
  * 任何失败都静默返回，不影响主流程。
  */
@@ -365,6 +396,28 @@ export async function enrichLearnedPrompt(prompt: Prompt, settings: PluginSettin
     logAI(`enrich: 跳过（llm 服务未注入）prompt=${prompt.title}`);
     return;
   }
+  // 同一提示词只允许一个进行中的 AI 完善，避免并发重复生成
+  if (enrichInFlight.has(prompt.id)) {
+    logAI(`enrich: 跳过（${prompt.title} 已有完善任务进行中）`);
+    return;
+  }
+  enrichInFlight.add(prompt.id);
+  try {
+    await enrichLearnedPromptInner(prompt, settings);
+  } finally {
+    enrichInFlight.delete(prompt.id);
+  }
+}
+
+/** 正在 AI 完善的提示词 id 集合（去重用，防止同一提示词并发重复完善）。 */
+const enrichInFlight = new Set<string>();
+
+/** enrichLearnedPrompt 的实际执行体（被去重外层包裹）。 */
+async function enrichLearnedPromptInner(
+  prompt: Prompt,
+  settings: PluginSettings,
+): Promise<void> {
+  if (!llm) return;
   const candidates = await resolveCandidates(llm, settings);
   if (candidates.length === 0) return;
   const docs = await readCharacterDocs();
@@ -406,14 +459,7 @@ export async function enrichLearnedPrompt(prompt: Prompt, settings: PluginSettin
     sourceBody: changed ? prompt.body : undefined,
     aiRefined: true,
   });
-  // 自学习都写入灵魂文件：风格洞察进 USER.md，学习经验进 MEMORY.md（有界维护）
-  noteInsight(result.insight).catch((e) => logAI(`写 USER.md 洞察失败：${String(e)}`));
-  appendMemory(
-    `自动学习了提示词「${result.title || prompt.title}」，并提炼出用户风格洞察：${result.insight || "（无）"}`,
-  ).catch((e) => logAI(`写 MEMORY.md 经验失败：${String(e)}`));
-  logAI(
-    `enrich: 完成 prompt="${result.title || prompt.title}" body ${changed ? "已改写" : "未改写"} 洞察="${result.insight}"`,
-  );
+  logAI(`enrich: 完成 prompt="${result.title || prompt.title}" body ${changed ? "已改写" : "未改写"}`);
 }
 
 /**
@@ -423,7 +469,7 @@ export async function enrichLearnedPrompt(prompt: Prompt, settings: PluginSettin
  * 此处扩写完善 —— 在保留原意与核心要求的前提下，补充方法、步骤、约束与自查要点，
  * 用清晰结构组织，使提示词更全面、更专业、更可执行。
  * 与 -AI 一样不特殊处理 {{}} 模板变量，交由 AI 正常处理。
- * 供 `/prompts -enrich` 使用，把完善后的正文填入聊天框。
+ * 供 `/prompts -enrich` 使用，把完善后的正文返回打印到聊天。
  * 无可用 LLM / 无法解析路由 / 调用失败时返回 undefined。
  */
 export async function enrichPromptProfessional(
@@ -469,9 +515,8 @@ export async function enrichPromptProfessional(
 
 /**
  * AI 润色一段提示词正文（只返回结果，不写回词库；只润色内容本身）。
- * 结合用户画像（prompt-library-user.md 的自学习积累）润色，
+ * 结合用户档案（prompt-library-user.md 的用户画像）润色，
  * 保持原意与关键细节，优化表达，使其更贴合用户风格、清晰通用、可直接复用。
- * 是否把润色结果并入画像学习由用户确认（见 learnPolished），此处不自动学习。
  * 无可用 LLM / 无法解析路由 / 调用失败时返回 undefined。
  */
 export async function polishPromptBody(
@@ -530,59 +575,8 @@ export async function polishPromptBody(
     content,
   );
   if (!text) return undefined;
-  logAI(`polish: 完成 结果长度=${text.length}（等待用户确认许可后并入 USER/MEMORY 学习）`);
+  logAI(`polish: 完成 结果长度=${text.length}`);
   return text;
-}
-
-/**
- * 用户确认许可后，把一段 AI 润色内容并入灵魂文件（AI 自学习），
- * 让润色也积累用户习惯、越用越贴合。
- * 会调用 AI 从润色内容中提炼一句风格洞察，补充写入 USER.md；
- * 并把此次学习经验写入 MEMORY.md。AI 不可用或失败时静默降级。
- */
-export async function learnPolished(body: string, settings: PluginSettings): Promise<void> {
-  const sampleTitle = body.split("\n")[0]?.trim().slice(0, 30) || "AI 润色";
-  const insight = await generateInsight(body, settings);
-  noteInsight(insight).catch((e) => logAI(`写 USER.md 洞察失败（人工润色）：${String(e)}`));
-  appendMemory(`用户确认学习了润色内容「${sampleTitle}」。洞察：${insight || "（无）"}`).catch((e) =>
-    logAI(`写 MEMORY.md 经验失败（人工润色）：${String(e)}`),
-  );
-  logAI(
-    `polish: 用户确认学习 "${sampleTitle}" 长度=${body.length} 洞察长度=${insight.length}（已写入 USER/MEMORY）`,
-  );
-}
-
-/**
- * 从一段提示词内容中提炼一句话用户风格/关注领域洞察，
- * 用于补充到 USER.md（越学越准）。失败时返回空字符串。
- */
-async function generateInsight(body: string, settings: PluginSettings): Promise<string> {
-  if (!llm) return "";
-  const candidates = await resolveCandidates(llm, settings);
-  if (candidates.length === 0) return "";
-  const docs = await readCharacterDocs();
-  const system = [
-    "你是一名用户洞察助手，擅长从用户使用的提示词中提炼用户的写作风格与关注领域。",
-    "",
-    "【用户档案 USER.md】此前积累的风格与偏好（可能为空）：",
-    docs.USER.trim() || "（暂无）",
-    "",
-    "【长期记忆 MEMORY.md】此前沉淀的用户风格与经验洞察（可能为空）：",
-    docs.MEMORY.trim() || "（暂无）",
-    "",
-    "要求：",
-    "- 用一句中文（不超过 40 字）总结这条提示词反映的用户写作风格或关注领域；",
-    "- 不要引用或重复提示词原文，只提炼抽象特征；",
-    "- 直接输出这一句话，不要任何解释或 Markdown 代码块。",
-  ].join("\n");
-  const content = `请提炼以下提示词反映的用户风格或关注领域：\n\n${body}`;
-  const text = await collectTextWithFallback(
-    llm,
-    candidates,
-    await withCharacterSystem(system, docs),
-    content,
-  );
-  return text?.trim() ?? "";
 }
 
 /**

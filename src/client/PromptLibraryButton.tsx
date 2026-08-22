@@ -39,7 +39,7 @@ import { TagInput } from "./TagInput.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
 import { AUTO_LEARN_TOAST_MS, useAutoLearn } from "./auto-learn.js";
 import { isRecent, markRecent } from "./recent-created.js";
-import { notifyDataChanged, useDataChanged, useFillDraft } from "./data-sync.js";
+import { notifyDataChanged, useDataChanged, useExportDownloaded, useFillDraft } from "./data-sync.js";
 import { type PLT, type PLTranslate, usePLT } from "./i18n.js";
 import { SearchBox } from "./SearchBox.js";
 import {
@@ -617,7 +617,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   });
   // 编辑表单正文输入框引用：供「插入变量 {{}}」定位光标
   const bodyRef = useRef<HTMLTextAreaElement>(null);
-  const [toast, setToast] = useState<{ visible: boolean }>({ visible: false });
+  const [toast, setToast] = useState<{ visible: boolean; text?: string }>({ visible: false });
   // 模板变量填充弹窗：插入含 {{变量}} 的提示词前弹出
   // fromOverlay：由 # 浮层触发，确认后需替换「#」及其后的筛选内容
   const [template, setTemplate] = useState<{ prompt: Prompt; mode: "insert" | "overwrite"; fromOverlay?: boolean } | null>(null);
@@ -637,8 +637,8 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
     if (body) inputActions.setDraft(body);
   });
 
-  const showToast = useCallback(() => {
-    setToast({ visible: true });
+  const showToast = useCallback((text?: string) => {
+    setToast({ visible: true, text });
     setTimeout(() => setToast({ visible: false }), AUTO_LEARN_TOAST_MS);
   }, []);
 
@@ -670,6 +670,11 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
 
   // 订阅数据变化：侧边栏新增/修改/删除时同步刷新本面板
   useDataChanged(refresh);
+
+  // `/prompts -e` JSON 备份下载完成后，在聊天框按钮上方弹成功提示
+  useExportDownloaded(useCallback((count: number) => {
+    showToast(T("pl.exported", { count }));
+  }, [showToast, T]));
 
   // 自动学习
   useAutoLearn(draft, prompts, settings, useCallback((learned: Prompt) => {
@@ -1008,7 +1013,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
             zIndex: 1001,
           }}
         >
-          &#10003; {T("pl.learnedToast")}
+          &#10003; {toast.text || T("pl.learnedToast")}
         </span>
       )}
 
@@ -1187,7 +1192,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                         size="sm"
                         className={plBtn("ghost", "sm")}
                         style={{ flex: "0 0 auto" }}
-                        onMouseDown={(e) => e.preventDefault()}
+                        onMouseDown={(e: ReactMouseEvent<HTMLButtonElement>) => e.preventDefault()}
                         onClick={(e: ReactMouseEvent<HTMLButtonElement>) => {
                           // 阻止 mousedown 默认行为以免抢夺正文框焦点，确保光标位置有效、不会回滚到顶部。
                           // 仅点击「{{}}」按钮本身才插入，阻止 label/行内其他点击误触发

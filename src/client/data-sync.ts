@@ -9,6 +9,7 @@ import { useEffect, useRef } from "react";
 
 const DATA_CHANGED_EVENT = "pl:data-changed";
 const FILL_DRAFT_EVENT = "pl:fill-draft";
+const EXPORT_DOWNLOADED_EVENT = "pl:export-downloaded";
 
 /** 通知所有提示词组件：数据已新增/修改/删除，应重新加载。 */
 export function notifyDataChanged(): void {
@@ -32,6 +33,7 @@ export function startDataChangedSubscription(): void {
     es.addEventListener("data-changed", () => notifyDataChanged());
     // host 侧 `/prompts -AI` 推送的润色正文：转发给填充监听的组件。
     es.addEventListener("fill-draft", (ev) => {
+      console.log("[prompt-library] 收到 fill-draft", ev.data);
       let body = "";
       try {
         body = ev.data ? (JSON.parse(ev.data) as string) : "";
@@ -43,9 +45,16 @@ export function startDataChangedSubscription(): void {
     });
     // host 侧 `/prompts -e` 推送的 JSON 备份：直接在浏览器本地触发下载。
     es.addEventListener("export-download", (ev) => {
+      let count = 0;
       try {
         const { name, json } = JSON.parse(ev.data) as { name?: string; json?: string };
         if (!json) return;
+        try {
+          const parsed = JSON.parse(json) as { prompts?: unknown[] };
+          count = Array.isArray(parsed.prompts) ? parsed.prompts.length : 0;
+        } catch {
+          count = 0;
+        }
         const blob = new Blob([json], { type: "application/json" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
@@ -57,6 +66,10 @@ export function startDataChangedSubscription(): void {
         URL.revokeObjectURL(url);
       } catch {
         /* 解析失败则静默忽略，不打断其他事件。 */
+      }
+      // 通知 UI 弹成功提示（如聊天框导出按钮）
+      if (count > 0) {
+        window.dispatchEvent(new CustomEvent(EXPORT_DOWNLOADED_EVENT, { detail: { count } }));
       }
     });
     // 连接断开由 EventSource 自动重连；无需手动处理。
@@ -85,9 +98,25 @@ export function useFillDraft(fill: (body: string) => void): void {
     startDataChangedSubscription();
     const onFill = (ev: Event) => {
       const body = (ev as CustomEvent<{ body: string }>).detail?.body ?? "";
+      console.log("[prompt-library] useFillDraft 收到窗口事件", body.length);
       if (body) fillRef.current(body);
     };
     window.addEventListener(FILL_DRAFT_EVENT, onFill);
     return () => window.removeEventListener(FILL_DRAFT_EVENT, onFill);
+  }, []);
+}
+
+/** 订阅「JSON 备份已下载」事件（/prompts -e），返回导出的提示词条数。 */
+export function useExportDownloaded(onDownloaded: (count: number) => void): void {
+  const onRef = useRef(onDownloaded);
+  onRef.current = onDownloaded;
+  useEffect(() => {
+    startDataChangedSubscription();
+    const handler = (ev: Event) => {
+      const count = (ev as CustomEvent<{ count?: number }>).detail?.count ?? 0;
+      if (count > 0) onRef.current(count);
+    };
+    window.addEventListener(EXPORT_DOWNLOADED_EVENT, handler);
+    return () => window.removeEventListener(EXPORT_DOWNLOADED_EVENT, handler);
   }, []);
 }

@@ -7,7 +7,7 @@
  */
 import type { Context } from "@deepseek-ai/cordis";
 import { makePromptRoutes } from "./host/routes.js";
-import { dataChangedRoute, emitExportDownload, emitFillDraft } from "./host/events.js";
+import { dataChangedRoute, emitExportDownload } from "./host/events.js";
 import {
   autoLearn,
   computeLibraryStats,
@@ -40,6 +40,49 @@ interface PromptSection {
 
 /** 没有静态声明的必需服务；webServer / llm / systemPrompt 按条件注入。 */
 export const inject: string[] = [];
+
+/** 命令一览表：单一来源，用于生成「命令示例」与「未知指令」提示（中/英共用同一套旗标）。 */
+interface CommandSpec {
+  flags: string; // 展示用旗标（含别名，如 "-add / -ad"）
+  zh: string; // 中文指令名
+  en: string; // 英文指令名
+  zhExample: string; // 中文示例正文
+  enExample: string; // 英文示例正文
+}
+const COMMAND_SPECS: CommandSpec[] = [
+  { flags: "-add / -ad", zh: "保存", en: "save", zhExample: "/prompts -add 把这段好的提示词保存下来", enExample: "/prompts -add save this great prompt" },
+  { flags: "-tag / -t", zh: "按标签保存", en: "save with tag", zhExample: "/prompts -tag 写作 请写一段产品介绍", enExample: "/prompts -tag writing write a product intro" },
+  { flags: "-s", zh: "检索", en: "search", zhExample: "/prompts -s 写作", enExample: "/prompts -s writing" },
+  { flags: "-enrich / -en", zh: "AI专业完善", en: "AI professional enrichment", zhExample: "/prompts -enrich 请把这段完善得更全面专业", enExample: "/prompts -enrich make this more comprehensive and professional" },
+  { flags: "-e / -exp", zh: "导出", en: "export", zhExample: "/prompts -e", enExample: "/prompts -e" },
+  { flags: "-data / -d", zh: "统计", en: "stats", zhExample: "/prompts -data", enExample: "/prompts -data" },
+  { flags: "-AI / -a", zh: "AI润色", en: "AI polish", zhExample: "/prompts -AI 请把这段润色得更简洁", enExample: "/prompts -AI make this more concise" },
+  { flags: "-h", zh: "帮助", en: "help", zhExample: "/prompts -h", enExample: "/prompts -h" },
+];
+
+/** 依据命令一览表生成「命令示例」文案（按语言）。 */
+function buildCmdExamples(lang: "zh" | "en"): string {
+  const header =
+    lang === "zh"
+      ? "/prompts 可用命令（不区分大小写，可写简化别名）："
+      : "/prompts available commands (case-insensitive, shorter aliases ok):";
+  const lines = COMMAND_SPECS.map((s) =>
+    lang === "zh"
+      ? `  ${s.flags} ${s.zh}：${s.zhExample}`
+      : `  ${s.flags} ${s.en}: ${s.enExample}`,
+  );
+  return [header, ...lines].join("\n");
+}
+
+/** 依据命令一览表生成「未知指令」提示（按语言）。 */
+function buildUnknownFlag(lang: "zh" | "en"): string {
+  const prefix = lang === "zh" ? "未知指令。可用：" : "Unknown command. Available: ";
+  const parts = COMMAND_SPECS.map((s) => {
+    const flags = s.flags.replace(/ /g, "");
+    return lang === "zh" ? `${flags} ${s.zh}` : `${flags} ${s.en}`;
+  });
+  return `${prefix}${parts.join(" / ")}`;
+}
 
 export function apply(ctx: Context): void {
   const routes = makePromptRoutes();
@@ -121,64 +164,82 @@ export function apply(ctx: Context): void {
         ? {
             description: "保存/润色/完善提示词，并输出词库统计",
             hint: "输入命令或要保存/处理的正文，直接输入 /prompts 可查看命令示例",
-            cmdExamples: [
-              "/prompts 可用命令（不区分大小写，可写简化别名）：",
-              "  -add / -ad 保存： /prompts -add 把这段好的提示词保存下来",
-              "  -tag / -t 按标签保存： /prompts -tag 写作 请写一段产品介绍",
-              "  -s 检索： /prompts -s 写作",
-              "  -enrich / -en AI专业完善： /prompts -enrich 请把这段完善得更全面专业",
-              "  -e / -exp 导出： /prompts -e",
-              "  -data / -d 统计： /prompts -data",
-              "  -AI / -a AI润色： /prompts -AI 请把这段润色得更简洁",
-              "  -h 帮助： /prompts -h",
-            ].join("\n"),
-            unknownFlag: "未知指令。可用：-add/-ad 保存 / -AI/-a 润色 / -s 检索 / -tag/-t 按标签保存 / -enrich/-en AI专业完善 / -e/-exp 导出 / -data/-d 统计 / -h 帮助",
+            cmdExamples: buildCmdExamples("zh"),
+            unknownFlag: buildUnknownFlag("zh"),
             saved: "已保存到提示词库",
             failed: "操作失败",
             addEmpty: "请在 -add 后输入要保存的正文",
             tagEmpty: "用法：/prompts -tag <标签> <正文>",
             searchEmpty: "未找到匹配的提示词",
+            searchUsage: "用法：/prompts -s <关键词>（检索词库，支持大小写不敏感）",
             exportEmpty: "词库为空，无内容可导出",
-            aiSuffix: "--dsh-prompt-library 为您服务",
             aiNoInput: "请在 -AI 后输入要润色的正文",
             aiUnavailable: "AI 服务不可用，无法处理",
-            aiDone: "已 AI 润色并填充到聊天框",
+            aiDone: "已 AI 润色完成，请复制下方内容：",
             enrichNoInput: "请在 -enrich 后输入要完善的正文",
             enrichFailed: "AI 完善失败",
-            enrichSuffix: "--dsh-prompt-library 更专业",
-            enrichDone: "已 AI 专业完善并填充到聊天框（扩写完善，与 -AI 润色相反）",
+            enrichDone: "已 AI 专业完善（扩写，与 -AI 相反），请复制下方内容：",
             help: manualZh,
+            // 命令实际输出文案（-s / -e / -data 等），避免英文环境仍输出中文
+            fmt: {
+              searchLine: (i: number, title: string, tag: string, usage: string, summary: string) => `${i}. ${title}${tag}（使用${usage}次）${summary}`,
+              matchCount: (n: number) => `匹配 ${n} 条：`,
+              summaryPrefix: (s: string) => `\n   摘要：${s}`,
+              dataHeader: "提示词库数据统计：",
+              dataTotal: (n: number) => `- 提示词总数：${n}`,
+              dataTotalUsage: (n: number) => `- 累计使用次数：${n}`,
+              dataUsed: (used: number, unused: number, pct: number) => `- 曾使用 / 从未使用：${used} / ${unused}（使用率 ${pct}%）`,
+              dataTop: (n: number) => `- 最常用 Top ${n}：`,
+              dataTopItem: (title: string, count: number) => `    ${title}（${count}次）`,
+              dataNoUsage: "- 尚无使用记录",
+              dataRecent: (titles: string) => `- 最近使用：${titles}`,
+              dataTagDist: (part: string) => `- 标签分布：${part}`,
+              dataNoTags: "- 暂无标签",
+              dataTrash: (n: number) => `- 回收站条数：${n}`,
+              aiComment: "【AI 点评】",
+              exportDownloaded: (n: number) => `已导出 ${n} 条提示词：JSON 备份文件已下载到浏览器本地。`,
+              exportTextHeader: (n: number) => `提示词库导出（共 ${n} 条）：`,
+            },
           }
         : {
             description: "Save/polish/enrich prompts and output library stats",
             hint: "Enter a command or the body to save/process; type /prompts alone to see command examples",
-            cmdExamples: [
-              "/prompts available commands (case-insensitive, shorter aliases ok):",
-              "  -add / -ad save: /prompts -add save this great prompt",
-              "  -tag / -t save with tag: /prompts -tag writing write a product intro",
-              "  -s search: /prompts -s writing",
-              "  -enrich / -en AI professional enrichment: /prompts -enrich make this more comprehensive and professional",
-              "  -e / -exp export: /prompts -e",
-              "  -data / -d stats: /prompts -data",
-              "  -AI / -a AI polish: /prompts -AI make this more concise",
-              "  -h help: /prompts -h",
-            ].join("\n"),
-            unknownFlag: "Unknown command. Available: -add/-ad save / -AI/-a polish / -s search / -tag/-t save with tag / -enrich/-en professional enrich / -e/-exp export / -data/-d stats / -h help",
+            cmdExamples: buildCmdExamples("en"),
+            unknownFlag: buildUnknownFlag("en"),
             saved: "Saved to the prompt library",
             failed: "Operation failed",
             addEmpty: "Enter the body to save after -add",
             tagEmpty: "Usage: /prompts -tag <tag> <body>",
             searchEmpty: "No matching prompts found",
+            searchUsage: "Usage: /prompts -s <keyword> (search library, case-insensitive)",
             exportEmpty: "The library is empty, nothing to export",
-            aiSuffix: "--dsh-prompt-library at your service",
             aiNoInput: "Enter the text to polish after -AI",
             aiUnavailable: "AI service is unavailable, cannot process",
-            aiDone: "Polished by AI and filled into the chat box",
+            aiDone: "Polished by AI. Please copy the content below:",
             enrichNoInput: "Enter the body to enrich after -enrich",
             enrichFailed: "AI enrichment failed",
-            enrichSuffix: "--dsh-prompt-library more professional",
-            enrichDone: "Professionally enriched by AI and filled into the chat box (expands, opposite of -AI polish)",
+            enrichDone: "Professionally enriched by AI (expands, opposite of -AI polish). Please copy the content below:",
             help: manualEn,
+            // Command output wording for -s / -e / -data, so Chinese is not shown in English locale
+            fmt: {
+              searchLine: (i: number, title: string, tag: string, usage: string, summary: string) => `${i}. ${title}${tag} (used ${usage} times)${summary}`,
+              matchCount: (n: number) => `Matched ${n}: `,
+              summaryPrefix: (s: string) => `\n   Summary: ${s}`,
+              dataHeader: "Prompt Library Stats:",
+              dataTotal: (n: number) => `- Total prompts: ${n}`,
+              dataTotalUsage: (n: number) => `- Total usage: ${n}`,
+              dataUsed: (used: number, unused: number, pct: number) => `- Used / never used: ${used} / ${unused} (usage rate ${pct}%)`,
+              dataTop: (n: number) => `- Top ${n}: `,
+              dataTopItem: (title: string, count: number) => `    ${title} (${count} times)`,
+              dataNoUsage: "- No usage records",
+              dataRecent: (titles: string) => `- Recently used: ${titles}`,
+              dataTagDist: (part: string) => `- Tags: ${part}`,
+              dataNoTags: "- No tags",
+              dataTrash: (n: number) => `- Trash count: ${n}`,
+              aiComment: "[AI Review]",
+              exportDownloaded: (n: number) => `Exported ${n} prompts: JSON backup downloaded to your browser.`,
+              exportTextHeader: (n: number) => `Prompt library export (${n} items):`,
+            },
           };
       dispose = commands.register({
         name: "prompts",
@@ -221,15 +282,14 @@ export function apply(ctx: Context): void {
           };
           const cmd = alias[flag] ?? flag;
 
-          // -AI / -a（-a 为简化）：AI 润色后连同服务宣言填充到聊天框
+          // -AI / -a（-a 为简化）：AI 润色后把结果打印到聊天返回，用户自行复制
           if (cmd === "ai") {
             if (!arg) return { kind: "error", text: copy.aiNoInput };
             if (!isAiAvailable()) return { kind: "error", text: copy.aiUnavailable };
             const settings = await getSettings();
             const polished = await polishPromptBody(arg, settings, { keepVariables: false }).catch(() => undefined);
             if (!polished) return { kind: "error", text: copy.aiUnavailable };
-            emitFillDraft(`${polished.trim()}\n\n${copy.aiSuffix}`);
-            return { kind: "success", text: copy.aiDone };
+            return { kind: "success", text: `\u2501\u2501\u2501 ${copy.aiDone} \u2501\u2501\u2501\n${polished.trim()}\n${"\u2500".repeat(60)}` };
           }
 
           // -add：保存正文到词库，AI 自动判断标题与标签
@@ -259,7 +319,7 @@ export function apply(ctx: Context): void {
           // -s <关键词>：检索词库，列出匹配的提示词
           if (cmd === "search") {
             const keyword = arg.toLowerCase();
-            if (!keyword) return { kind: "error", text: copy.unknownFlag };
+            if (!keyword) return { kind: "error", text: copy.searchUsage };
             const prompts = await listPrompts().catch(() => []);
             const matches = prompts.filter(
               (p) =>
@@ -268,26 +328,24 @@ export function apply(ctx: Context): void {
             if (matches.length === 0) return { kind: "success", text: copy.searchEmpty };
             const lines = matches.slice(0, 15).map((p, i) => {
               const tag = p.tags?.[0] ? `[${p.tags[0]}]` : "";
-              const usage = `${p.usageCount}次`;
-              const summary = p.summary ? `\n   摘要：${p.summary}` : "";
-              return `${i + 1}. ${p.title} ${tag}（使用${usage}）${summary}`;
+              const summary = p.summary ? copy.fmt.summaryPrefix(p.summary) : "";
+              return copy.fmt.searchLine(i + 1, p.title, tag, `${p.usageCount}`, summary);
             });
             return {
               kind: "success",
-              text: `匹配 ${matches.length} 条：\n${lines.join("\n")}`,
+              text: `${copy.fmt.matchCount(matches.length)}\n${lines.join("\n")}`,
             };
           }
 
           // -enrich <正文>：AI 专业完善（与 -AI 润色完全相反：扩写完善，而非精简润色），
-          // 把完善后的正文连同服务宣言填充到聊天框
+          // 把完善后的正文打印到聊天返回，用户自行复制
           if (cmd === "enrich") {
             if (!arg) return { kind: "error", text: copy.enrichNoInput };
             if (!isAiAvailable()) return { kind: "error", text: copy.aiUnavailable };
             const settings = await getSettings();
             const enriched = await enrichPromptProfessional(arg, settings).catch(() => undefined);
             if (!enriched) return { kind: "error", text: copy.enrichFailed };
-            emitFillDraft(`${enriched.trim()}\n\n${copy.enrichSuffix}`);
-            return { kind: "success", text: copy.enrichDone };
+            return { kind: "success", text: `\u2501\u2501\u2501 ${copy.enrichDone} \u2501\u2501\u2501\n${enriched.trim()}\n${"\u2500".repeat(60)}` };
           }
 
           // -e：导出全部提示词。优先把 JSON 备份推送到浏览器本地下载；无订阅者时回退为纯文本聊天输出。
@@ -304,7 +362,7 @@ export function apply(ctx: Context): void {
             if (sent) {
               return {
                 kind: "success",
-                text: `已导出 ${backup.prompts.length} 条提示词：JSON 备份文件已下载到浏览器本地。`,
+                text: copy.fmt.exportDownloaded(backup.prompts.length),
               };
             }
             const blocks = backup.prompts.map((p) => {
@@ -313,7 +371,7 @@ export function apply(ctx: Context): void {
             });
             return {
               kind: "success",
-              text: `提示词库导出（共 ${backup.prompts.length} 条）：\n\n${blocks.join("\n\n")}`,
+              text: `${copy.fmt.exportTextHeader(backup.prompts.length)}\n\n${blocks.join("\n\n")}`,
             };
           }
 
@@ -322,29 +380,30 @@ export function apply(ctx: Context): void {
             const stats = await computeLibraryStats().catch(() => undefined);
             if (!stats) return { kind: "error", text: copy.failed };
             const usedPct = stats.total ? Math.round((stats.usedCount / stats.total) * 100) : 0;
+            const f = copy.fmt;
             const lines = [
-              "提示词库数据统计：",
-              `- 提示词总数：${stats.total}`,
-              `- 累计使用次数：${stats.totalUsage}`,
-              `- 曾使用 / 从未使用：${stats.usedCount} / ${stats.unusedCount}（使用率 ${usedPct}%）`,
+              f.dataHeader,
+              f.dataTotal(stats.total),
+              f.dataTotalUsage(stats.totalUsage),
+              f.dataUsed(stats.usedCount, stats.unusedCount, usedPct),
               stats.topUsed.length
-                ? `- 最常用 Top ${stats.topUsed.length}：\n${stats.topUsed
-                    .map((p) => `    ${p.title}（${p.usageCount}次）`)
+                ? `${f.dataTop(stats.topUsed.length)}\n${stats.topUsed
+                    .map((p) => f.dataTopItem(p.title, p.usageCount))
                     .join("\n")}`
-                : "- 尚无使用记录",
+                : f.dataNoUsage,
               stats.recentUsed.length
-                ? `- 最近使用：${stats.recentUsed.map((p) => p.title).join("、")}`
+                ? f.dataRecent(stats.recentUsed.map((p) => p.title).join(", "))
                 : "",
               stats.tagStats.length
-                ? `- 标签分布：${stats.tagStats.slice(0, 6).map((t) => `${t.name}(${t.count})`).join("、")}`
-                : "- 暂无标签",
-              `- 回收站条数：${stats.trashCount}`,
+                ? f.dataTagDist(stats.tagStats.slice(0, 6).map((t) => `${t.name}(${t.count})`).join(", "))
+                : f.dataNoTags,
+              f.dataTrash(stats.trashCount),
             ];
             let output = lines.filter((l) => l !== "").join("\n");
             if (isAiAvailable()) {
               const settings = await getSettings();
               const comment = await commentOnStats(output, settings).catch(() => "");
-              if (comment) output += `\n\n【AI 点评】\n${comment}`;
+              if (comment) output += `\n\n${f.aiComment}\n${comment}`;
             }
             return { kind: "success", text: output };
           }

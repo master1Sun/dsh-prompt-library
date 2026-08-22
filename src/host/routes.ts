@@ -13,7 +13,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { WebRoute } from "@deepseek-ai/dsh-host-webserver";
 import type { ApiResponse, PluginSettings, Prompt, PromptInput, PromptPatch } from "../types.js";
-import { learnPolished, listAiSelectables, polishPromptBody } from "./ai.js";
+import { listAiSelectables, polishPromptBody } from "./ai.js";
 import {
   autoLearn,
   createPrompt,
@@ -282,19 +282,6 @@ export function makePromptRoutes(): WebRoute[] {
           return json(res, 503, { ok: false, error: "AI 不可用或润色失败，请确认已连接 LLM 服务" });
         }
         return json(res, 200, { ok: true, data: { polished } });
-      }
-
-      // POST /ai/polish/learn — 用户确认许可后，把润色内容并入画像学习
-      if (method === "POST" && tail === "/ai/polish/learn") {
-        const raw = await readJsonBody(req);
-        if (typeof raw !== "object" || raw === null || typeof (raw as { body: string }).body !== "string") {
-          return json(res, 400, { ok: false, error: "invalid body: {body: string}" });
-        }
-        const body = (raw as { body: string }).body;
-        if (!body.trim()) return json(res, 400, { ok: false, error: "body empty" });
-        const settings = await getSettings();
-        await learnPolished(body, settings);
-        return json(res, 200, { ok: true, data: { learned: true } });
       }
 
       // GET /settings — 获取设置

@@ -18,6 +18,8 @@ export interface Prompt {
   sourceBody?: string;
   /** 是否经过 AI 完善（标题/标签/摘要/正文）。 */
   aiRefined?: boolean;
+  /** AI 首次完善的毫秒时间戳（0 表示从未完善）。 */
+  aiRefinedAt?: number;
   /** 最后一次修改的纪元毫秒时间戳。 */
   updatedAt: number;
   /** 创建时间的纪元毫秒时间戳。 */

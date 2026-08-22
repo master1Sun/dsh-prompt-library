@@ -276,7 +276,7 @@ function userMessage(rawBody: string, tag?: string, existingVars?: string[]): st
 
 /**
  * 把五维灵魂边界（SOUL/AGENTS/USER/IDENTITY/MEMORY）注入 AI 的 system prompt，
- * 让 AI 在润色 / 完善 / 洞察时都遵守这些边界（OpenCLaW 式自学习的前置条件）。
+ * 让 AI 在润色 / 完善 / 洞察时都遵守这些边界。
  * 读取失败时静默忽略，不影响本次调用。
  *
  * 调用方若已用 readCharacterDocs() 读过 docs，应直接传入复用，避免重复读盘；

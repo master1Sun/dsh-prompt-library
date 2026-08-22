@@ -11,10 +11,14 @@ import { dataChangedRoute, emitExportDownload } from "./host/events.js";
 import {
   autoLearn,
   computeLibraryStats,
+  computeWeeklyStats,
   exportPrompts,
+  getLastSnapshotAt,
+  getLastStatsSnapshot,
   getSettings,
   listPrompts,
   readGlobalLocale,
+  saveStatsSnapshot,
   welcomePromptOnce,
 } from "./host/store.js";
 import {
@@ -84,7 +88,10 @@ function buildUnknownFlag(lang: "zh" | "en"): string {
   return `${prefix}${parts.join(" / ")}`;
 }
 
-export function apply(ctx: Context): void {
+/** 首次欢迎注入的手册全文：变量 provider 必须同步返回，故先默认中文，apply 内按宿主语言异步刷新。 */
+let welcomeManual: string = manualZh;
+
+export function apply(ctx: Context) {
   const routes = makePromptRoutes();
 
   // 数据库懒初始化：首次访问数据时自动创建 prompts.db 表，
@@ -99,9 +106,16 @@ export function apply(ctx: Context): void {
   // systemPrompt 服务可用时注册一个动态 prompt section：每次对话组装时，按会话 scope 判断：
   // - 功能关闭 → 返回空串（不注入），并把该会话记为既存；
   // - 功能开启 → 这个 scope 若是「新会话」（从未见过）才注入五维边界，既存会话返回空串。
+  // 同时注册 welcome_manual 变量：欢迎语引用它注入手册全文（宿主替换后不再扫描值，
+  // 手册中的字面 {{变量}} 不会触发宿主的变量解析）。
   ctx.inject(["systemPrompt"], (promptCtx: Context) => {
     // 宿主会把 systemPrompt 服务挂到注入的 ctx 上，但宿主类型未声明，这里作结构化类型转换
-    const sp = (promptCtx as unknown as { systemPrompt: { section: (s: PromptSection) => () => void } }).systemPrompt;
+    const sp = (promptCtx as unknown as {
+      systemPrompt: {
+        section: (s: PromptSection) => () => void;
+        variable: (name: string, provider: (context: unknown) => string) => () => void;
+      };
+    }).systemPrompt;
     const dispose = sp.section({
       name: "prompt-library-character",
       order: 50,
@@ -115,7 +129,15 @@ export function apply(ctx: Context): void {
         return parts.filter((p) => p.trim()).join("\n\n");
       },
     });
-    return () => dispose();
+    const disposeVar = sp.variable("welcome_manual", () => welcomeManual);
+    // 按宿主界面语言异步刷新手册全文（默认中文，与 /prompts 命令的语言判定一致）。
+    void readGlobalLocale().then((locale) => {
+      welcomeManual = locale.startsWith("zh") || locale === "" ? manualZh : manualEn;
+    });
+    return () => {
+      dispose();
+      disposeVar();
+    };
   });
 
   // 注入 LLM 服务：可用时把 harness 的 AI 能力提供给自学习模块；
@@ -196,7 +218,23 @@ export function apply(ctx: Context): void {
               dataTagDist: (part: string) => `- 标签分布：${part}`,
               dataNoTags: "- 暂无标签",
               dataTrash: (n: number) => `- 回收站条数：${n}`,
+              dataUsageVitality: (used7: number, used30: number) => `- 复用活力：近7天 ${used7} 条，近30天 ${used30} 条`,
+              dataSleeping: (items: Array<{ title: string; days: number }>) =>
+                `- 沉睡提示词：${items.map((i) => `${i.title}（${i.days}天）`).join("、")}`,
+              dataBodyStats: (total: number, avg: number) => `- 正文体量：共 ${total} 字，平均每条 ${avg} 字`,
+              dataAiRefined: (count: number, pct: number) => `- AI 完善占比：${count} 条（${pct}%）`,
+              dataAddedTrend: (added7: number, added30: number) => `- 新增趋势：近7天 ${added7} 条，近30天 ${added30} 条`,
               aiComment: "【AI 点评】",
+              // 最近一周统计历史（每7天自动统计写入 stats_history 后，-data 结尾展示）
+              historyHeader: (date: string) => `【最近7天统计 · ${date}】`,
+              historyRange: (from: string, to: string) => `统计周期：${from} ~ ${to}`,
+              historyAdded: (n: number) => `- 新增提示词：${n} 条`,
+              historyAddedTitles: (titles: string) => `    ${titles}`,
+              historyUsage: (count: number, usedCount: number) => `- 使用次数：${count} 次（覆盖 ${usedCount} 条）`,
+              historyTop: (n: number) => `- 近7天最常用 Top ${n}：`,
+              historyTopItem: (title: string, count: number) => `    ${title}（${count}次）`,
+              historyAiRefined: (n: number) => `- AI 完善：${n} 条`,
+              historyNone: "（暂无历史统计，7天后自动生成）",
               exportDownloaded: (n: number) => `已导出 ${n} 条提示词：JSON 备份文件已下载到浏览器本地。`,
               exportTextHeader: (n: number) => `提示词库导出（共 ${n} 条）：`,
             },
@@ -236,7 +274,23 @@ export function apply(ctx: Context): void {
               dataTagDist: (part: string) => `- Tags: ${part}`,
               dataNoTags: "- No tags",
               dataTrash: (n: number) => `- Trash count: ${n}`,
+              dataUsageVitality: (used7: number, used30: number) => `- Reuse vitality: ${used7} in 7d, ${used30} in 30d`,
+              dataSleeping: (items: Array<{ title: string; days: number }>) =>
+                `- Dormant prompts: ${items.map((i) => `${i.title} (${i.days}d)`).join(", ")}`,
+              dataBodyStats: (total: number, avg: number) => `- Body size: ${total} chars total, ${avg} avg`,
+              dataAiRefined: (count: number, pct: number) => `- AI-refined: ${count} (${pct}%)`,
+              dataAddedTrend: (added7: number, added30: number) => `- Added: ${added7} in 7d, ${added30} in 30d`,
               aiComment: "[AI Review]",
+              // Recent 7-day stats history (auto-snapshotted every 7 days, shown at the end of -data)
+              historyHeader: (date: string) => `[Last 7 days stats · ${date}]`,
+              historyRange: (from: string, to: string) => `Period: ${from} ~ ${to}`,
+              historyAdded: (n: number) => `- Added: ${n}`,
+              historyAddedTitles: (titles: string) => `    ${titles}`,
+              historyUsage: (count: number, usedCount: number) => `- Used: ${count} times (${usedCount} prompts)`,
+              historyTop: (n: number) => `- Top ${n} used this week:`,
+              historyTopItem: (title: string, count: number) => `    ${title} (${count} times)`,
+              historyAiRefined: (n: number) => `- AI-refined: ${n}`,
+              historyNone: "(No history yet; auto-generated after 7 days)",
               exportDownloaded: (n: number) => `Exported ${n} prompts: JSON backup downloaded to your browser.`,
               exportTextHeader: (n: number) => `Prompt library export (${n} items):`,
             },
@@ -375,7 +429,7 @@ export function apply(ctx: Context): void {
             };
           }
 
-          // -data：输出 prompts.db 的使用统计，末尾追加 AI 点评
+          // -data：输出 prompts.db 的使用统计（复用活力/正文体量/AI完善占比/新增趋势），末尾追加 AI 点评
           if (cmd === "data") {
             const stats = await computeLibraryStats().catch(() => undefined);
             if (!stats) return { kind: "error", text: copy.failed };
@@ -386,6 +440,13 @@ export function apply(ctx: Context): void {
               f.dataTotal(stats.total),
               f.dataTotalUsage(stats.totalUsage),
               f.dataUsed(stats.usedCount, stats.unusedCount, usedPct),
+              // 精细化统计维度
+              f.dataUsageVitality(stats.usedIn7Days, stats.usedIn30Days),
+              stats.longestUnused.length ? f.dataSleeping(stats.longestUnused) : "",
+              f.dataBodyStats(stats.totalBodyLength, stats.avgBodyLength),
+              f.dataAiRefined(stats.aiRefinedCount, stats.aiRefinedPct),
+              f.dataAddedTrend(stats.addedIn7Days, stats.addedIn30Days),
+              // 原有统计维度
               stats.topUsed.length
                 ? `${f.dataTop(stats.topUsed.length)}\n${stats.topUsed
                     .map((p) => f.dataTopItem(p.title, p.usageCount))
@@ -400,6 +461,28 @@ export function apply(ctx: Context): void {
               f.dataTrash(stats.trashCount),
             ];
             let output = lines.filter((l) => l !== "").join("\n");
+            // 结尾追加最近一周统计历史（每 7 天自动统计写入 stats_history 的快照）
+            const snap = await getLastStatsSnapshot().catch(() => undefined);
+            if (snap) {
+              const fmtDate = (t: number) =>
+                `${new Date(t).getFullYear()}-${String(new Date(t).getMonth() + 1).padStart(2, "0")}-${String(new Date(t).getDate()).padStart(2, "0")}`;
+              const s = snap.stats;
+              const his: string[] = [
+                `\n${f.historyHeader(fmtDate(snap.createdAt))}`,
+                f.historyRange(fmtDate(s.rangeStart), fmtDate(s.rangeEnd)),
+                f.historyAdded(s.addedCount),
+              ];
+              if (s.addedTitles.length) his.push(f.historyAddedTitles(s.addedTitles.join("、")));
+              his.push(f.historyUsage(s.usageCount, s.usedPromptCount));
+              if (s.topUsed.length) {
+                his.push(f.historyTop(s.topUsed.length));
+                for (const t of s.topUsed) his.push(f.historyTopItem(t.title, t.count));
+              }
+              his.push(f.historyAiRefined(s.aiRefinedCount));
+              output += his.join("\n");
+            } else {
+              output += `\n\n${f.historyHeader("")}\n${f.historyNone}`;
+            }
             if (isAiAvailable()) {
               const settings = await getSettings();
               const comment = await commentOnStats(output, settings).catch(() => "");
@@ -414,4 +497,36 @@ export function apply(ctx: Context): void {
     });
     return () => dispose();
   });
+
+  // —— 每周自动统计：每 7 天生成一次「近 7 天」统计快照写入 stats_history ——
+  // 统计的只是近 7 天的增量数据（新增/使用/AI 完善），避免把历史累计反复重复统计；
+  // 不调用 AI 点评（点评仅用于 /prompts -data 的实时全量统计）。
+  // 在插件启动时立即检查一次；此后每 24 小时复查一次，距上次快照满 7 天即生成新快照。
+  // 定时器随 apply 返回的 disposer 在插件卸载时清理，避免残留。
+  const weeklySnapshotTimer = setInterval(() => {
+    void checkAndGenerateWeeklySnapshot();
+  }, 24 * 60 * 60 * 1000);
+  void checkAndGenerateWeeklySnapshot();
+  return () => {
+    if (weeklySnapshotTimer) clearInterval(weeklySnapshotTimer);
+  };
+}
+
+/** 一周的毫秒数（与 store 内常量保持一致）。 */
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * 每 7 天自动统计门控：距上次快照不足 7 天时跳过；
+ * 满 7 天（或尚无快照）则生成「近 7 天」统计快照写入 stats_history 表。
+ * 任何失败都静默降级，不影响主流程。
+ */
+async function checkAndGenerateWeeklySnapshot(): Promise<void> {
+  try {
+    const lastAt = await getLastSnapshotAt().catch(() => 0);
+    if (lastAt > 0 && Date.now() - lastAt < WEEK_MS) return;
+    const stats = await computeWeeklyStats();
+    await saveStatsSnapshot(stats);
+  } catch {
+    /* 快照失败静默，不影响主流程 */
+  }
 }

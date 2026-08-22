@@ -67,6 +67,22 @@ function getDb(): DatabaseSync {
   } catch {
     /* 列已存在，忽略 */
   }
+  // 兼容早期的库：若缺少 aiRefinedAt 列则补建（AI 首次完善的毫秒时间戳，0 表示从未完善）。
+  try {
+    next.exec("ALTER TABLE prompts ADD COLUMN aiRefinedAt INTEGER NOT NULL DEFAULT 0");
+  } catch {
+    /* 列已存在，忽略 */
+  }
+  // 使用历史表：每次点击插入时记录一行（promptId + usedAt），
+  // 供每周统计精确统计「近 7 天使用次数 / 活跃提示词 / 最常使用」，避免只依赖累计 usageCount。
+  next.exec(`
+    CREATE TABLE IF NOT EXISTS usage_log (
+      id       INTEGER PRIMARY KEY AUTOINCREMENT,
+      promptId TEXT NOT NULL,
+      usedAt   INTEGER NOT NULL
+    );
+  `);
+  next.exec("CREATE INDEX IF NOT EXISTS idx_usage_log_usedAt ON usage_log (usedAt)");
   // 独立的标签数据表：标签的集中管理（新增/删除/修改）以该表为准。
   next.exec(`
     CREATE TABLE IF NOT EXISTS tags (
@@ -96,6 +112,15 @@ function getDb(): DatabaseSync {
     CREATE TABLE IF NOT EXISTS meta (
       key   TEXT PRIMARY KEY,
       value TEXT
+    );
+  `);
+  // 统计历史表：每 7 天自动生成的词库统计快照（含 AI 点评）。
+  next.exec(`
+    CREATE TABLE IF NOT EXISTS stats_history (
+      id        INTEGER PRIMARY KEY AUTOINCREMENT,
+      stats     TEXT NOT NULL,
+      comment   TEXT,
+      createdAt INTEGER NOT NULL
     );
   `);
   // 一次性把提示词中已有的标签同步进标签表（幂等）。
@@ -161,15 +186,21 @@ function seedDefaultPromptIfEmpty(cur: DatabaseSync): void {
 }
 
 // ── 首次欢迎：只对第一个新会话注入一次 AI 开场白 ────────────────────────────
+//
+// 注意：这段文本会进入宿主 systemPrompt 的 section，宿主会把其中完整的
+// `{{...}}` 当作模板变量引用并强制校验变量名（须匹配 /^[a-z][a-z0-9_]*$/）。
+// 这里唯一允许的字面引用是 {{welcome_manual}}（由 index.ts 注册的合法变量）；
+// 手册全文经该变量注入，宿主替换后不再二次扫描，故手册中的字面 {{变量}}
+// 不会触发变量解析。切勿在本文件直接书写其他字面 {{}}。
 
 /** 首次欢迎时注入到 system prompt 的开场指令（让 AI 第一条回复引导用户）。 */
 const WELCOME_SYSTEM = [
   "（首次使用引导）本会话是你与带「提示词库」插件的助手第一次对话。",
-  "请在本次会话的【第一条回复】中用一段简洁、自然、友好的开场白欢迎用户，并说明：",
-  "1. 你具备提示词库能力：能随时把值得复用的内容保存成带标题、标签、{{变量}}的提示词；",
-  "2. 告诉用户多种用法：输入“/prompts -add 正文”保存；“/prompts -AI 正文”由 AI 润色并把结果打印出来供复制；“/prompts -s 关键词”检索；“/prompts -h”查看完整使用手册；",
-  "3. 提示词库已预置一条「欢迎使用提示词库」示例，可在右侧侧边栏查看。",
-  "开场白只需一段，明确提及以上三点即可，不要复述整本手册，也不要在此后回复中重复欢迎。",
+  "请在本次会话的【第一条回复】中用一段简洁、自然、友好的开场白欢迎用户。",
+  "开场白之后，请完整呈现下面的插件使用手册，作为对用户的正式介绍：",
+  "{{welcome_manual}}",
+  "手册请以纯文本形式完整呈现：逐条原样输出，保留每行内容与换行，不要用 markdown 的加粗、列表、代码块等符号重排，也不要自己精简改写；",
+  "此后的回复不要重复欢迎，也不要重复整本手册。",
 ].join("\n");
 
 /** 已把欢迎指令绑定到某个会话 scope。 */
@@ -179,7 +210,8 @@ let welcomeScope: unknown;
 
 /**
  * 判断本次组装（属于会话 scope）是否应注入首次欢迎开场指令：
- * - 第一次调用（全局首次）：注入，并把 scope 绑定起来，同时写 meta 标记持久化；
+ * - 持久化标记 welcomeShown 已存在：整个安装生命周期只欢迎一次，直接不注入（跨进程重启仍成立）；
+ * - 第一次调用（全局首次）：注入，并把 scope 绑定起来，同时写 welcomeShown 标记持久化；
  * - 同一 scope 再次组装：保持注入（该会话第一条回复仍能看到指令）；
  * - 首次已消费且不是绑定 scope：不再注入。
  * 返回需要追加到 system prompt 的文本，空串表示不注入。
@@ -187,6 +219,22 @@ let welcomeScope: unknown;
 export function welcomePromptOnce(scope: unknown): string {
   if (welcomeBound) {
     return welcomeScope === scope ? WELCOME_SYSTEM : "";
+  }
+  // 持久化标记优先：历史已欢迎过（含旧版本写入的 welcomeShown）则不再欢迎，
+  // 保证「只欢迎一次」跨进程重启依然成立；删除数据文件后标记消失，下次会重新欢迎。
+  let shown = false;
+  try {
+    const row = getDb()
+      .prepare("SELECT value FROM meta WHERE key = 'welcomeShown'")
+      .get() as { value: string } | undefined;
+    shown = row?.value === "1";
+  } catch {
+    /* 读取失败按未欢迎处理，不阻断 */
+  }
+  if (shown) {
+    welcomeBound = true;
+    welcomeScope = undefined;
+    return "";
   }
   welcomeBound = true;
   welcomeScope = scope;
@@ -210,6 +258,7 @@ interface PromptRow {
   summary: string | null;
   sourceBody: string | null;
   aiRefined: number;
+  aiRefinedAt: number;
   updatedAt: number;
   createdAt: number;
   usageCount: number;
@@ -225,6 +274,7 @@ function rowToPrompt(r: PromptRow): Prompt {
     summary: r.summary ?? undefined,
     sourceBody: r.sourceBody ?? undefined,
     aiRefined: r.aiRefined === 1,
+    aiRefinedAt: r.aiRefinedAt ?? 0,
     updatedAt: r.updatedAt,
     createdAt: r.createdAt,
     usageCount: r.usageCount,
@@ -505,6 +555,7 @@ export function updatePrompt(
     summary?: string;
     sourceBody?: string;
     aiRefined?: boolean;
+    aiRefinedAt?: number;
     usageCount?: number;
     lastUsedAt?: number;
   },
@@ -516,6 +567,14 @@ export function updatePrompt(
     const current = rowToPrompt(existing);
     // 标签更新时同步进标签表（集中管理），仅保留单个标签
     const nextTags = patch.tags !== undefined ? ensureTags(patch.tags).slice(0, 1) : undefined;
+    const aiRefined = patch.aiRefined !== undefined ? patch.aiRefined : current.aiRefined;
+    // AI 完善：首次从 false → true 时记录完善时间；显式传入时间戳则直接采用
+    const aiRefinedAt =
+      patch.aiRefinedAt !== undefined
+        ? patch.aiRefinedAt
+        : aiRefined && !current.aiRefined
+          ? Date.now()
+          : (current.aiRefinedAt ?? 0);
     const next: Prompt = {
       ...current,
       title: patch.title !== undefined ? clampTitle(patch.title.trim()) : current.title,
@@ -523,7 +582,8 @@ export function updatePrompt(
       tags: nextTags !== undefined ? nextTags : current.tags,
       summary: patch.summary !== undefined ? patch.summary : current.summary,
       sourceBody: patch.sourceBody !== undefined ? patch.sourceBody : current.sourceBody,
-      aiRefined: patch.aiRefined !== undefined ? patch.aiRefined : current.aiRefined,
+      aiRefined,
+      aiRefinedAt,
       updatedAt: Date.now(),
       usageCount: patch.usageCount !== undefined ? patch.usageCount : current.usageCount,
       lastUsedAt: patch.lastUsedAt !== undefined ? patch.lastUsedAt : current.lastUsedAt,
@@ -532,7 +592,7 @@ export function updatePrompt(
       .prepare(
         `UPDATE prompts SET
            title = ?, body = ?, tags = ?, summary = ?, sourceBody = ?,
-           aiRefined = ?, updatedAt = ?, usageCount = ?, lastUsedAt = ?
+           aiRefined = ?, aiRefinedAt = ?, updatedAt = ?, usageCount = ?, lastUsedAt = ?
          WHERE id = ?`,
       )
       .run(
@@ -542,6 +602,7 @@ export function updatePrompt(
         next.summary ?? null,
         next.sourceBody ?? null,
         next.aiRefined ? 1 : 0,
+        next.aiRefinedAt ?? 0,
         next.updatedAt,
         next.usageCount,
         next.lastUsedAt,
@@ -564,6 +625,8 @@ export function recordUsage(id: string): Promise<Prompt | undefined> {
     cur
       .prepare("UPDATE prompts SET usageCount = usageCount + 1, lastUsedAt = ?, updatedAt = ? WHERE id = ?")
       .run(ts, ts, id);
+    // 写入使用历史，供每周统计精确统计「近 7 天使用次数 / 活跃提示词 / 最常使用」
+    cur.prepare("INSERT INTO usage_log (promptId, usedAt) VALUES (?, ?)").run(id, ts);
     const row = cur.prepare("SELECT * FROM prompts WHERE id = ?").get(id) as unknown as PromptRow | undefined;
     if (!row) return Promise.resolve(undefined);
     return Promise.resolve(rowToPrompt(row));
@@ -994,7 +1057,28 @@ export interface LibraryStats {
   tagStats: Array<{ name: string; count: number }>;
   /** 回收站条数。 */
   trashCount: number;
+  /** 复用活力：近 7 天曾被使用的提示词数量。 */
+  usedIn7Days: number;
+  /** 复用活力：近 30 天曾被使用的提示词数量。 */
+  usedIn30Days: number;
+  /** 沉睡提示词：创建超过 30 天且从未被使用的最久前 3 条（含闲置天数）。 */
+  longestUnused: Array<{ title: string; days: number }>;
+  /** 正文体量：全部提示词正文总字数。 */
+  totalBodyLength: number;
+  /** 正文体量：平均每条正文字数。 */
+  avgBodyLength: number;
+  /** AI 完善占比：已由 AI 完善（aiRefined）的提示词数量。 */
+  aiRefinedCount: number;
+  /** AI 完善占比（百分比：0-100）。 */
+  aiRefinedPct: number;
+  /** 新增趋势：近 7 天新增提示词数量。 */
+  addedIn7Days: number;
+  /** 新增趋势：近 30 天新增提示词数量。 */
+  addedIn30Days: number;
 }
+
+/** 一周的毫秒数。 */
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** 汇总词库的使用统计（SQLite live 数据）。 */
 export async function computeLibraryStats(): Promise<LibraryStats> {
@@ -1015,6 +1099,36 @@ export async function computeLibraryStats(): Promise<LibraryStats> {
       .map((p) => ({ title: p.title, lastUsedAt: p.lastUsedAt }));
     const trashRow = cur.prepare("SELECT COUNT(*) AS c FROM trash").get() as { c: number };
     const tagStats = await listTags();
+
+    // —— 精细化统计维度 ——
+    const now = Date.now();
+    const weekAgo = now - WEEK_MS;
+    const monthAgo = now - 30 * 24 * 60 * 60 * 1000;
+
+    // 复用活力：近 7 / 30 天曾被使用；沉睡提示词：创建超 30 天且从未使用（取最久前 3 条）
+    const usedIn7Days = all.filter((p) => p.lastUsedAt > weekAgo).length;
+    const usedIn30Days = all.filter((p) => p.lastUsedAt > monthAgo).length;
+    const longestUnused = [...all]
+      .filter((p) => p.lastUsedAt === 0 && p.createdAt < monthAgo)
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .slice(0, 3)
+      .map((p) => ({
+        title: p.title,
+        days: Math.floor((now - p.createdAt) / (24 * 60 * 60 * 1000)),
+      }));
+
+    // 正文体量
+    const totalBodyLength = all.reduce((sum, p) => sum + p.body.length, 0);
+    const avgBodyLength = total > 0 ? Math.round(totalBodyLength / total) : 0;
+
+    // AI 完善占比
+    const aiRefinedCount = all.filter((p) => p.aiRefined).length;
+    const aiRefinedPct = total > 0 ? Math.round((aiRefinedCount / total) * 100) : 0;
+
+    // 新增趋势
+    const addedIn7Days = all.filter((p) => p.createdAt > weekAgo).length;
+    const addedIn30Days = all.filter((p) => p.createdAt > monthAgo).length;
+
     return Promise.resolve({
       total,
       totalUsage,
@@ -1024,7 +1138,168 @@ export async function computeLibraryStats(): Promise<LibraryStats> {
       recentUsed,
       tagStats,
       trashCount: trashRow?.c ?? 0,
+      usedIn7Days,
+      usedIn30Days,
+      longestUnused,
+      totalBodyLength,
+      avgBodyLength,
+      aiRefinedCount,
+      aiRefinedPct,
+      addedIn7Days,
+      addedIn30Days,
     });
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+// ── 每周统计快照（stats_history 表）───────────────────────────────────────
+
+/**
+ * 每周统计：只统计「近 7 天」的增量数据（新增/使用/AI 完善），
+ * 避免像全量累计那样把历史数据反复重复统计。
+ */
+export interface WeeklyStats {
+  /** 统计周期的起始时间（毫秒时间戳，近 7 天前）。 */
+  rangeStart: number;
+  /** 统计周期的结束时间（毫秒时间戳，快照生成时刻）。 */
+  rangeEnd: number;
+  /** 近 7 天新增的提示词数量。 */
+  addedCount: number;
+  /** 近 7 天新增的提示词标题（最多 5 条，用于展示）。 */
+  addedTitles: string[];
+  /** 近 7 天被使用过的提示词数量（活跃复用）。 */
+  usedPromptCount: number;
+  /** 近 7 天总使用次数。 */
+  usageCount: number;
+  /** 近 7 天最常用的前 5 条（按使用次数降序）。 */
+  topUsed: Array<{ title: string; count: number }>;
+  /** 近 7 天经 AI 完善的提示词数量。 */
+  aiRefinedCount: number;
+}
+
+/** 计算近 7 天的每周统计（基于 usage_log 使用历史 + prompts 的新增/完善时间）。 */
+export async function computeWeeklyStats(): Promise<WeeklyStats> {
+  try {
+    const cur = getDb();
+    const rangeEnd = Date.now();
+    const rangeStart = rangeEnd - WEEK_MS;
+    // 近 7 天新增（按创建时间）
+    const addedRows = cur
+      .prepare("SELECT title, createdAt FROM prompts WHERE createdAt > ? ORDER BY createdAt DESC")
+      .all(rangeStart) as Array<{ title: string; createdAt: number }>;
+    // 近 7 天使用（按 usage_log）
+    const usageRows = cur
+      .prepare("SELECT promptId FROM usage_log WHERE usedAt > ?")
+      .all(rangeStart) as Array<{ promptId: string }>;
+    const usageCount = usageRows.length;
+    const usedPromptCount = new Set(usageRows.map((r) => r.promptId)).size;
+    // 近 7 天最常使用：按 promptId 聚合计数，关联标题
+    const countByPrompt = new Map<string, number>();
+    for (const r of usageRows) countByPrompt.set(r.promptId, (countByPrompt.get(r.promptId) ?? 0) + 1);
+    const topUsed: Array<{ title: string; count: number }> = [];
+    if (countByPrompt.size > 0) {
+      const byId = new Map(
+        (cur.prepare("SELECT id, title FROM prompts").all() as Array<{ id: string; title: string }>).map((r) => [
+          r.id,
+          r.title,
+        ]),
+      );
+      const sorted = [...countByPrompt.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+      for (const [id, count] of sorted) topUsed.push({ title: byId.get(id) ?? "（已删除）", count });
+    }
+    // 近 7 天 AI 完善（按 aiRefinedAt）
+    const aiRefinedCount = (
+      cur
+        .prepare("SELECT COUNT(*) AS c FROM prompts WHERE aiRefined = 1 AND aiRefinedAt > ?")
+        .get(rangeStart) as { c: number }
+    ).c;
+    return Promise.resolve({
+      rangeStart,
+      rangeEnd,
+      addedCount: addedRows.length,
+      addedTitles: addedRows.slice(0, 5).map((r) => r.title),
+      usedPromptCount,
+      usageCount,
+      topUsed,
+      aiRefinedCount,
+    });
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+/** 一次统计历史快照。 */
+export interface StatsSnapshot {
+  id: number;
+  stats: WeeklyStats;
+  comment: string;
+  createdAt: number;
+}
+
+/** 写入一条统计历史快照（comment 保留以兼容旧数据，新写入时为空串）。 */
+export async function saveStatsSnapshot(stats: WeeklyStats, comment?: string): Promise<void> {
+  try {
+    const cur = getDb();
+    cur
+      .prepare("INSERT INTO stats_history (stats, comment, createdAt) VALUES (?, ?, ?)")
+      .run(JSON.stringify(stats), comment ?? "", Date.now());
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+/** 读取最近一条统计历史快照（不存在返回 undefined，解析失败按缺失处理）。 */
+export async function getLastStatsSnapshot(): Promise<StatsSnapshot | undefined> {
+  try {
+    const cur = getDb();
+    const row = cur
+      .prepare("SELECT * FROM stats_history ORDER BY createdAt DESC LIMIT 1")
+      .get() as unknown as
+      | { id: number; stats: string; comment: string | null; createdAt: number }
+      | undefined;
+    if (!row) return Promise.resolve(undefined);
+    let raw: Partial<WeeklyStats>;
+    try {
+      raw = JSON.parse(row.stats) as Partial<WeeklyStats>;
+    } catch {
+      return Promise.resolve(undefined);
+    }
+    // 兼容旧版本快照：旧快照缺少新字段（rangeStart/addedTitles 等），
+    // 直接按「无快照」处理，避免残缺数据引发读取 undefined 报错，也让定时门控能重新生成新快照。
+    if (
+      typeof raw.rangeStart !== "number" ||
+      typeof raw.rangeEnd !== "number" ||
+      !Array.isArray(raw.addedTitles) ||
+      !Array.isArray(raw.topUsed)
+    ) {
+      return Promise.resolve(undefined);
+    }
+    return Promise.resolve({
+      id: row.id,
+      stats: {
+        rangeStart: raw.rangeStart,
+        rangeEnd: raw.rangeEnd,
+        addedCount: raw.addedCount ?? 0,
+        addedTitles: raw.addedTitles,
+        usedPromptCount: raw.usedPromptCount ?? 0,
+        usageCount: raw.usageCount ?? 0,
+        topUsed: raw.topUsed,
+        aiRefinedCount: raw.aiRefinedCount ?? 0,
+      },
+      comment: row.comment ?? "",
+      createdAt: row.createdAt,
+    });
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+/** 最近一次「有效」统计快照的写入时间（毫秒时间戳；无记录或均为旧格式返回 0）。 */
+export async function getLastSnapshotAt(): Promise<number> {
+  try {
+    const snap = await getLastStatsSnapshot();
+    return Promise.resolve(snap?.createdAt ?? 0);
   } catch (e) {
     return Promise.reject(e);
   }

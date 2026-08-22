@@ -12,7 +12,7 @@
 import { BlockAssembler, createUserMessage } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, LlmRuntime, LlmModelInfo } from "@deepseek-ai/dsh-llm";
 import type { PluginSettings, Prompt } from "../types.js";
-import { updatePrompt } from "./store.js";
+import { listTags, updatePrompt } from "./store.js";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { appendMemory, buildCharacterSystem, noteInsight, readCharacterDocs } from "./character.js";
@@ -201,9 +201,16 @@ async function resolveCandidates(
 }
 
 /** 组装 system prompt：把 USER.md 与 MEMORY.md 作为上下文，让 AI 越用越懂用户。 */
-function systemPrompt(userDoc: string, memoryDoc: string): string {
+function systemPrompt(
+  userDoc: string,
+  memoryDoc: string,
+  existingTags: string[],
+  existingVars: string[],
+): string {
   const user = userDoc.trim() || "（暂无）";
   const memory = memoryDoc.trim() || "（暂无）";
+  // 标签库：优先复用已有标签，避免重复创建
+  const tagLib = existingTags.length ? existingTags.join("、") : "（暂无）";
   return [
     "你是一名提示词库整理助手，帮助用户把原始输入整理成高质量、可复用的提示词，并洞察用户的写作风格与关注领域。",
     "",
@@ -213,22 +220,34 @@ function systemPrompt(userDoc: string, memoryDoc: string): string {
     "【长期记忆 MEMORY.md】这是此前沉淀的用户风格与经验洞察，供你参考（可能为空）：",
     memory,
     "",
+    "【标签库】以下是当前已有的标签，请优先复用最贴合的一个，避免重复创建：",
+    tagLib,
+    "",
     "请严格输出一个 JSON 对象，不要 Markdown 代码块，不要任何多余文字：",
-    '{ "title": "简洁标题", "tags": ["标签1", "标签2"], "summary": "用途摘要与使用说明", "body": "优化改写后的提示词正文", "insight": "一句话总结用户写作风格或关注领域" }',
+    '{ "title": "简洁标题", "tags": ["标签"], "summary": "用途摘要与使用说明", "body": "优化改写后的提示词正文", "insight": "一句话总结用户写作风格或关注领域" }',
     "",
     "要求：",
     "- title：简洁明了，不超过 30 字；",
-    "- tags：1~3 个，用于分类与筛选，可沿用 USER.md 中出现的高频主题；",
+    "- tags：只输出 1 个标签；优先从【标签库】中选择最贴合的一个，若没有合适的再新造一个简洁、贴合内容的新标签；",
     "- summary：一两句话说明这个提示词的用途与使用方法；",
     "- body：在保留原意的基础上润色，使表达更清晰、通用、可直接使用，不要丢失关键细节；",
+    ...(existingVars.length
+      ? [
+          "- 正文中的 `{{变量名}}` 是模板变量占位符（运行时由使用者替换）：所有已有的 {{}} 必须原样保留，不得删除、改写或替换其中的变量名、不得修改其括号格式；",
+        ]
+      : []),
+    "- 若正文某处内容会因使用场景而变化（如角色、对象、主题、风格、细节等），可在那处新增命名清晰、贴合语境的 {{变量名}} 占位符，提升提示词可复用性；没有这种需求时不要画蛇添足；",
     "- insight：用一句话描述这条提示词反映的用户写作风格或关注领域，用于持续完善用户档案。",
   ].join("\n");
 }
 
-/** 组装 user 消息：原始提示词正文 + 候选标签。 */
-function userMessage(rawBody: string, tag?: string): string {
+/** 组装 user 消息：原始提示词正文 + 候选标签 + 已有模板变量。 */
+function userMessage(rawBody: string, tag?: string, existingVars?: string[]): string {
   const lines = ["以下是用户要学习的原始提示词：", "", rawBody];
   if (tag) lines.push("", `用户给出的候选标签：${tag}`);
+  if (existingVars && existingVars.length) {
+    lines.push("", `正文已有模板变量（{{}} 内为变量名，运行时替换，必须原样保留）：${existingVars.join("、")}`);
+  }
   return lines.join("\n");
 }
 
@@ -382,11 +401,22 @@ export async function enrichLearnedPrompt(prompt: Prompt, settings: PluginSettin
   if (candidates.length === 0) return;
   const docs = await readCharacterDocs();
   logAI(`enrich: 灵魂上下文 USER=${docs.USER.length} 字 MEMORY=${docs.MEMORY.length} 字`);
+  // 读取标签库，让 AI 优先复用已有标签（不存在时才新建），只生成一个标签
+  const tagList = await listTags().catch(() => []);
+  const existingTags = tagList.map((t) => t.name);
+  logAI(`enrich: 标签库 ${existingTags.length} 个 [${existingTags.join(", ")}]`);
+  // 检测正文已有的模板变量（{{}}），告知模型原样保留并可按需新增，与润色的 keepVariables 逻辑保持一致
+  const existingVars = [...prompt.body.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)]
+    .map((m) => m[1]!.trim())
+    .filter(Boolean);
   const text = await collectTextWithFallback(
     llm,
     candidates,
-    await withCharacterSystem(systemPrompt(docs.USER, docs.MEMORY), docs),
-    userMessage(prompt.body, prompt.tags?.[0]),
+    await withCharacterSystem(
+      systemPrompt(docs.USER, docs.MEMORY, existingTags, existingVars),
+      docs,
+    ),
+    userMessage(prompt.body, prompt.tags?.[0], existingVars),
   );
   if (!text) return;
   const result = parseJson(text);
@@ -428,6 +458,7 @@ export async function enrichLearnedPrompt(prompt: Prompt, settings: PluginSettin
 export async function polishPromptBody(
   body: string,
   settings: PluginSettings,
+  opts?: { keepVariables?: boolean },
 ): Promise<string | undefined> {
   logAI(`polish: 开始 正文长度=${body.length}`);
   if (!llm) {
@@ -439,6 +470,14 @@ export async function polishPromptBody(
   // 读取灵魂文件（USER.md / MEMORY.md）作为上下文，让润色更贴合用户（越用越准）
   const docs = await readCharacterDocs();
   logAI(`polish: 灵魂上下文 USER=${docs.USER.length} 字 MEMORY=${docs.MEMORY.length} 字`);
+  // 是否启用「模板变量 {{}} 保留/新增」能力：聊天框按钮润色关闭，词库内润色开启（默认开启）
+  const keepVariables = opts?.keepVariables !== false;
+  // 检测正文中已有的模板变量（{{变量名}}），用于告知模型原样保留
+  const existingVars = keepVariables
+    ? [...body.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)]
+        .map((m) => m[1]!.trim())
+        .filter(Boolean)
+    : [];
   const system = [
     "你是一名专业的提示词润色助手，擅长贴合用户的写作风格对提示词进行润色。",
     "",
@@ -451,11 +490,20 @@ export async function polishPromptBody(
     "要求：",
     "- 只润色提示词内容本身，不要涉及标题、标签、分类等；",
     "- 保持原意与所有关键细节，不得遗漏、曲解或删减；",
+    ...(keepVariables
+      ? [
+          "- 正文中的 `{{变量名}}` 是模板变量占位符（运行前由使用者替换）：所有已有的 {{}} 必须原样保留，不得删除、改写或替换其中的变量名；",
+          "- 若正文某处内容会因使用场景而变化（如角色、对象、主题、风格、细节等），可在该处新增命名清晰、贴合语境的 {{变量名}} 占位符，提升提示词可复用性；没有这种需求时不要画蛇添足；",
+        ]
+      : []),
     "- 结合 USER.md 中的写作风格与关注领域进行润色，使表达更贴合用户习惯；",
     "- 让提示词更清晰、通用、结构清晰、可直接复用；",
     "- 直接输出润色后的提示词正文，不要任何解释或 Markdown 代码块。",
   ].join("\n");
-  const content = `请润色以下提示词内容：\n\n${body}`;
+  const content =
+    keepVariables && existingVars.length
+      ? `请润色以下提示词内容。其中已有模板变量（{{}} 内为变量名，运行前会被替换，必须原样保留）：${existingVars.join("、")}\n\n${body}`
+      : `请润色以下提示词内容：\n\n${body}`;
   const text = await collectTextWithFallback(
     llm,
     candidates,

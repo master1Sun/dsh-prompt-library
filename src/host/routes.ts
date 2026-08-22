@@ -17,10 +17,20 @@ import { learnPolished, listAiSelectables, polishPromptBody } from "./ai.js";
 import {
   autoLearn,
   createPrompt,
+  createTag,
   deletePrompt,
+  deleteTag,
+  deleteTrash,
+  emptyTrash,
+  exportPrompts,
   getSettings,
+  importPrompts,
   listPrompts,
+  listTags,
+  listTrash,
   recordUsage,
+  renameTag,
+  restorePrompts,
   updatePrompt,
   updateSettings,
 } from "./store.js";
@@ -59,18 +69,13 @@ function readJsonBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
-/** 将 `req.url` 拆分为路径名（相对于 PREFIX）和 id 段。 */
-function parseTail(url: string | undefined): { tail: string; id: string | null } {
+/** 将 `req.url` 拆分为路径段（相对于 PREFIX）。 */
+function parseTail(url: string | undefined): { tail: string; segments: string[] } {
   const full = url ?? "";
   const pathname = full.split("?", 1)[0] ?? "";
   const tail = pathname.startsWith(PREFIX) ? pathname.slice(PREFIX.length) : pathname;
-  // 期望 "" 或 "/" 或 "/prompts" 或 "/prompts/<id>"。
   const segments = tail.split("/").filter(Boolean);
-  if (segments.length === 0) return { tail: "/", id: null };
-  if (segments.length === 1) return { tail: `/${segments[0]}`, id: null };
-  if (segments.length === 2 && segments[0] === "prompts")
-    return { tail: "/prompts/:id", id: segments[1] };
-  return { tail, id: null };
+  return { tail, segments };
 }
 
 function isInput(value: unknown): value is PromptInput {
@@ -86,21 +91,37 @@ function isPatch(value: unknown): value is PromptPatch {
   return typeof value === "object" && value !== null;
 }
 
+/** 从请求体中提取字符串数组（{ ids: string[] } 或直接数组）。 */
+function extractIds(body: unknown): string[] {
+  const list =
+    typeof body === "object" &&
+    body !== null &&
+    Array.isArray((body as { ids?: unknown }).ids)
+      ? (body as { ids: unknown[] }).ids
+      : Array.isArray(body)
+        ? body
+        : [];
+  return list.filter((x): x is string => typeof x === "string");
+}
+
 export function makePromptRoutes(): WebRoute[] {
   const handler = async (req: IncomingMessage, res: ServerResponse) => {
     const method = (req.method ?? "GET").toUpperCase();
-    const { tail, id } = parseTail(req.url);
+    const { tail, segments } = parseTail(req.url);
+    const promptId = segments[0] === "prompts" && segments.length === 2 ? segments[1] : undefined;
 
     try {
-      // GET /prompts — 列表
-      if (method === "GET" && (tail === "/prompts" || tail === "/" )) {
-        // 将 "/" 视为列出集合根
+      // GET / 或 /prompts — 列表（"/" 视为列出集合根）
+      if (
+        method === "GET" &&
+        (segments.length === 0 || (segments[0] === "prompts" && segments.length === 1))
+      ) {
         const prompts = await listPrompts();
         return json(res, 200, { ok: true, data: prompts });
       }
 
       // POST /prompts — 创建
-      if (method === "POST" && tail === "/prompts") {
+      if (method === "POST" && segments[0] === "prompts" && segments.length === 1) {
         const body = await readJsonBody(req);
         if (!isInput(body)) return json(res, 400, { ok: false, error: "invalid body: {title, body}" });
         const prompt: Prompt = await createPrompt(body);
@@ -123,26 +144,120 @@ export function makePromptRoutes(): WebRoute[] {
       }
 
       // PUT /prompts/:id — 更新
-      if (method === "PUT" && tail === "/prompts/:id" && id) {
+      if (method === "PUT" && promptId) {
         const body = await readJsonBody(req);
         if (!isPatch(body)) return json(res, 400, { ok: false, error: "invalid body" });
-        const updated = await updatePrompt(id, body);
+        const updated = await updatePrompt(promptId, body);
         if (!updated) return json(res, 404, { ok: false, error: "not found" });
         return json(res, 200, { ok: true, data: updated });
       }
 
       // DELETE /prompts/:id — 删除
-      if (method === "DELETE" && tail === "/prompts/:id" && id) {
-        const removed = await deletePrompt(id);
+      if (method === "DELETE" && promptId) {
+        const removed = await deletePrompt(promptId);
         if (!removed) return json(res, 404, { ok: false, error: "not found" });
-        return json(res, 200, { ok: true, data: { id } });
+        return json(res, 200, { ok: true, data: { id: promptId } });
       }
 
-      // POST /prompts/:id/use — 记录使用次数
-      if (method === "POST" && tail === "/prompts/:id" && id) {
-        const updated = await recordUsage(id);
+      // POST /prompts/:id — 记录使用次数
+      if (method === "POST" && promptId) {
+        const updated = await recordUsage(promptId);
         if (!updated) return json(res, 404, { ok: false, error: "not found" });
         return json(res, 200, { ok: true, data: updated });
+      }
+
+      // GET /export — 导出全部提示词（备份内容，含 schema 版本）
+      if (method === "GET" && segments[0] === "export" && segments.length === 1) {
+        const data = await exportPrompts();
+        return json(res, 200, { ok: true, data });
+      }
+
+      // POST /export — 导出勾选的提示词（body: { ids?: string[] }，缺省导出全部）
+      if (method === "POST" && segments[0] === "export" && segments.length === 1) {
+        const body = await readJsonBody(req);
+        const ids =
+          typeof body === "object" &&
+          body !== null &&
+          Array.isArray((body as { ids?: unknown }).ids)
+            ? (body as { ids: unknown[] }).ids.filter((x): x is string => typeof x === "string")
+            : undefined;
+        const data = await exportPrompts(ids && ids.length > 0 ? ids : undefined);
+        return json(res, 200, { ok: true, data });
+      }
+
+      // POST /import — 从备份内容导入（合并式：同 id 覆盖，其余新增）
+      if (method === "POST" && segments[0] === "import" && segments.length === 1) {
+        const body = await readJsonBody(req);
+        const result = await importPrompts(body);
+        return json(res, 200, { ok: true, data: result });
+      }
+
+      // GET /tags — 标签汇总（名称 + 使用次数）
+      if (method === "GET" && segments[0] === "tags" && segments.length === 1) {
+        const data = await listTags();
+        return json(res, 200, { ok: true, data });
+      }
+
+      // PUT /tags/:name — 重命名标签（合并到新标签）
+      if (method === "PUT" && segments[0] === "tags" && segments.length === 2) {
+        const from = decodeURIComponent(segments[1] ?? "");
+        const body = await readJsonBody(req);
+        const to =
+          typeof body === "object" &&
+          body !== null &&
+          typeof (body as { to?: unknown }).to === "string"
+            ? (body as { to: string }).to
+            : "";
+        const changed = await renameTag(from, to);
+        return json(res, 200, { ok: true, data: { changed } });
+      }
+
+      // DELETE /tags/:name — 删除标签（从所有提示词中移除，内容变为未命名/未分类）
+      if (method === "DELETE" && segments[0] === "tags" && segments.length === 2) {
+        const name = decodeURIComponent(segments[1] ?? "");
+        const changed = await deleteTag(name);
+        return json(res, 200, { ok: true, data: { changed } });
+      }
+
+      // POST /tags — 新建标签（已存在则忽略）
+      if (method === "POST" && segments[0] === "tags" && segments.length === 1) {
+        const body = await readJsonBody(req);
+        const name =
+          typeof body === "object" &&
+          body !== null &&
+          typeof (body as { name?: unknown }).name === "string"
+            ? (body as { name: string }).name
+            : "";
+        const created = await createTag(name);
+        return json(res, 201, { ok: true, data: { name: created } });
+      }
+
+      // GET /trash — 列出回收站内容
+      if (method === "GET" && segments[0] === "trash" && segments.length === 1) {
+        const data = await listTrash();
+        return json(res, 200, { ok: true, data });
+      }
+
+      // POST /trash/restore — 从回收站恢复一批提示词
+      if (method === "POST" && tail === "/trash/restore") {
+        const body = await readJsonBody(req);
+        const ids = extractIds(body);
+        const restored = await restorePrompts(ids);
+        return json(res, 200, { ok: true, data: { restored } });
+      }
+
+      // POST /trash/delete — 从回收站永久删除一批提示词
+      if (method === "POST" && tail === "/trash/delete") {
+        const body = await readJsonBody(req);
+        const ids = extractIds(body);
+        const deleted = await deleteTrash(ids);
+        return json(res, 200, { ok: true, data: { deleted } });
+      }
+
+      // POST /trash/empty — 清空回收站
+      if (method === "POST" && tail === "/trash/empty") {
+        const deleted = await emptyTrash();
+        return json(res, 200, { ok: true, data: { deleted } });
       }
 
       // GET /ai/providers — 获取系统中可用的 AI provider 及模型列表（设置界面下拉选择）
@@ -152,6 +267,7 @@ export function makePromptRoutes(): WebRoute[] {
       }
 
       // POST /ai/polish — AI 润色提示词正文（只返回结果，不写回、不学习）
+      // keepVariables：是否启用「{{}} 模板变量保留/新增」能力（默认开启；聊天框按钮润色关闭）
       if (method === "POST" && tail === "/ai/polish") {
         const raw = await readJsonBody(req);
         if (typeof raw !== "object" || raw === null || typeof (raw as { body: string }).body !== "string") {
@@ -159,8 +275,9 @@ export function makePromptRoutes(): WebRoute[] {
         }
         const body = (raw as { body: string }).body;
         if (!body.trim()) return json(res, 400, { ok: false, error: "body empty" });
+        const keepVariables = (raw as { keepVariables?: boolean }).keepVariables !== false;
         const settings = await getSettings();
-        const polished = await polishPromptBody(body, settings);
+        const polished = await polishPromptBody(body, settings, { keepVariables });
         if (polished === undefined) {
           return json(res, 503, { ok: false, error: "AI 不可用或润色失败，请确认已连接 LLM 服务" });
         }

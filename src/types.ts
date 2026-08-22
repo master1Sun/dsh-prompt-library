@@ -28,6 +28,12 @@ export interface Prompt {
   lastUsedAt: number;
 }
 
+/** 回收站中的一条提示词（含删除时间）。 */
+export interface TrashItem extends Prompt {
+  /** 移入回收站的时间（纪元毫秒）。 */
+  deletedAt: number;
+}
+
 /** 持久化文件的磁盘结构。 */
 export interface PromptStoreFile {
   /** 存储文件的 schema 版本。 */
@@ -115,7 +121,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   autoLearnTag: "auto-learned",
   autoLearnMinLength: 60,
   autoLearnManualConfirm: false,
-  panelWidth: 380,
+  panelWidth: 360,
   panelHeight: 500,
   rightPanelEnabled: false,
   showComposerButton: true,

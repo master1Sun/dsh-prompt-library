@@ -19,6 +19,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 import type { PluginSettings, Prompt } from "../types.js";
@@ -28,6 +29,7 @@ import {
   deletePrompt as apiDelete,
   getSettings as apiGetSettings,
   listPrompts as apiList,
+  listTags as apiListTags,
   updatePrompt as apiUpdate,
   usePrompt as apiUse,
   polishPrompt,
@@ -39,8 +41,16 @@ import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { notifyDataChanged, useDataChanged } from "./data-sync.js";
 import { PL_BUTTON_CSS, plBtn } from "./button-style.js";
 import { type PLTranslate, usePLT } from "./i18n.js";
-import { SearchBox } from "./SearchBox.js";
+import { Highlight, SearchBox, TagFilterBar } from "./SearchBox.js";
 import { TagInput } from "./TagInput.js";
+import { ConfirmDialog } from "./ConfirmDialog.js";
+import {
+  applyVariables,
+  extractVariables,
+  hasVariables,
+  insertVariableAt,
+  TemplateFillModal,
+} from "./TemplateVariables.js";
 
 const MONO =
   'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif)';
@@ -60,11 +70,10 @@ const TONE = {
   red: "var(--dsw-alias-state-error-primary, #dc2626)",
 } as const;
 
-type Editor = { title: string; body: string; tags: string } & (
-  | { mode: "none" }
-  | { mode: "create" }
-  | { mode: "edit"; id: string }
-);
+type Editor =
+  | { mode: "none"; title: string; body: string; tags: string }
+  | { mode: "create"; title: string; body: string; tags: string }
+  | { mode: "edit"; id: string; title: string; body: string; tags: string };
 
 const NO_EDITOR: Editor = { mode: "none", title: "", body: "", tags: "" };
 
@@ -74,6 +83,9 @@ const EXPANDED_GROUPS_KEY = "pl:expanded-groups";
 /** 悬停详情卡片宽度（需与 HoverDetail.tsx 的 CARD_W 保持一致）与左侧间隙。 */
 const HOVER_W = 300;
 const HOVER_GAP = 12;
+
+/** 右侧边栏固定宽度：不随共享的 panelWidth 设置变化。 */
+const SIDEBAR_WIDTH = 360;
 
 function useSettings(): PluginSettings {
   const [settings, setSettings] = useState<PluginSettings>(DEFAULT_SETTINGS);
@@ -109,7 +121,10 @@ export function SidebarPromptLibrary(props?: {
   // 默认折叠，显示展开按钮
   const [collapsed, setCollapsed] = useState(true);
   const [prompts, setPrompts] = useState<Prompt[]>([]);
+  // 词库标签表标签名（与提示词标签合并，保证新建标签能同步到下拉候选）
+  const [tagNames, setTagNames] = useState<string[]>([]);
   const [query, setQuery] = useState("");
+  const [tagFilter, setTagFilter] = useState("");
   // 实时搜索：输入变化立即可用于过滤
   const clearSearch = useCallback(() => setQuery(""), []);
   const [phase, setPhase] = useState<"idle" | "loading" | "ready" | "error">("idle");
@@ -135,6 +150,10 @@ export function SidebarPromptLibrary(props?: {
     if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
     toastTimer.current = window.setTimeout(() => setToast(null), 2600);
   }, []);
+  // 模板变量填充弹窗：插入前填写 {{变量}} 占位符
+  const [template, setTemplate] = useState<{ prompt: Prompt; mode: "insert" | "overwrite" } | null>(null);
+  // 待确认删除的提示词（自定义确认弹窗，替代系统 confirm）
+  const [deleteConfirm, setDeleteConfirm] = useState<Prompt | null>(null);
   // 每个分组的展开状态（持久化到 localStorage，刷新后保持）。
   // 默认全部折叠：集合中只记录「已展开」的分组，空集合即全部折叠。
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => {
@@ -162,6 +181,9 @@ export function SidebarPromptLibrary(props?: {
     });
   }, []);
 
+  // 最近使用分组展开状态（默认展开，可点击分组头收起）
+  const [recentCollapsed, setRecentCollapsed] = useState(false);
+
   const searchRef = useRef<HTMLInputElement | null>(null);
   const refreshController = useRef<AbortController | null>(null);
   // 提示词行悬停详情（由设置控制，默认关闭）
@@ -169,13 +191,15 @@ export function SidebarPromptLibrary(props?: {
   const hoverEnabled = settings.hoverDetailEnabled;
   // 面板根元素 ref：用于把悬停详情卡片固定在面板左侧
   const panelRef = useRef<HTMLElement>(null);
+  // 编辑表单正文输入框引用：供「插入变量 {{}}」定位光标
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
 
   // 固定显示在面板左侧的详情卡片：x 取面板左缘左侧，y 对齐所悬停行的顶部（位置确定可预期）
   const showDetail = (p: Prompt, rowTop: number) => {
     const panel = panelRef.current;
     const leftEdge = panel
       ? panel.getBoundingClientRect().left
-      : window.innerWidth - Math.min(settings.panelWidth, window.innerWidth);
+      : window.innerWidth - Math.min(SIDEBAR_WIDTH, window.innerWidth);
     hover.show(p, leftEdge - HOVER_W - HOVER_GAP, rowTop);
   };
 
@@ -196,6 +220,13 @@ export function SidebarPromptLibrary(props?: {
         setError(err instanceof Error ? err.message : String(err));
         setPhase("error");
       });
+    // 同步刷新标签表候选，保证新建标签能立刻出现在下拉框
+    apiListTags()
+      .then((tags) => {
+        if (ctrl.signal.aborted) return;
+        setTagNames(tags.map((x) => x.name));
+      })
+      .catch(() => {});
   }, []);
 
   // 订阅数据变化：聊天面板新增/修改/删除时同步刷新本面板
@@ -211,12 +242,14 @@ export function SidebarPromptLibrary(props?: {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return prompts;
     return prompts.filter((p) => {
+      // 标签过滤：命中该项标签（与关键词过滤叠加，二者为“且”关系）
+      if (tagFilter && !(p.tags ?? []).some((t) => t.trim() === tagFilter)) return false;
+      if (!q) return true;
       const hay = `${p.title} ${p.body} ${(p.tags ?? []).join(" ")}`.toLowerCase();
       return hay.includes(q);
     });
-  }, [prompts, query]);
+  }, [prompts, query, tagFilter]);
 
   // ── 搜索到内容自动展开分组；清空搜索恢复原状态 ───────────────
   // 记录搜索前的展开状态，清空搜索时还原，不与"新增自动展开"互相干扰
@@ -228,6 +261,8 @@ export function SidebarPromptLibrary(props?: {
       if (preSearchExpanded.current === null) {
         preSearchExpanded.current = new Set(expandedGroups);
       }
+      // 搜索时展开最近使用分组，让搜索结果展示出来
+      setRecentCollapsed(false);
       // 展开当前可见结果涉及的所有分组，让搜索结果展示出来
       setExpandedGroups((prev) => {
         const next = new Set(prev);
@@ -245,12 +280,12 @@ export function SidebarPromptLibrary(props?: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, filtered, T]);
 
-  // 已有标签候选（去重排序），供标签输入下拉提示
+  // 已有标签候选（去重排序）：来自所有提示词 + 词库标签表，供标签输入下拉提示
   const allTags = useMemo(() => {
-    const s = new Set<string>();
+    const s = new Set<string>(tagNames);
     for (const p of prompts) for (const t of p.tags ?? []) s.add(t);
     return Array.from(s).sort();
-  }, [prompts]);
+  }, [prompts, tagNames]);
 
   // ── 新增数据自动展开/定位 ──────────────────────────────────────────────────
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -295,6 +330,11 @@ export function SidebarPromptLibrary(props?: {
 
   const insert = useCallback(
     (prompt: Prompt) => {
+      // 含模板变量占位符时先弹出填充窗口，确认后再插入
+      if (hasVariables(prompt.body)) {
+        setTemplate({ prompt, mode: "insert" });
+        return;
+      }
       apiUse(prompt.id).catch(() => {});
       insertText(prompt.body);
     },
@@ -302,11 +342,32 @@ export function SidebarPromptLibrary(props?: {
   );
 
   // 用提示词正文覆盖当前草稿；无草稿上下文时回退为复制到剪贴板
-  const overwrite = useCallback((prompt: Prompt) => {
-    apiUse(prompt.id).catch(() => {});
-    if (inputActions) inputActions.setDraft(prompt.body);
-    else navigator.clipboard.writeText(prompt.body).catch(() => {});
-  }, [inputActions]);
+  const overwrite = useCallback(
+    (prompt: Prompt) => {
+      if (hasVariables(prompt.body)) {
+        setTemplate({ prompt, mode: "overwrite" });
+        return;
+      }
+      apiUse(prompt.id).catch(() => {});
+      if (inputActions) inputActions.setDraft(prompt.body);
+      else navigator.clipboard.writeText(prompt.body).catch(() => {});
+    },
+    [inputActions],
+  );
+
+  // 模板变量填充确认：用填充后的正文插入/覆盖，未提供的变量保留原占位符
+  const applyTemplate = useCallback(
+    (values: Record<string, string>) => {
+      if (!template) return;
+      const filled = applyVariables(template.prompt.body, values);
+      apiUse(template.prompt.id).catch(() => {});
+      if (template.mode === "insert") insertText(filled);
+      else if (inputActions) inputActions.setDraft(filled);
+      else navigator.clipboard.writeText(filled).catch(() => {});
+      setTemplate(null);
+    },
+    [template, insertText, inputActions],
+  );
 
   // 复制提示词正文到剪贴板，短暂显示「已复制」
   const copy = useCallback((p: Prompt) => {
@@ -379,13 +440,26 @@ export function SidebarPromptLibrary(props?: {
     );
   }, [polish, polishResult, polishLearned, showToast, T]);
 
-  // 按 tag 分组（无 tag 归为"未分类"，多 tag 的提示词出现在每个 tag 分组中）
+  // 分组渲染顺序：
+  // 1. 最近使用分组（30 天内有使用记录，按使用次数降序取前 10 条）固定在列表最前，
+  //    仅作置顶展示，不排除对应提示词进入标签分组；
+  // 2. 其余按 tag 分组：多标签的提示词出现在每个对应标签分组，无标签归入「未分类」。
   const tagGrouped = useMemo(() => {
-    const groups = new Map<string, Prompt[]>();
+    const recentKey = T("pl.sidebar.recent");
     const uncategorized = T("pl.sidebar.uncategorized");
+    const recentCut = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    // 最近使用只展示使用次数最多的 10 条（次数相同则最近使用的在前）。
+    const recent = filtered
+      .filter((p) => p.lastUsedAt > 0 && p.lastUsedAt >= recentCut)
+      .sort((a, b) => b.usageCount - a.usageCount || b.lastUsedAt - a.lastUsedAt)
+      .slice(0, 10);
+    const groups = new Map<string, Prompt[]>();
+    // 所有提示词按标签分组：多标签提示词出现在每个标签分组；无/空标签归入「未分类」。
     for (const p of filtered) {
-      if (p.tags && p.tags.length > 0) {
-        for (const tag of p.tags) {
+      const validTags = (p.tags ?? []).map((x) => x.trim()).filter(Boolean);
+      if (validTags.length > 0) {
+        // 去重，避免同一提示词在同一个标签分组中重复出现
+        for (const tag of new Set(validTags)) {
           if (!groups.has(tag)) groups.set(tag, []);
           groups.get(tag)!.push(p);
         }
@@ -394,13 +468,16 @@ export function SidebarPromptLibrary(props?: {
         groups.get(uncategorized)!.push(p);
       }
     }
-    // 按标签名排序，"未分类"排最后
-    const sorted = Array.from(groups.entries()).sort(([a], [b]) => {
+    // 标签分组按名称排序，「未分类」排最后
+    const rest = Array.from(groups.entries()).sort(([a], [b]) => {
       if (a === uncategorized) return 1;
       if (b === uncategorized) return -1;
       return a.localeCompare(b);
     });
-    return sorted;
+    const ordered: Array<[string, Prompt[]]> = [];
+    if (recent.length > 0) ordered.push([recentKey, recent]);
+    ordered.push(...rest);
+    return ordered;
   }, [filtered, T]);
 
   // 挤占宿主聊天会话面板：宿主主布局是三列 grid（inline grid-template-columns:
@@ -412,7 +489,7 @@ export function SidebarPromptLibrary(props?: {
   useEffect(() => {
     const DATA_KEY = "plSqueezed";
     const w = !collapsed && settings.rightPanelEnabled
-      ? Math.min(settings.panelWidth, window.innerWidth)
+      ? Math.min(SIDEBAR_WIDTH, window.innerWidth)
       : 0;
 
     // 从 scrollBody 向上找 inline gtc 含 "minmax(0px, 1fr) <数字>px" 的主布局 grid 容器。
@@ -462,7 +539,7 @@ export function SidebarPromptLibrary(props?: {
         delete frame.dataset[DATA_KEY];
       }
     };
-  }, [collapsed, settings.rightPanelEnabled, settings.panelWidth]);
+  }, [collapsed, settings.rightPanelEnabled]);
 
   // 当设置中启用侧边栏时显示，禁用时隐藏
   if (!settings.rightPanelEnabled) return null;
@@ -508,13 +585,18 @@ export function SidebarPromptLibrary(props?: {
   };
 
   const remove = (p: Prompt) => {
-    if (!confirm(T("pl.confirmDelete", { title: p.title }))) return;
-    apiDelete(p.id).then(notifyDataChanged, (e: unknown) =>
+    setDeleteConfirm(p);
+  };
+
+  /** 确认删除：从词库删除并移入回收站。 */
+  const confirmRemove = () => {
+    if (!deleteConfirm) return;
+    apiDelete(deleteConfirm.id).then(notifyDataChanged, (e: unknown) =>
       setError(e instanceof Error ? e.message : String(e)),
     );
   };
 
-  const panelWidth = settings.panelWidth;
+  const panelWidth = SIDEBAR_WIDTH;
 
   return (
     <>
@@ -687,19 +769,25 @@ export function SidebarPromptLibrary(props?: {
 
           {/* 搜索框：输入即时生效（实时过滤） */}
           {!editing && (
-            <div style={{ padding: "0px 12px", flexShrink: 0, margin: 12 }}>
-              <SearchBox
-                inputRef={searchRef}
-                value={query}
-                onChange={setQuery}
-                onSearch={() => setQuery(query)}
-                onClear={clearSearch}
-                placeholder={T("pl.search")}
-              />
-            </div>
-          )}
-
-          {/* 内容区 */}
+            <>
+              <div style={{ padding: "0px 12px", flexShrink: 0, margin: "12px 12px 0" }}>
+                <SearchBox
+                  inputRef={searchRef}
+                  value={query}
+                  onChange={setQuery}
+                  onSearch={() => setQuery(query)}
+                  onClear={clearSearch}
+                  placeholder={T("pl.search")}
+                />
+                {/* 标签过滤条（与搜索关键词叠加过滤） */}
+                <TagFilterBar
+                  tags={allTags}
+                  active={tagFilter}
+                  onChange={setTagFilter}
+                  allLabel={T("pl.tagFilterAll")}
+                />
+              </div>
+              {/* 内容区 */}
           <div ref={scrollRef} style={{ flex: 1, overflow: "auto", marginRight: 2 }}>
             {phase === "loading" && (
               <div style={{ padding: "20px 12px", color: TONE.muted, fontSize: 13, textAlign: "center" }}>
@@ -762,39 +850,6 @@ export function SidebarPromptLibrary(props?: {
                   )}
                 </div>
               </div>
-            ) : editing ? (
-              <div style={{ padding: "12px 16px", display: "flex", flexDirection: "column", gap: 9 }}>
-                <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
-                  {T("pl.titleField")}
-                  <input
-                    value={editor.title}
-                    onChange={(e) => setEditor({ ...editor, title: e.target.value })}
-                    style={inputStyle}
-                  />
-                </label>
-                <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
-                  {T("pl.bodyField")}
-                  <textarea
-                    value={editor.body}
-                    onChange={(e) => setEditor({ ...editor, body: e.target.value })}
-                    rows={6}
-                    style={{ ...inputStyle, resize: "vertical", minHeight: 250 }}
-                  />
-                </label>
-                <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
-                  {T("pl.tagsField")}
-                  <TagInput value={editor.tags} onChange={(v) => setEditor({ ...editor, tags: v })} suggestions={allTags} inputStyle={inputStyle} t={t} />
-                </label>
-                {error && <div style={{ color: TONE.red, fontSize: 12 }}>{error}</div>}
-                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                  <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => { setEditor(NO_EDITOR); setError(null); }}>
-                    {T("pl.cancel")}
-                  </Button>
-                  <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={saveEditor}>
-                    {T("pl.save")}
-                  </Button>
-                </div>
-              </div>
             ) : (
               <div>
                 {phase === "ready" && filtered.length === 0 && (
@@ -803,12 +858,21 @@ export function SidebarPromptLibrary(props?: {
                   </div>
                 )}
                 {tagGrouped.map(([tag, items]) => {
-                  const isCollapsed = !expandedGroups.has(tag);
+                  const recentKey = T("pl.sidebar.recent");
+                  // 最近使用分组可点击收起；其余按标签分组可点击折叠/展开
+                  const isRecentSection = tag === recentKey;
+                  const isCollapsed = isRecentSection
+                    ? recentCollapsed
+                    : !expandedGroups.has(tag);
                   return (
                   <div key={tag}>
-                    {/* 分组头 — 可点击折叠/展开 */}
+                    {/* 分组头 — 可点击折叠/展开（最近使用分组同样可收起） */}
                     <div
-                      onClick={() => { hover.hide(); toggleGroup(tag); }}
+                      onClick={() => {
+                        hover.hide();
+                        if (isRecentSection) setRecentCollapsed((v) => !v);
+                        else toggleGroup(tag);
+                      }}
                       style={{
                         padding: "8px 12px 4px",
                         fontSize: 11,
@@ -824,8 +888,17 @@ export function SidebarPromptLibrary(props?: {
                         userSelect: "none",
                       }}
                     >
-                      <span style={{ fontSize: 10, width: 12, textAlign: "center", flexShrink: 0 }}>
-                        {isCollapsed ? "\u25B6" : "\u25BC"}
+                      <span style={{ display: "inline-flex", width: 12, justifyContent: "center", flexShrink: 0 }}>
+                        {isRecentSection ? (
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                            <circle cx="12" cy="12" r="9" />
+                            <path d="M12 7v5l3 2" />
+                          </svg>
+                        ) : (
+                          <span style={{ fontSize: 10 }}>
+                            {isCollapsed ? "\u25B6" : "\u25BC"}
+                          </span>
+                        )}
                       </span>
                       <span>{tag}</span>
                       <span style={{ fontSize: 10, opacity: 0.6 }}>{T("pl.sidebar.groupCount", { count: items.length })}</span>
@@ -846,7 +919,7 @@ export function SidebarPromptLibrary(props?: {
                             : {}),
                         }}
                       >
-                        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline", minWidth: 0 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", minWidth: 0 }}>
                           <strong style={{
                             fontSize: 13,
                             fontWeight: 460,
@@ -856,8 +929,8 @@ export function SidebarPromptLibrary(props?: {
                             whiteSpace: "nowrap",
                             overflow: "hidden",
                             textOverflow: "ellipsis",
-                          }} title={p.title}>{clampTitle(p.title)}</strong>
-                          <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
+                          }} title={p.title}>{query.trim() ? <Highlight text={clampTitle(p.title)} query={query} /> : clampTitle(p.title)}</strong>
+                          <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
                             {isRecent(p.id) && (
                               <span
                                 title={T("pl.recentNew")}
@@ -891,7 +964,7 @@ export function SidebarPromptLibrary(props?: {
                             transition: "background 0.15s ease",
                           }}
                         >
-                          {p.body}
+                          {query.trim() ? <Highlight text={p.body} query={query} /> : p.body}
                         </pre>
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                           <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={() => insert(p)}>{T("pl.insert")}</Button>
@@ -920,6 +993,62 @@ export function SidebarPromptLibrary(props?: {
               </div>
             )}
           </div>
+            </>
+          )}
+          {/* 编辑/新建表单：editing 时独立展示（隐藏搜索与列表） */}
+          {editing && (
+            <div style={{ flex: 1, overflow: "auto", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 9 }}>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
+                {T("pl.titleField")}
+                <input
+                  value={editor.title}
+                  onChange={(e) => setEditor({ ...editor, title: e.target.value })}
+                  style={inputStyle}
+                />
+              </label>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
+                <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  {T("pl.bodyField")}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className={plBtn("ghost", "sm")}
+                    style={{ flex: "0 0 auto" }}
+                    onClick={(e: ReactMouseEvent<HTMLButtonElement>) => {
+                      // 仅点击「{{}}」按钮本身才插入，阻止 label/行内其他点击误触发
+                      e.preventDefault();
+                      e.stopPropagation();
+                      insertVariableAt(bodyRef.current, editor.body, (v) => setEditor({ ...editor, body: v }));
+                    }}
+                    title={T("pl.insertVariableTitle")}
+                  >
+                    {"{{}}"}
+                  </Button>
+                </span>
+                <textarea
+                  ref={bodyRef}
+                  value={editor.body}
+                  onChange={(e) => setEditor({ ...editor, body: e.target.value })}
+                  rows={6}
+                  style={{ ...inputStyle, resize: "vertical", minHeight: 250 }}
+                />
+              </div>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
+                {T("pl.tagsField")}
+                <TagInput value={editor.tags} onChange={(v) => setEditor({ ...editor, tags: v })} suggestions={allTags} inputStyle={inputStyle} t={t} />
+              </label>
+              {error && <div style={{ color: TONE.red, fontSize: 12 }}>{error}</div>}
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => { setEditor(NO_EDITOR); setError(null); }}>
+                  {T("pl.cancel")}
+                </Button>
+                <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={saveEditor}>
+                  {T("pl.save")}
+                </Button>
+              </div>
+            </div>
+          )}
           {/* 底部 — 与宿主左侧栏 footArea 一致：细分隔线 + 底部内边距 */}
           <footer
             style={{
@@ -934,7 +1063,13 @@ export function SidebarPromptLibrary(props?: {
               flexShrink: 0,
             }}
           >
-            <span>{T("pl.sidebar.tagTotal", { count: tagGrouped.length })}</span>
+            <span>
+              {T("pl.sidebar.tagTotal", {
+                count: tagGrouped.filter(
+                  ([k]) => k !== T("pl.sidebar.recent") && k !== T("pl.sidebar.uncategorized"),
+                ).length,
+              })}
+            </span>
             <span>{T("pl.sidebar.total", { count: prompts.length })}</span>
           </footer>
         </section>
@@ -962,6 +1097,27 @@ export function SidebarPromptLibrary(props?: {
           {toast}
         </div>
       )}
+      {/* 模板变量填充弹窗：插入含 {{变量}} 的提示词前弹出 */}
+      <TemplateFillModal
+        open={template !== null}
+        variables={template ? extractVariables(template.prompt.body) : []}
+        onCancel={() => setTemplate(null)}
+        onConfirm={applyTemplate}
+        t={T}
+      />
+      {/* 删除确认弹窗（自定义，替代系统 confirm） */}
+      <ConfirmDialog
+        open={deleteConfirm !== null}
+        message={T("pl.confirmDelete", { title: deleteConfirm?.title ?? "" })}
+        danger
+        confirmLabel={T("pl.confirm")}
+        cancelLabel={T("pl.cancel")}
+        onCancel={() => setDeleteConfirm(null)}
+        onConfirm={() => {
+          setDeleteConfirm(null);
+          confirmRemove();
+        }}
+      />
     </>
   );
 }

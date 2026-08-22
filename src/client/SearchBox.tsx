@@ -4,7 +4,7 @@
  * 左侧搜索图标，点击或按回车触发搜索；右侧清除图标一键清空。
  * 输入内容先暂存在草稿中，只有触发搜索后才生效，避免边输入边过滤。
  */
-import type { Ref } from "react";
+import type { CSSProperties, ReactNode, Ref } from "react";
 
 const MONO =
   'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif)';
@@ -15,6 +15,7 @@ const TONE = {
   row: "var(--dsw-alias-bg-layer-3, #1d2735)",
   border: "var(--dsw-alias-border-l2, rgba(196, 211, 232, 0.16))",
   accent: "var(--dsw-alias-brand-primary, #8ec5ff)",
+  accentSoft: "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 20%, transparent)",
 } as const;
 
 export interface SearchBoxProps {
@@ -28,6 +29,102 @@ export interface SearchBoxProps {
   onClear: () => void;
   placeholder?: string;
   inputRef?: Ref<HTMLInputElement>;
+}
+
+/** 标签过滤粒子的基础样式。 */
+const chipStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  padding: "2px 10px",
+  border: `1px solid ${TONE.border}`,
+  borderRadius: 99,
+  fontSize: 11,
+  lineHeight: "20px",
+  cursor: "pointer",
+  userSelect: "none",
+};
+
+/**
+ * 标签过滤条：一组可点击的标签粒子，单选过滤。
+ * 「全部」表示不过滤；点击已选中的标签可取消选择。
+ */
+export function TagFilterBar(props: {
+  tags: string[];
+  active: string;
+  onChange: (tag: string) => void;
+  allLabel?: string;
+}): ReactNode {
+  const { tags, active, onChange, allLabel } = props;
+  const chip = (selected: boolean): CSSProperties => ({
+    ...chipStyle,
+    background: selected ? TONE.accentSoft : TONE.row,
+    color: selected ? TONE.accent : TONE.text,
+    borderColor: selected ? TONE.accent : TONE.border,
+  });
+  return (
+    <div
+      style={{
+        display: "flex",
+        gap: 6,
+        flexWrap: "wrap",
+        marginTop: 6,
+        maxHeight: 60,
+        overflowY: "auto",
+      }}
+    >
+      <button type="button" onClick={() => onChange("")} style={chip(active === "")}>
+        {allLabel ?? "全部"}
+      </button>
+      {tags.map((tag) => (
+        <button
+          key={tag}
+          type="button"
+          onClick={() => onChange(active === tag ? "" : tag)}
+          title={tag}
+          style={chip(active === tag)}
+        >
+          {tag}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * 关键词高亮：把 text 中与 query（不含空格、忽略大小写）匹配的子串高亮显示。
+ * query 为空时原样返回文本。用于列表标题/正文的搜索结果高亮。
+ */
+export function Highlight({ text, query }: { text: string; query: string }): ReactNode {
+  const q = query?.trim();
+  if (!q) return <>{text}</>;
+  const lower = text.toLowerCase();
+  const ql = q.toLowerCase();
+  const nodes: ReactNode[] = [];
+  let i = 0;
+  let key = 0;
+  for (;;) {
+    const idx = lower.indexOf(ql, i);
+    if (idx === -1) {
+      nodes.push(text.slice(i));
+      break;
+    }
+    if (idx > i) nodes.push(text.slice(i, idx));
+    nodes.push(
+      <mark
+        key={key++}
+        style={{
+          background: "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 26%, transparent)",
+          color: "inherit",
+          borderRadius: 3,
+          padding: "0 1px",
+        }}
+      >
+        {text.slice(idx, idx + q.length)}
+      </mark>,
+    );
+    i = idx + q.length;
+  }
+  return <>{nodes}</>;
 }
 
 export function SearchBox({

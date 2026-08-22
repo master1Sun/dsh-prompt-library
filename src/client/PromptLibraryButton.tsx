@@ -14,6 +14,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 import type { PluginSettings, Prompt } from "../types.js";
@@ -23,6 +24,7 @@ import {
   deletePrompt as apiDelete,
   getSettings as apiGetSettings,
   listPrompts as apiList,
+  listTags as apiListTags,
   updatePrompt as apiUpdate,
   usePrompt as apiUse,
   learnPrompt as apiLearn,
@@ -34,11 +36,19 @@ import { SidebarPromptLibrary } from "./SidebarPromptLibrary.js";
 import { SelectionAddPrompt } from "./SelectionAddPrompt.js";
 import { Pagination } from "./Pagination.js";
 import { TagInput } from "./TagInput.js";
+import { ConfirmDialog } from "./ConfirmDialog.js";
 import { AUTO_LEARN_TOAST_MS, useAutoLearn } from "./auto-learn.js";
 import { isRecent, markRecent } from "./recent-created.js";
-import { notifyDataChanged, useDataChanged } from "./data-sync.js";
+import { notifyDataChanged, useDataChanged, useFillDraft } from "./data-sync.js";
 import { type PLT, type PLTranslate, usePLT } from "./i18n.js";
 import { SearchBox } from "./SearchBox.js";
+import {
+  applyVariables,
+  extractVariables,
+  hasVariables,
+  insertVariableAt,
+  TemplateFillModal,
+} from "./TemplateVariables.js";
 
 
 /**
@@ -199,14 +209,17 @@ function useTildaTrigger(
   inputActions: { setDraft: (text: string) => void },
   draft: string,
   t: PLT,
+  onSelect?: (p: Prompt) => void,
 ): void {
   const activeRef = useRef(false);
   // 触发浮层时「#」在正文中的位置；用于计算「#」之后的实时筛选内容
   const triggerIdxRef = useRef(-1);
   const draftRef = useRef(draft);
   const inputActionsRef = useRef(inputActions);
+  const onSelectRef = useRef(onSelect);
   draftRef.current = draft;
   inputActionsRef.current = inputActions;
+  onSelectRef.current = onSelect;
   lastPromptsForSelect = prompts;
 
   useEffect(() => {
@@ -226,7 +239,7 @@ function useTildaTrigger(
       if (prevChar !== " " && prevChar !== "\n") return;
       activeRef.current = true;
       triggerIdxRef.current = selStart - 1;
-      showOverlay(el, lastPromptsForSelect, inputActionsRef.current, draftRef.current, "", t);
+      showOverlay(el, lastPromptsForSelect, inputActionsRef.current, draftRef.current, "", t, onSelectRef.current);
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -252,7 +265,8 @@ function useTildaTrigger(
           e.stopPropagation();
           const selected = getSelectedPrompt();
           if (selected) {
-            applyPrompt(selected, inputActionsRef.current, draftRef.current);
+            if (onSelectRef.current) onSelectRef.current(selected);
+            else applyPrompt(selected, inputActionsRef.current, draftRef.current);
           }
           activeRef.current = false;
           triggerIdxRef.current = -1;
@@ -295,7 +309,7 @@ function useTildaTrigger(
             return;
           }
           // 实时按筛选内容更新浮层
-          showOverlay(el, lastPromptsForSelect, inputActionsRef.current, draftRef.current, query, t);
+          showOverlay(el, lastPromptsForSelect, inputActionsRef.current, draftRef.current, query, t, onSelectRef.current);
         }
         return;
       }
@@ -351,6 +365,7 @@ function showOverlay(
   draft: string,
   query = "",
   t: PLT,
+  onSelect?: (p: Prompt) => void,
 ): void {
   removeOverlay();
   if (prompts.length === 0) return;
@@ -467,7 +482,9 @@ function showOverlay(
     item.appendChild(body);
 
     item.onclick = () => {
-      applyPrompt(p, inputActions, draft);
+      // 有 onSelect（# 浮层选择）时交给调用方处理（含 {{}} 时弹变量填充窗口），否则直接插入
+      if (onSelect) onSelect(p);
+      else applyPrompt(p, inputActions, draft);
       removeOverlay();
     };
     // 鼠标移入 → 高亮该行（同时成为键盘 Enter 的确认项）
@@ -586,6 +603,10 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
 
   const [open, setOpen] = useState(false);
   const [prompts, setPrompts] = useState<Prompt[]>([]);
+  // 待确认删除的提示词（自定义确认弹窗，替代系统 confirm）
+  const [deleteConfirm, setDeleteConfirm] = useState<Prompt | null>(null);
+  // 词库标签表标签名（与提示词标签合并，保证新建标签能同步到下拉候选）
+  const [tagNames, setTagNames] = useState<string[]>([]);
   const [phase, setPhase] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -594,7 +615,12 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   const [editor, setEditor] = useState<{ mode: "none" | "create" | "edit"; id?: string; title: string; body: string; tags: string }>({
     mode: "none", title: "", body: "", tags: ""
   });
+  // 编辑表单正文输入框引用：供「插入变量 {{}}」定位光标
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
   const [toast, setToast] = useState<{ visible: boolean }>({ visible: false });
+  // 模板变量填充弹窗：插入含 {{变量}} 的提示词前弹出
+  // fromOverlay：由 # 浮层触发，确认后需替换「#」及其后的筛选内容
+  const [template, setTemplate] = useState<{ prompt: Prompt; mode: "insert" | "overwrite"; fromOverlay?: boolean } | null>(null);
   // 手动确认模式：记录待确认入库的正文，聊天框弹出保存/取消
   const [pendingConfirm, setPendingConfirm] = useState<string | null>(null);
   // 手动确认里是否点过「AI 润色」：点过则保存后不再触发后台 AI 完善
@@ -605,6 +631,11 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   const [settings] = useSettings();
   const panelId = useId();
   const refreshController = useRef<AbortController | null>(null);
+
+  // 监听 host 推送的「填充草稿」事件（/prompts -AI 润色结果），填入当前聊天框
+  useFillDraft((body) => {
+    if (body) inputActions.setDraft(body);
+  });
 
   const showToast = useCallback(() => {
     setToast({ visible: true });
@@ -628,6 +659,13 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
         setError(err instanceof Error ? err.message : String(err));
         setPhase("error");
       });
+    // 同步刷新标签表候选，保证新建标签能立刻出现在下拉框
+    apiListTags()
+      .then((tags) => {
+        if (ctrl.signal.aborted) return;
+        setTagNames(tags.map((x) => x.name));
+      })
+      .catch(() => {});
   }, []);
 
   // 订阅数据变化：侧边栏新增/修改/删除时同步刷新本面板
@@ -669,9 +707,6 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
     setPolishConfirmUsed(false);
   }, []));
 
-  // ~ 键触发
-  useTildaTrigger(settings, prompts, inputActions, draft, T);
-
   // 组件挂载即加载提示词列表（供 # 触发 / 自动学习使用，不依赖面板是否打开）
   useEffect(() => {
     if (phase === "idle") refresh();
@@ -694,11 +729,12 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return prompts;
-    return prompts.filter((p) => {
-      const hay = `${p.title} ${p.body} ${(p.tags ?? []).join(" ")}`.toLowerCase();
-      return hay.includes(q);
-    });
+    return q
+      ? prompts.filter((p) => {
+          const hay = `${p.title} ${p.body} ${(p.tags ?? []).join(" ")}`.toLowerCase();
+          return hay.includes(q);
+        })
+      : prompts;
   }, [prompts, query]);
 
   // ── 翻页 ───────────────────────────────────────────────────────────────────
@@ -712,15 +748,20 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   // 当前页数据切片
   const pageItems = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  // 已有标签候选（去重排序），供标签输入下拉提示
+  // 已有标签候选（去重排序）：来自所有提示词 + 词库标签表，供标签输入下拉提示
   const allTags = useMemo(() => {
-    const s = new Set<string>();
+    const s = new Set<string>(tagNames);
     for (const p of prompts) for (const t of p.tags ?? []) s.add(t);
     return Array.from(s).sort();
-  }, [prompts]);
+  }, [prompts, tagNames]);
 
   const insert = useCallback(
-    async (prompt: Prompt) => {
+    (prompt: Prompt) => {
+      // 含模板变量占位符时先弹出填充窗口，确认后再插入
+      if (hasVariables(prompt.body)) {
+        setTemplate({ prompt, mode: "insert" });
+        return;
+      }
       // 记录使用次数
       apiUse(prompt.id).catch(() => {});
       const body = prompt.body;
@@ -730,14 +771,56 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
     [draft, inputActions],
   );
 
+  // # 浮层选择：含模板变量占位符时弹出填充窗口（确认后用填充正文替换「#」及其后筛选内容），否则直接插入
+  const selectFromOverlay = useCallback(
+    (p: Prompt) => {
+      if (hasVariables(p.body)) {
+        setTemplate({ prompt: p, mode: "insert", fromOverlay: true });
+        return;
+      }
+      apiUse(p.id).catch(() => {});
+      applyPrompt(p, inputActions, draft);
+    },
+    [draft, inputActions],
+  );
+
+  // # 键触发浮层：必须位于 selectFromOverlay 定义之后（回调以引用方式传入）
+  useTildaTrigger(settings, prompts, inputActions, draft, T, selectFromOverlay);
+
   // 用提示词正文覆盖当前输入框内容
   const overwrite = useCallback(
-    async (prompt: Prompt) => {
+    (prompt: Prompt) => {
+      if (hasVariables(prompt.body)) {
+        setTemplate({ prompt, mode: "overwrite" });
+        return;
+      }
       apiUse(prompt.id).catch(() => {});
       inputActions.setDraft(prompt.body);
       setOpen(false);
     },
     [inputActions],
+  );
+
+  // 模板变量填充确认：用填充后的正文插入/覆盖，未提供的变量保留原占位符
+  const applyTemplate = useCallback(
+    (values: Record<string, string>) => {
+      if (!template) return;
+      const filled = applyVariables(template.prompt.body, values);
+      apiUse(template.prompt.id).catch(() => {});
+      if (template.fromOverlay) {
+        // # 浮层选择：用填充后的正文替换「#」及其后的筛选内容
+        const idx = draft.lastIndexOf("#");
+        if (idx >= 0) inputActions.setDraft(`${draft.slice(0, idx)}${filled}`);
+        else inputActions.setDraft(filled);
+      } else if (template.mode === "insert") {
+        inputActions.setDraft(draft && draft.trim() ? `${draft}\n\n${filled}` : filled);
+      } else {
+        inputActions.setDraft(filled);
+      }
+      setTemplate(null);
+      setOpen(false);
+    },
+    [template, draft, inputActions],
   );
 
   const editing = editor.mode !== "none";
@@ -780,8 +863,13 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   };
 
   const remove = (p: Prompt) => {
-    if (!confirm(T("pl.confirmDelete", { title: p.title }))) return;
-    apiDelete(p.id).then(notifyDataChanged, (e: unknown) =>
+    setDeleteConfirm(p);
+  };
+
+  /** 确认删除：从词库删除并移入回收站。 */
+  const confirmRemove = () => {
+    if (!deleteConfirm) return;
+    apiDelete(deleteConfirm.id).then(notifyDataChanged, (e: unknown) =>
       setError(e instanceof Error ? e.message : String(e)),
     );
   };
@@ -1090,28 +1178,39 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                       style={inputStyle}
                     />
                   </label>
-                  <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
-                    {T("pl.bodyField")}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
+                    <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      {T("pl.bodyField")}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className={plBtn("ghost", "sm")}
+                        style={{ flex: "0 0 auto" }}
+                        onClick={(e: ReactMouseEvent<HTMLButtonElement>) => {
+                          // 仅点击「{{}}」按钮本身才插入，阻止 label/行内其他点击误触发
+                          e.preventDefault();
+                          e.stopPropagation();
+                          insertVariableAt(bodyRef.current, editor.body, (v) => setEditor({ ...editor, body: v }));
+                        }}
+                        title={T("pl.insertVariableTitle")}
+                      >
+                        {"{{}}"}
+                      </Button>
+                    </span>
                     <textarea
+                      ref={bodyRef}
                       value={editor.body}
                       onChange={(e) => setEditor({ ...editor, body: e.target.value })}
                       rows={6}
                       style={{ ...inputStyle, resize: "vertical", minHeight: 90 }}
                     />
-                  </label>
+                  </div>
                   <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
                     {T("pl.tagsField")}
                     <TagInput value={editor.tags} onChange={(v) => setEditor({ ...editor, tags: v })} suggestions={allTags} inputStyle={inputStyle} t={t} />
                   </label>
                   {error && <div style={{ color: TONE.red, fontSize: 12 }}>{error}</div>}
-                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                    <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => { setEditor(NO_EDITOR); setError(null); }}>
-                      {T("pl.cancel")}
-                    </Button>
-                    <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={saveEditor}>
-                      {T("pl.save")}
-                    </Button>
-                  </div>
                 </div>
               ) : (
                 <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
@@ -1134,22 +1233,25 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                           : {}),
                       }}
                     >
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", minWidth: 0 }}>
                         <strong style={{
                           fontSize: 13,
                           fontWeight: 460,
+                          flex: "1 1 auto",
+                          minWidth: 0,
                           ...(isRecent(p.id) ? { color: TONE.accent } : {}),
                           whiteSpace: "nowrap",
                           overflow: "hidden",
                           textOverflow: "ellipsis",
-                          maxWidth: 220,
                         }} title={p.title}>{clampTitle(p.title)}</strong>
-                        {isRecent(p.id) && (
-                          <span
-                            title={T("pl.recentNew")}
-                            style={{ width: 8, height: 8, borderRadius: "50%", background: TONE.mint, display: "inline-block", flexShrink: 0 }}
-                          />
-                        )}
+                        <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+                          {isRecent(p.id) && (
+                            <span
+                              title={T("pl.recentNew")}
+                              style={{ width: 8, height: 8, borderRadius: "50%", background: TONE.mint, display: "inline-block", flexShrink: 0 }}
+                            />
+                          )}
+                        </div>
                       </div>
                       <pre
                         style={{
@@ -1177,6 +1279,26 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                 </ul>
               )}
             </div>
+            {/* 编辑/新建模式：取消与保存按钮固定于面板底部（不随表单内容滚动） */}
+            {editing && (
+              <div
+                style={{
+                  flexShrink: 0,
+                  display: "flex",
+                  gap: 8,
+                  justifyContent: "flex-end",
+                  padding: "12px 16px",
+                  borderTop: `1px solid ${TONE.border}`,
+                }}
+              >
+                <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => { setEditor(NO_EDITOR); setError(null); }}>
+                  {T("pl.cancel")}
+                </Button>
+                <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={saveEditor}>
+                  {T("pl.save")}
+                </Button>
+              </div>
+            )}
             {/* 翻页：按页展示，置于滚动区外、固定于面板底部 */}
             {!editing && phase === "ready" && (
               <Pagination page={page} totalPages={totalPages} onChange={setPage} />
@@ -1188,6 +1310,27 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
       )}
       <SidebarPromptLibrary inputActions={inputActions} draft={draft} t={t} />
       <SelectionAddPrompt t={t} enabled={settings.selectionAddEnabled} />
+      {/* 模板变量填充弹窗：插入含 {{变量}} 的提示词前弹出 */}
+      <TemplateFillModal
+        open={template !== null}
+        variables={template ? extractVariables(template.prompt.body) : []}
+        onCancel={() => setTemplate(null)}
+        onConfirm={applyTemplate}
+        t={T}
+      />
+      {/* 删除确认弹窗（自定义，替代系统 confirm） */}
+      <ConfirmDialog
+        open={deleteConfirm !== null}
+        message={T("pl.confirmDelete", { title: deleteConfirm?.title ?? "" })}
+        danger
+        confirmLabel={T("pl.confirm")}
+        cancelLabel={T("pl.cancel")}
+        onCancel={() => setDeleteConfirm(null)}
+        onConfirm={() => {
+          setDeleteConfirm(null);
+          confirmRemove();
+        }}
+      />
     </span>
   );
 }

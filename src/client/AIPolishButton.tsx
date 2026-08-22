@@ -130,7 +130,8 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
     }
     setStatus("polishing");
     setError("");
-    polishPrompt(draft)
+    // 聊天框按钮润色不启用「{{}} 模板变量保留/新增」能力（与词库内润色区分）
+    polishPrompt(draft, { keepVariables: false })
       .then(({ polished }) => {
         setResult(polished);
         setStatus("done");

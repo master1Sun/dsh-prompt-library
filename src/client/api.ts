@@ -4,7 +4,7 @@
  * host 路由的薄封装层；每个函数在成功时返回 `data` 字段，
  * 在非 ok 信封或传输失败时抛出异常。
  */
-import type { PluginSettings, Prompt, PromptInput, PromptPatch } from "../types.js";
+import type { PluginSettings, Prompt, PromptInput, PromptPatch, TrashItem } from "../types.js";
 
 const BASE = "/api/prompt-library/prompts";
 
@@ -60,9 +60,97 @@ export function usePrompt(id: string): Promise<Prompt> {
   return send<Prompt>("POST", `${BASE}/${encodeURIComponent(id)}`);
 }
 
-/** 调用 harness AI 润色提示词正文，返回润色后的文本。 */
-export function polishPrompt(body: string): Promise<{ polished: string }> {
-  return send<{ polished: string }>("POST", "/api/prompt-library/ai/polish", { body });
+/** 导出全部提示词（备份内容，含 schema 版本与导出时间）。 */
+export interface PromptBackup {
+  version: 1;
+  exportedAt: number;
+  prompts: Prompt[];
+}
+
+/**
+ * 导出提示词（备份内容，含 schema 版本与导出时间）。
+ * 传入 ids 时仅导出勾选的提示词；缺省导出全部。
+ */
+export function exportPrompts(ids?: string[]): Promise<PromptBackup> {
+  if (ids && ids.length > 0) {
+    return send<PromptBackup>("POST", "/api/prompt-library/export", { ids });
+  }
+  return send<PromptBackup>("GET", "/api/prompt-library/export");
+}
+
+/** 从备份内容导入提示词（合并式），返回导入/更新/跳过条数。 */
+export function importPrompts(
+  data: unknown,
+): Promise<{ imported: number; updated: number; skipped: number }> {
+  return send<{ imported: number; updated: number; skipped: number }>(
+    "POST",
+    "/api/prompt-library/import",
+    data,
+  );
+}
+
+/** 标签汇总（名称 + 使用次数）。 */
+export function listTags(): Promise<Array<{ name: string; count: number }>> {
+  return send<Array<{ name: string; count: number }>>("GET", "/api/prompt-library/tags");
+}
+
+/** 重命名标签（合并到新标签），返回受影响条数。 */
+export function renameTag(from: string, to: string): Promise<{ changed: number }> {
+  return send<{ changed: number }>(
+    "PUT",
+    `/api/prompt-library/tags/${encodeURIComponent(from)}`,
+    { to },
+  );
+}
+
+/** 删除标签（从所有提示词中移除，内容变为未命名/未分类），返回受影响条数。 */
+export function deleteTag(name: string): Promise<{ changed: number }> {
+  return send<{ changed: number }>(
+    "DELETE",
+    `/api/prompt-library/tags/${encodeURIComponent(name)}`,
+  );
+}
+
+/** 新建标签（已存在则忽略），返回规范化后的标签名。 */
+export function createTag(name: string): Promise<{ name: string }> {
+  return send<{ name: string }>("POST", "/api/prompt-library/tags", { name });
+}
+
+// ── 回收站管理 ────────────────────────────────────────────────────────────
+
+/** 列出回收站中的全部提示词（按删除时间降序）。 */
+export function listTrash(): Promise<TrashItem[]> {
+  return send<TrashItem[]>("GET", "/api/prompt-library/trash");
+}
+
+/** 从回收站恢复一批提示词到词库。 */
+export function restoreTrash(ids: string[]): Promise<{ restored: number }> {
+  return send<{ restored: number }>("POST", "/api/prompt-library/trash/restore", { ids });
+}
+
+/** 从回收站永久删除一批提示词。 */
+export function deleteTrash(ids: string[]): Promise<{ deleted: number }> {
+  return send<{ deleted: number }>("POST", "/api/prompt-library/trash/delete", { ids });
+}
+
+/** 清空回收站（全部永久删除）。 */
+export function emptyTrash(): Promise<{ deleted: number }> {
+  return send<{ deleted: number }>("POST", "/api/prompt-library/trash/empty");
+}
+
+/**
+ * 调用 harness AI 润色提示词正文，返回润色后的文本。
+ * keepVariables 控制是否启用「{{}} 模板变量保留/新增」能力（默认开启）；
+ * 聊天框按钮的 AI 润色传 false 关闭该能力。
+ */
+export function polishPrompt(
+  body: string,
+  opts?: { keepVariables?: boolean },
+): Promise<{ polished: string }> {
+  return send<{ polished: string }>("POST", "/api/prompt-library/ai/polish", {
+    body,
+    keepVariables: opts?.keepVariables ?? true,
+  });
 }
 
 /** 用户确认许可后，把润色内容并入用户画像（AI 自学习）。 */

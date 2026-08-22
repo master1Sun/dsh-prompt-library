@@ -7,8 +7,12 @@
  */
 import type { Context } from "@deepseek-ai/cordis";
 import { makePromptRoutes } from "./host/routes.js";
-import { registerLlm, logAiInjected } from "./host/ai.js";
+import { dataChangedRoute, emitFillDraft } from "./host/events.js";
+import { autoLearn, getSettings, readGlobalLocale, welcomePromptOnce } from "./host/store.js";
+import { isAiAvailable, polishPromptBody, registerLlm, logAiInjected } from "./host/ai.js";
 import { characterSystemSync, ensureCharacterFiles, shouldInjectChatCharacter } from "./host/character.js";
+// 操作手册：纯文本字符串，聊天消息按纯文本渲染（markdown/HTML 都无法解析），用换行符排版
+import { manualEn, manualZh } from "./manual.js";
 
 export const name = "prompt-library";
 
@@ -45,8 +49,12 @@ export function apply(ctx: Context): void {
       order: 50,
       text: (context) => {
         const scope = (context as { scope?: unknown } | undefined)?.scope;
-        if (!shouldInjectChatCharacter(scope)) return "";
-        return characterSystemSync();
+        // 灵魂边界（实验室开关控制）+ 首次使用欢迎（只对第一个新会话注入一次）
+        const parts: string[] = [];
+        if (shouldInjectChatCharacter(scope)) parts.push(characterSystemSync());
+        const welcome = welcomePromptOnce(scope);
+        if (welcome) parts.push(welcome);
+        return parts.filter((p) => p.trim()).join("\n\n");
       },
     });
     return () => dispose();
@@ -65,10 +73,93 @@ export function apply(ctx: Context): void {
 
   ctx.inject(["webServer"], (httpCtx: Context) => {
     httpCtx.effect(() => {
-      const disposers = routes.map((route) => httpCtx.webServer.register(route));
+      const all = [...routes, dataChangedRoute];
+      const disposers = all.map((route) => httpCtx.webServer.register(route));
       return () => {
         for (const dispose of disposers) dispose();
       };
     }, "prompt-library: routes");
+  });
+
+  // 注册 `/prompts` 斜杠命令：把聊天框里 `/prompts` 后面的内容自动保存到提示词库，
+  // 标题与标签由 AI 依据内容自动判断（复用 autoLearn 的 AI 完善流程；命令触发不发给模型）。
+  ctx.inject(["commands"], (cmdCtx: Context) => {
+    const commands = (cmdCtx as unknown as {
+      commands: {
+        register(definition: {
+          name: string;
+          description: string;
+          input?: { hint: string };
+          handler: (invocation: { rawInput: string }) => Promise<
+            | { kind: "success"; text?: string }
+            | { kind: "error"; text: string }
+          >;
+        }): () => void;
+      };
+    }).commands;
+
+    // 描述了按宿主界面语言（locale.preference）选择中/英文案；注册前异步读取。
+    let dispose: () => void = () => {};
+    void readGlobalLocale().then((locale) => {
+      const isZh = locale.startsWith("zh") || locale === "";
+      const copy = isZh
+        ? {
+            description: "保存内容到提示词库，AI 自动判断标题与标签",
+            hint: "输入要保存为提示词的正文",
+            empty: "内容为空，未保存",
+            saved: "已保存到提示词库",
+            failed: "保存失败",
+            aiSuffix: "--dsh-prompt-library 为您服务",
+            aiNoInput: "请在 -AI 后输入要润色的正文",
+            aiUnavailable: "AI 服务不可用，无法润色",
+            aiDone: "已 AI 润色并填充到聊天框",
+            help: manualZh,
+          }
+        : {
+            description: "Save content to the prompt library; AI decides the title and tags",
+            hint: "Enter the prompt body to save",
+            empty: "Content is empty, nothing saved",
+            saved: "Saved to the prompt library",
+            failed: "Failed to save",
+            aiSuffix: "--dsh-prompt-library at your service",
+            aiNoInput: "Enter the text to polish after -AI",
+            aiUnavailable: "AI service is unavailable, polish failed",
+            aiDone: "Polished by AI and filled into the chat box",
+            help: manualEn,
+          };
+      dispose = commands.register({
+        name: "prompts",
+        description: copy.description,
+        input: { hint: copy.hint },
+        handler: async (invocation) => {
+          const text = (invocation.rawInput ?? "").trim();
+          if (text === "-h" || text === "-help" || text === "--help") {
+            return { kind: "success", text: copy.help };
+          }
+          // AI 模式：`-AI`/`-ai`/`-a`/`-A` 后的内容先 AI 润色，再连同服务宣言填充到聊天框。
+          const flag = text.split(/\s+/, 1)[0];
+          if (flag && /^-a(?:i)?$/i.test(flag)) {
+            const body = text.slice(flag.length).trim();
+            if (!body) return { kind: "error", text: copy.aiNoInput };
+            if (!isAiAvailable()) return { kind: "error", text: copy.aiUnavailable };
+            const settings = await getSettings();
+            const polished = await polishPromptBody(body, settings).catch(() => undefined);
+            if (!polished) return { kind: "error", text: copy.aiUnavailable };
+            emitFillDraft(`${polished.trim()}\n\n${copy.aiSuffix}`);
+            return { kind: "success", text: copy.aiDone };
+          }
+          if (!text) {
+            return { kind: "error", text: copy.empty };
+          }
+          try {
+            await autoLearn(text);
+            return { kind: "success", text: copy.saved };
+          } catch (e) {
+            return { kind: "error", text: `${copy.failed}：${String(e)}` };
+          }
+        },
+      });
+    });
+    return () => dispose();
   });
 }

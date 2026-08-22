@@ -12,7 +12,7 @@
  *
  * 修改后立即生效，无需保存按钮。
  */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { type CSSProperties, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { PluginSettings } from "../types.js";
 import { DEFAULT_SETTINGS } from "../types.js";
 import { getAiSelectables, getSettings, updateSettings as apiUpdateSettings, type ClientAiSelectable } from "./api.js";
@@ -31,6 +31,87 @@ const TONE = {
   accent: "var(--dsw-alias-brand-primary, #8ec5ff)",
   success: "var(--dsw-alias-state-success-primary, #78dda0)",
 } as const;
+
+/** 分类模块卡片样式（与「词库管理」保持一致）。 */
+const moduleStyle: CSSProperties = {
+  boxSizing: "border-box",
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+  background: TONE.panel,
+  border: `1px solid ${TONE.border}`,
+  borderRadius: 10,
+  padding: "14px 16px",
+  marginTop: 12,
+};
+
+const moduleTitleStyle: CSSProperties = {
+  fontSize: 14,
+  fontWeight: 560,
+  color: TONE.text,
+};
+
+const moduleDescStyle: CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.5,
+  color: TONE.quiet,
+};
+
+/** 可折叠分类模块（手风琴）。 */
+function ModuleCard(props: {
+  title: ReactNode;
+  desc?: ReactNode;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}): ReactNode {
+  const { title, desc, open, onToggle, children } = props;
+  return (
+    <section style={moduleStyle}>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        onClick={onToggle}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onToggle();
+          }
+        }}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          cursor: "pointer",
+          userSelect: "none",
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={moduleTitleStyle}>{title}</div>
+          {desc && <div style={moduleDescStyle}>{desc}</div>}
+        </div>
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 16 16"
+          style={{
+            flexShrink: 0,
+            color: TONE.muted,
+            transform: open ? "rotate(180deg)" : "rotate(0deg)",
+            transition: "transform .24s cubic-bezier(.22,1,.36,1)",
+          }}
+          aria-hidden="true"
+        >
+          <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </div>
+      {open && (
+        <div style={{ display: "flex", flexDirection: "column" }}>{children}</div>
+      )}
+    </section>
+  );
+}
 
 /** 开关行组件。 */
 function ToggleRow({
@@ -261,6 +342,11 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState<PluginSettings>(DEFAULT_SETTINGS);
   const [selectables, setSelectables] = useState<ClientAiSelectable[]>([]);
+  // 分类模块手风琴折叠状态（默认折叠，与「词库管理」保持一致）
+  const [openLearn, setOpenLearn] = useState(false);
+  const [openPanel, setOpenPanel] = useState(false);
+  const [openDisplay, setOpenDisplay] = useState(false);
+  const [openLab, setOpenLab] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -332,8 +418,22 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
         maxWidth: 520,
       }}
     >
-      <div style={{ padding: "12px 0", display: "flex", flexDirection: "column", gap: 4 }}>
-        {/* 自动学习开关 */}
+      {/* 面板顶部标题（与「词库管理」一致） */}
+      <div style={{ padding: "2px 0 4px", display: "flex", flexDirection: "column", gap: 4 }}>
+        <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: 1, color: TONE.text, lineHeight: 1.2 }}>
+          {T("pl.setSectionTitle")}
+        </div>
+        <span style={{ fontSize: 12, color: TONE.quiet, lineHeight: 1.5 }}>
+          {T("pl.set.setSectionDesc")}
+        </span>
+      </div>
+      {/* 分类模块一：自动学习 */}
+      <ModuleCard
+        title={T("pl.setModuleLearn")}
+        desc={T("pl.setModuleLearnDesc")}
+        open={openLearn}
+        onToggle={() => setOpenLearn((v) => !v)}
+      >
         <ToggleRow
           label={T("pl.set.autoLearn")}
           desc={T("pl.set.autoLearnDesc")}
@@ -343,19 +443,17 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
 
         {/* 手动确认开关（仅在自动学习开启时可用） */}
         {draft.autoLearnEnabled && (
-          <div style={{ paddingLeft: 0 }}>
-            <ToggleRow
-              label={T("pl.set.manualConfirm")}
-              desc={T("pl.set.manualConfirmDesc")}
-              checked={draft.autoLearnManualConfirm}
-              onChange={(v) => updateAndSave({ autoLearnManualConfirm: v })}
-            />
-          </div>
+          <ToggleRow
+            label={T("pl.set.manualConfirm")}
+            desc={T("pl.set.manualConfirmDesc")}
+            checked={draft.autoLearnManualConfirm}
+            onChange={(v) => updateAndSave({ autoLearnManualConfirm: v })}
+          />
         )}
 
         {/* 自动学习标签 */}
         {draft.autoLearnEnabled && (
-          <div style={{ paddingLeft: 24 }}>
+          <div style={{ paddingLeft: 20 }}>
             <TextRow
               label={T("pl.set.autoLearnTag")}
               value={draft.autoLearnTag}
@@ -379,7 +477,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
               onChange={(v) => updateAndSave({ aiEnrichEnabled: v })}
             />
             {draft.aiEnrichEnabled && (
-              <div style={{ paddingLeft: 24 }}>
+              <div style={{ paddingLeft: 20 }}>
                 <SelectRow
                   label={T("pl.set.aiProvider")}
                   value={draft.aiProvider}
@@ -398,10 +496,15 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             )}
           </div>
         )}
+      </ModuleCard>
 
-        <div style={{ height: 1, background: TONE.border, margin: "8px 0" }} />
-
-        {/* 面板宽高设置 */}
+      {/* 分类模块二：面板显示 */}
+      <ModuleCard
+        title={T("pl.setModulePanel")}
+        desc={T("pl.setModulePanelDesc")}
+        open={openPanel}
+        onToggle={() => setOpenPanel((v) => !v)}
+      >
         <NumberRow
           label={T("pl.set.panelWidth")}
           value={draft.panelWidth}
@@ -418,9 +521,6 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           step={10}
           onChange={(v) => updateAndSave({ panelHeight: v })}
         />
-        <div style={{ height: 1, background: TONE.border, margin: "8px 0" }} />
-
-        {/* 提示词最大存储数量 */}
         <NumberRow
           label={T("pl.set.maxCount")}
           value={draft.maxPromptCount}
@@ -430,92 +530,67 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           defaultValue={DEFAULT_SETTINGS.maxPromptCount}
           onChange={(v) => updateAndSave({ maxPromptCount: v })}
         />
+      </ModuleCard>
 
-        <div style={{ height: 1, background: TONE.border, margin: "8px 0" }} />
-
-        {/* 右侧展开/折叠开关 */}
+      {/* 分类模块三：显示与交互 */}
+      <ModuleCard
+        title={T("pl.setModuleDisplay")}
+        desc={T("pl.setModuleDisplayDesc")}
+        open={openDisplay}
+        onToggle={() => setOpenDisplay((v) => !v)}
+      >
         <ToggleRow
           label={T("pl.set.rightPanel")}
           desc={T("pl.set.rightPanelDesc")}
           checked={draft.rightPanelEnabled}
           onChange={(v) => updateAndSave({ rightPanelEnabled: v })}
         />
-
-        <div style={{ height: 1, background: TONE.border, margin: "8px 0" }} />
-
-        {/* 聊天框按钮显隐开关 */}
         <ToggleRow
           label={T("pl.set.showComposerBtn")}
           desc={T("pl.set.showComposerBtnDesc")}
           checked={draft.showComposerButton}
           onChange={(v) => updateAndSave({ showComposerButton: v })}
         />
-
-		<div style={{ height: 1, background: TONE.border, margin: "8px 0" }} />
-
-        {/* AI 润色按钮显隐开关 */}
         <ToggleRow
           label={T("pl.set.showPolishBtn")}
           desc={T("pl.set.showPolishBtnDesc")}
           checked={draft.showAIPolishButton}
           onChange={(v) => updateAndSave({ showAIPolishButton: v })}
         />
-
-        <div style={{ height: 1, background: TONE.border, margin: "8px 0" }} />
-
-        {/* # 触发开关 */}
         <ToggleRow
           label={T("pl.set.tildaTrigger")}
           desc={T("pl.set.tildaTriggerDesc")}
           checked={draft.tildaTriggerEnabled}
           onChange={(v) => updateAndSave({ tildaTriggerEnabled: v })}
         />
-
-        <div style={{ height: 1, background: TONE.border, margin: "8px 0" }} />
-
-        {/* 鼠标移入显示详情开关 */}
         <ToggleRow
           label={T("pl.set.hoverDetail")}
           desc={T("pl.set.hoverDetailDesc")}
           checked={draft.hoverDetailEnabled}
           onChange={(v) => updateAndSave({ hoverDetailEnabled: v })}
         />
-
-        <div style={{ height: 1, background: TONE.border, margin: "8px 0" }} />
-
-        {/* 选中文字添加提示词开关 */}
         <ToggleRow
           label={T("pl.set.selectionAdd")}
           desc={T("pl.set.selectionAddDesc")}
           checked={draft.selectionAddEnabled}
           onChange={(v) => updateAndSave({ selectionAddEnabled: v })}
         />
+      </ModuleCard>
 
-        <div style={{ height: 1, background: TONE.border, margin: "8px 0" }} />
-
-        {/* 实验室功能 */}
-        <div style={{ padding: "4px 0", display: "flex", flexDirection: "column", gap: 2 }}>
-          <span
-            style={{
-              fontSize: 12,
-              fontWeight: 600,
-              color: TONE.accent,
-              letterSpacing: 1,
-            }}
-          >
-            {T("pl.set.lab")}
-          </span>
-          <span style={{ fontSize: 11, color: "#d89b8a", lineHeight: 1.5 }}>
-            {T("pl.set.labWarning")}
-          </span>
-        </div>
+      {/* 分类模块四：实验室 */}
+      <ModuleCard
+        title={T("pl.setModuleLab")}
+        desc={T("pl.setModuleLabDesc")}
+        open={openLab}
+        onToggle={() => setOpenLab((v) => !v)}
+      >
         <ToggleRow
           label={T("pl.set.chatCharacter")}
           desc={T("pl.set.chatCharacterDesc")}
           checked={draft.applyCharacterToChat}
           onChange={(v) => updateAndSave({ applyCharacterToChat: v })}
         />
-      </div>
+      </ModuleCard>
 
       {/* 底部署名 */}
       <footer

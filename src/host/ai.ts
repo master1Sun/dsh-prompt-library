@@ -228,7 +228,7 @@ async function systemPrompt(existingTags: string[], existingVars: string[]): Pro
   // 标签库：优先复用已有标签，避免重复创建
   const tagLib = existingTags.length ? existingTags.join("、") : "（暂无）";
   const system = [
-    "你是一名提示词库整理助手，帮助用户把原始输入整理成高质量、可复用的提示词。",
+    "你是一名词库整理助手，帮助用户把原始输入整理成高质量、可复用的提示词。",
     "",
     "【标签库】以下是当前已有的标签，请优先复用最贴合的一个，避免重复创建：",
     tagLib,
@@ -365,7 +365,7 @@ function parseJson(text: string): AiRefineResult | undefined {
 /**
  * 后台完善一条自动学习到的提示词：
  * 1. 依据标签库与人格注入调用 harness LLM 生成标题/标签/摘要/改写正文；
- * 2. 把结果写回提示词库（标记 aiRefined，改写时保留 sourceBody）。
+ * 2. 把结果写回词库（标记 aiRefined，改写时保留 sourceBody）。
  *
  * 任何失败都静默返回，不影响主流程。
  */
@@ -535,7 +535,7 @@ export async function polishPromptBody(
 }
 
 /**
- * 依据「提示词库使用统计」文本调用 AI 生成一段中文点评（总结现状 + 给出可执行建议）。
+ * 依据「词库使用统计」文本调用 AI 生成一段中文点评（总结现状 + 给出可执行建议）。
  * 供 `/prompts -data` 在统计数字之后追加「AI 点评」。AI 不可用或失败时返回空字符串。
  */
 export async function commentOnStats(
@@ -546,16 +546,74 @@ export async function commentOnStats(
   const candidates = await resolveCandidates(llm, settings);
   if (candidates.length === 0) return "";
   const system = [
-    "你是一名提示词库运营分析助手，擅长根据统计数据给出简洁、可执行的点评与改进建议。",
+    "你是一名词库运营分析助手，擅长根据统计数据给出简洁、可执行的点评与改进建议。",
     "",
     "要求：",
     "- 用一段中文点评以上统计数据（100 字以内），指出亮点与可优化点；",
     "- 给出接地气、可执行的建议，不要空话套话；",
     "- 直接输出点评文本，不要标题、编号或 Markdown 代码块，不要复述原始统计数据。",
   ].join("\n");
-  const content = `以下是提示词库的使用统计数据，请点评：\n\n${statsText}`;
+  const content = `以下是词库的使用统计数据，请点评：\n\n${statsText}`;
   const text = await collectTextWithFallback(llm, candidates, system, content);
   return text?.trim() ?? "";
+}
+
+/**
+ * 依据指定语言调用 AI 生成「词库」的功能简介（5 句，一行一句）。
+ * 供浮动小人悬停气泡轮询展示；AI 不可用或失败时返回 undefined，由调用方回退到内置简介。
+ */
+export async function generateIntro(
+  lang: "zh" | "en",
+  settings: PluginSettings,
+): Promise<string[] | undefined> {
+  logAI(`intro: 开始 lang=${lang}`);
+  if (!llm) {
+    logAI("intro: 跳过（llm 服务未注入）");
+    return undefined;
+  }
+  const candidates = await resolveCandidates(llm, settings);
+  if (candidates.length === 0) return undefined;
+  const zhMode = lang !== "en";
+  const system = zhMode
+    ? [
+        "你是一名擅长拟广告文案的中文文案，为「词库」（一款保存、组织、AI 润色并复用提示词的小工具）撰写简洁走心的功能简介。",
+        "",
+        "要求：",
+        "- 输出恰好 5 句简介，每句一行，分别从记录、润色、整理、一键使用、随时可得等角度介绍价值；",
+        "- 风格有文气、有画面感、自然灵动，避免文言堆砌与空洞套话（如“受益无穷”“多多益善”）；",
+        "- 每句 10~20 字，朗朗上口，长短错落，不要全都一个句式；",
+        "- 不要编号、项目符号、引号、语气词或任何解释。",
+        "",
+        "风格示范（仅参考，勿照抄）：",
+        "- 慧心记之，随取随用。",
+        "- AI 润饰，炼字成句。",
+        "- 分门别类，检索如流。",
+      ].join("\n")
+    : [
+        "You are a copywriter crafting elegant short taglines for a prompt library where users save, organize, AI-polish, and reuse prompts.",
+        "",
+        "Requirements:",
+        "- Output exactly 5 taglines, one per line, covering saving, polishing, organizing, one-tap use and always-on access;",
+        "- Keep the tone refined, vivid and memorable, 6-12 words each; avoid clichés and empty praise;",
+        "- Vary the sentence shapes a little; no numbering, bullets, quotes, filler words, or explanation.",
+      ].join("\n");
+  const content = zhMode
+    ? "为「词库」工具写 5 句简介。"
+    : "Write 5 taglines for the prompt library tool.";
+  const text = await collectTextWithFallback(
+    llm,
+    candidates,
+    await withSoulSystem(system),
+    content,
+  );
+  if (!text) return undefined;
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim().replace(/^\d+[.、)）]\s*/, "").replace(/^-+\s*/, ""))
+    .filter(Boolean);
+  logAI(`intro: 完成 行数=${lines.length}`);
+  lines.forEach((l, i) => logAI(`intro:   [${i}] ${l}`));
+  return lines.slice(0, 5);
 }
 
 // ── 技能（Skill）生成 ───────────────────────────────────────────────────────

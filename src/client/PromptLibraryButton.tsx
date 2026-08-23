@@ -1,5 +1,5 @@
 /**
- * 提示词库 composer 按钮控件。
+ * 词库 composer 按钮控件。
  *
  * 注册到 `conversation.input.left` 插槽：composer 工具栏中的一个小按钮。
  * 点击弹出面板，管理可复用的提示词片段。
@@ -906,6 +906,25 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
     setOpen((v) => !v);
   };
 
+  // 展开面板后，点击面板之外的其他区域 → 关闭面板
+  useEffect(() => {
+    if (!open) return;
+    const onDocMouseDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (!(t instanceof HTMLElement)) return;
+      // 点击面板内部 → 不关闭
+      const panel = document.getElementById(panelId);
+      if (panel && panel.contains(t)) return;
+      // 点击触发按钮 / 悬浮容器内部 → 不关闭（保留按钮自身的 toggle）
+      if (t.closest("[data-prompt-library]")) return;
+      // 编辑表单或待确认卡片正在操作 → 不强关，避免误丢内容
+      if (editing || pendingConfirm !== null) return;
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocMouseDown, true);
+    return () => document.removeEventListener("mousedown", onDocMouseDown, true);
+  }, [open, editing, pendingConfirm, panelId]);
+
   // 手动确认：保存选中正文到词库
   const confirmLearn = useCallback(async () => {
     const text = pendingConfirm;
@@ -1118,10 +1137,6 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
 
       {open && (
         <>
-          <div
-            onClick={() => { setEditor(NO_EDITOR); setOpen(false); }}
-            style={{ position: "fixed", inset: 0, zIndex: 999 }}
-          />
           <section id={panelId} role="dialog" aria-label={T("pl.title")} style={panelStyle}>
             <header
               style={{

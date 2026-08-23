@@ -1,5 +1,5 @@
 /**
- * 设置导航图标 — 让 DSH 原生设置界面中「提示词库」「词库管理」两行的图标
+ * 设置导航图标 — 让 DSH 原生设置界面中「词库」「词库管理」两行的图标
  * 与插件功能语义保持一致（提示词 / 数据库）。
  *
  * DSH 0.1.x 的 settings.section 契约只透传 id / order / label，对每个外部插件
@@ -8,7 +8,7 @@
  * 渲染对应 SVG 图标（跟随原生 hover/active 变色）。
  */
 
-/** 提示词库导航行标记。 */
+/** 词库导航行标记。 */
 export const SETTINGS_NAV_MARKER_PROMPT = "data-pl-settings-nav-prompt";
 /** 词库管理（数据管理）导航行标记。 */
 export const SETTINGS_NAV_MARKER_DATA = "data-pl-settings-nav-data";

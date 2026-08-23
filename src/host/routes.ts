@@ -1,5 +1,5 @@
 /**
- * 提示词库的 HTTP 路由。
+ * 词库的 HTTP 路由。
  *
  * 一个 `/api/prompt-library` 的 `prefix` 路由分发所有子路径：
  *   GET    /prompts         列表
@@ -13,7 +13,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { WebRoute } from "@deepseek-ai/dsh-host-webserver";
 import type { ApiResponse, PluginSettings, Prompt, PromptInput, PromptPatch } from "../types.js";
-import { listAiSelectables, polishPromptBody } from "./ai.js";
+import { generateIntro, listAiSelectables, polishPromptBody } from "./ai.js";
 import { generateSkillsFromPrompts } from "./skills.js";
 import {
   autoLearn,
@@ -294,6 +294,18 @@ export function makePromptRoutes(): WebRoute[] {
           return json(res, 503, { ok: false, error: "AI 不可用或润色失败，请确认已连接 LLM 服务" });
         }
         return json(res, 200, { ok: true, data: { polished } });
+      }
+
+      // POST /ai/intro — AI 生成词库功能简介（5 句，供悬浮小人气泡轮询；失败时前端回退内置简介）
+      if (method === "POST" && tail === "/ai/intro") {
+        const raw = await readJsonBody(req);
+        const lang = (raw as { lang?: string })?.lang === "en" ? "en" : "zh";
+        const settings = await getSettings();
+        const lines = await generateIntro(lang, settings);
+        if (!lines || lines.length === 0) {
+          return json(res, 503, { ok: false, error: "AI 不可用或生成简介失败" });
+        }
+        return json(res, 200, { ok: true, data: { lines } });
       }
 
       // GET /settings — 获取设置

@@ -175,7 +175,7 @@ function seedDefaultPromptIfEmpty(cur: DatabaseSync): void {
   const isZh = readUiLangSync() === "zh";
   const body = isZh
     ? [
-        "这是你保存的第一条提示词，也是提示词库的上手引导。",
+        "这是你保存的第一条提示词，也是词库的上手引导。",
         "",
         "你可以这样使用本插件：",
         "· 在输入框输入 `/prompts -add 把这段好的提示词保存下来`，不错过任何好词；",
@@ -196,7 +196,7 @@ function seedDefaultPromptIfEmpty(cur: DatabaseSync): void {
       ].join("\n");
   const prompt: Prompt = {
     id: randomUUID(),
-    title: isZh ? "欢迎使用提示词库" : "Welcome to the Prompt Library",
+    title: isZh ? "欢迎使用词库" : "Welcome to the Prompt Library",
     body,
     // 不能在此调用 ensureTags()：它会重新进入 getDb()，而 db 尚未赋值导致无限递归。
     // 标签的落表由紧随其后的 syncTagsFromPrompts(cur) 用当前连接完成。默认数据仅单标签。
@@ -225,7 +225,7 @@ function seedDefaultPromptIfEmpty(cur: DatabaseSync): void {
 
 /** 首次欢迎时注入到 system prompt 的简短问候（不再输出整本手册）。 */
 const WELCOME_SYSTEM = [
-  "（首次使用引导）这是你与带「提示词库」插件的助手第一次对话。",
+  "（首次使用引导）这是你与带「词库」插件的助手第一次对话。",
   "请在本次会话的【第一条回复】中用一句简洁、自然、友好的话欢迎用户即可。",
   "不要输出插件使用手册全文；若用户主动询问插件功能，可引导其输入 /prompts -h 查看使用手册。",
 ].join("\n");
@@ -1084,7 +1084,7 @@ export function listTags(): Promise<Array<{ name: string; count: number }>> {
   }
 }
 
-/** 提示词库的使用统计（供 /prompts -data 输出 + AI 点评）。 */
+/** 词库的使用统计（供 /prompts -data 输出 + AI 点评）。 */
 export interface LibraryStats {
   /** 提示词总数。 */
   total: number;

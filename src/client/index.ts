@@ -1,7 +1,7 @@
 /**
  * dsh-prompt-library — 浏览器入口。
  *
- * 注册一个小型语言字典，并将提示词库按钮放置到
+ * 注册一个小型语言字典，并将词库按钮放置到
  * `conversation.input.left` 插槽（composer 工具栏行，紧邻已有 chrome）。
  * 注册通过 `ctx.slots.inject` 延迟，直到插槽被 conversation 包声明。
  *
@@ -86,7 +86,7 @@ export function apply(ctx: ClientCtx): void {
     ),
   );
 
-  // 注册 AI 润色按钮：紧邻提示词库按钮（order 61），复用同一输入框插槽。
+  // 注册 AI 润色按钮：紧邻词库按钮（order 61），复用同一输入框插槽。
   // AI 能力复用 host 侧 ai.ts（polishPromptBody）。
   ctx.slots.inject("conversation.input.left", () =>
     ctx.slots.register(

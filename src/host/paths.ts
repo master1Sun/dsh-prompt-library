@@ -3,7 +3,7 @@
  *
  * 目标结构（把项目内所有数据文件集中到单一目录，便于管理）：
  *   ~/.dsh/prompt-library/
- *   ├── prompts.json                   # 提示词库
+ *   ├── prompts.json                   # 词库
  *   ├── log/                           # AI 调用诊断日志（按系统时区日期分文件）
  *   │   └── ai-YYYY-MM-DD.log
  *   ├── prompts/                       # 会话上下文（harness 文件化）
@@ -13,7 +13,7 @@
  *
  * 插件设置写入系统配置 ~/.dsh/settings.yaml 的 `prompt-library` 命名空间。
  * 所有新路径强制使用：文件不存在即新建，不再保留旧路径回退读取。
- * 提示词库主存储为 SQLite（~/.dsh/prompt-library/db/prompts.db）：
+ * 词库主存储为 SQLite（~/.dsh/prompt-library/db/prompts.db）：
  * 首次访问数据时一次性把旧 prompts.json 导入 SQLite 并删除，避免历史数据丢失。
  */
 import { homedir } from "node:os";
@@ -33,7 +33,7 @@ export function dataDir(): string {
 
 // ── 数据文件 ────────────────────────────────────────────────────────────────
 
-/** 提示词库文件：~/.dsh/prompt-library/prompts.json */
+/** 词库文件：~/.dsh/prompt-library/prompts.json */
 export function storePath(): string {
   return join(dataDir(), "prompts.json");
 }
@@ -43,7 +43,7 @@ export function dbDir(): string {
   return join(dataDir(), "db");
 }
 
-/** 提示词库 SQLite 数据库文件：~/.dsh/prompt-library/db/prompts.db */
+/** 词库 SQLite 数据库文件：~/.dsh/prompt-library/db/prompts.db */
 export function dbPath(): string {
   return join(dbDir(), "prompts.db");
 }

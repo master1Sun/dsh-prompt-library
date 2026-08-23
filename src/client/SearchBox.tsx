@@ -1,5 +1,5 @@
 /**
- * 提示词库搜索框（非实时过滤）。
+ * 词库搜索框（非实时过滤）。
  *
  * 左侧搜索图标，点击或按回车触发搜索；右侧清除图标一键清空。
  * 输入内容先暂存在草稿中，只有触发搜索后才生效，避免边输入边过滤。
@@ -35,13 +35,36 @@ export interface SearchBoxProps {
 const chipStyle: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
-  padding: "2px 10px",
+  justifyContent: "center",
+  height: 25,
+  padding: "0 8px",
+  boxSizing: "border-box",
+  maxWidth: 160,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
   border: `1px solid ${TONE.border}`,
-  borderRadius: 99,
+  borderRadius: 4,
+  fontWeight: 500,
   fontSize: 11,
-  lineHeight: "20px",
+  lineHeight: 1,
+  fontFamily: "inherit",
+  letterSpacing: "0.2px",
+  whiteSpace: "nowrap",
+  appearance: "none",
   cursor: "pointer",
   userSelect: "none",
+  transition: "background 0.18s ease, color 0.18s ease, border-color 0.18s ease",
+};
+
+/** 标签过滤条容器的统一间距。 */
+const barStyle: CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  columnGap: 6,
+  rowGap: 6,
+  marginTop: 8,
+  maxHeight: 56,
+  overflowY: "auto",
 };
 
 /**
@@ -62,16 +85,7 @@ export function TagFilterBar(props: {
     borderColor: selected ? TONE.accent : TONE.border,
   });
   return (
-    <div
-      style={{
-        display: "flex",
-        gap: 6,
-        flexWrap: "wrap",
-        marginTop: 6,
-        maxHeight: 60,
-        overflowY: "auto",
-      }}
-    >
+    <div style={barStyle}>
       <button type="button" onClick={() => onChange("")} style={chip(active === "")}>
         {allLabel ?? "全部"}
       </button>

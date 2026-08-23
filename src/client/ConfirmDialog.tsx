@@ -64,7 +64,6 @@ export function ConfirmDialog({
         padding: 20,
         boxSizing: "border-box",
       }}
-      onClick={onCancel}
     >
       <div
         role="dialog"

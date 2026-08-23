@@ -1,11 +1,11 @@
 # dsh-prompt-library
 
 
-DSH（DeepSeek Harness）提示词库插件：在聊天栏提供**提示词管理**、**AI 润色**与**人格定制**能力，帮你沉淀、复用和持续优化提示词。
+DSH（DeepSeek Harness）词库插件：在聊天栏提供**提示词管理**、**AI 润色**与**人格定制**能力，帮你沉淀、复用和持续优化提示词。
 
 ## 主要功能
 
-### 提示词库
+### 词库
 
 - 管理常用提示词（标题 + 正文 + 标签），支持搜索、排序、标签分组、使用次数统计
 - 右侧面板与宿主左侧栏同款样式，自动挤占并收缩聊天区，展开/折叠自由切换
@@ -40,15 +40,15 @@ DSH（DeepSeek Harness）提示词库插件：在聊天栏提供**提示词管�
 
 ### 设置
 
-在 DSH 设置 → 提示词库调整：自动学习、手动确认、AI 智能完善、面板大小、侧边栏、按钮显隐、`#` 触发等，修改即时生效。
+在 DSH 设置 → 词库调整：自动学习、手动确认、AI 智能完善、面板大小、侧边栏、按钮显隐、`#` 触发等，修改即时生效。
 
 ## 数据存储
 
-提示词库采用 **SQLite**（`node:sqlite`），其余配置与日志统一存放在 `~/.dsh/prompt-library/`：
+词库采用 **SQLite**（`node:sqlite`），其余配置与日志统一存放在 `~/.dsh/prompt-library/`：
 
 ```
 ~/.dsh/prompt-library/
-├── db/prompts.db      # 提示词库（SQLite）
+├── db/prompts.db      # 词库（SQLite）
 ├── log/
 │   └── ai-YYYY-MM-DD.log   # AI 调用诊断日志（按日期分文件）
 └── character/         # 人格文件
@@ -63,7 +63,7 @@ dsh plugin --profile web add @sunjuntao/dsh-prompt-library
 
 ## 使用
 
-启动 `dsh web`，点击聊天栏「提示词库」按钮打开面板，或输入 `#` 快速触发；点击「AI 润色」一键优化输入内容。
+启动 `dsh web`，点击聊天栏「词库」按钮打开面板，或输入 `#` 快速触发；点击「AI 润色」一键优化输入内容。
 
 ## 开发 / 构建
 

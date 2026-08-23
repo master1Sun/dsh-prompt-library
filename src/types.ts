@@ -1,5 +1,5 @@
 /**
- * 提示词库共享类型（host ↔ client）。
+ * 词库共享类型（host ↔ client）。
  */
 
 /** 一条可复用的提示词片段，持久化到 SQLite（~/.dsh/prompt-library/db/prompts.db）。 */
@@ -95,7 +95,7 @@ export interface PluginSettings {
   panelHeight: number;
   /** 是否启用右侧侧边栏展开/折叠。 */
   rightPanelEnabled: boolean;
-  /** 是否在聊天框工具栏显示提示词库按钮。 */
+  /** 是否在聊天框工具栏显示词库按钮。 */
   showComposerButton: boolean;
   /** 是否在聊天框工具栏显示 AI 润色按钮。 */
   showAIPolishButton: boolean;

@@ -1,5 +1,5 @@
 /**
- * 提示词库前端国际化（i18n）。
+ * 词库前端国际化（i18n）。
  *
  * 注册到 harness locale 服务的 `prompt-library` 命名空间：
  * - zh / en 两套完整字典，键完全一致；
@@ -24,7 +24,7 @@ export const zh = {
   "pl.addToLibrary": "添加提示词",
   "pl.refresh": "刷新",
   "pl.refreshing": "刷新中…",
-  "pl.refreshTitle": "刷新提示词列表",
+  "pl.refreshTitle": "刷新词库列表",
   "pl.insert": "插入",
   "pl.insertSend": "插入并发送",
   "pl.insertSendDisabled": "已有未发送内容，请先清空或用「插入」",
@@ -71,8 +71,8 @@ export const zh = {
   "pl.replaceContent": "替换内容",
 
   // 侧边栏
-  "pl.sidebar.expand": "展开提示词库",
-  "pl.sidebar.collapse": "折叠提示词库",
+  "pl.sidebar.expand": "展开词库",
+  "pl.sidebar.collapse": "折叠词库",
   "pl.sidebar.uncategorized": "未分类",
   "pl.sidebar.groupCount": "({count})",
   "pl.sidebar.usageCount": "{count}次",
@@ -80,6 +80,14 @@ export const zh = {
   "pl.sidebar.tagTotal": "{count} 个标签",
   "pl.sidebar.recent": "最近使用",
   "pl.saveToLibrary": "保存到词库",
+  "pl.floating.title": "词库助手",
+  "pl.floating.hint": "点击展开词库",
+  "pl.floating.resize": "调整大小",
+  "pl.intro.0": "慧心记之，随取随用；灵感至此，皆有所归。",
+  "pl.intro.1": "AI 润饰，如琢如磨；炼字成句，越发精妙。",
+  "pl.intro.2": "分门别类，按图索骥；常学常新，温故知新。",
+  "pl.intro.3": "一键点取，即成文章；变量轻填，得心应手。",
+  "pl.intro.4": "小小词库，四时可思；妙句常新，如数家珍。",
 
   // 导入导出 / 备份恢复
   "pl.moduleImportExport": "导入导出",
@@ -102,6 +110,7 @@ export const zh = {
   "pl.skillGenerating": "生成中…",
   "pl.skillBtnTitle": "把勾选的提示词批量生成为 DSH 技能（写入 ~/.dsh/skills/<name>/SKILL.md，聊天框输入 /技能名 触发）",
   "pl.skillNeedSelect": "请先勾选要生成技能的提示词",
+  "pl.skillConfirm": "确认生成 {count} 个技能？将把勾选的提示词批量写盘到 ~/.dsh/skills/<name>/SKILL.md（同名覆盖，由 AI 生成英文名与描述）。",
   "pl.skillDone": "已生成 {count} 个技能",
   "pl.skillErrors": "（失败 {n} 个）",
   "pl.skillAiUnavailable": "AI 服务不可用，无法生成技能。请先连接 LLM 服务。",
@@ -116,6 +125,8 @@ export const zh = {
   "pl.tagsNone": "暂无标签",
   "pl.renameTag": "重命名",
   "pl.renameTagPlaceholder": "新标签名",
+  "pl.renameTagEmpty": "请输入新标签名",
+  "pl.renameTagNoChange": "标签名没有变化",
   "pl.deleteTag": "删除",
   "pl.deleteTagConfirm": "确认移除标签「{name}」？",
   "pl.deleteTagInUse": "标签 \"{name}\" 正在被 {count} 条提示词使用，需先在提示词中移除该标签后才能删除。",
@@ -123,6 +134,7 @@ export const zh = {
   "pl.renameTagDone": "已重命名标签「{name}」",
   "pl.deleteTagDone": "已删除标签「{name}」",
   "pl.createTag": "新建标签",
+  "pl.createTagEmpty": "请输入标签名",
   "pl.createTagPlaceholder": "输入新标签名",
   "pl.createTagDone": "已新建标签「{name}」",
 
@@ -174,7 +186,7 @@ export const zh = {
   "pl.set.rightPanel": "右侧侧边栏展开/折叠",
   "pl.set.rightPanelDesc": "在右侧展开面板，支持折叠收起",
   "pl.set.showComposerBtn": "聊天框显示提示词按钮",
-  "pl.set.showComposerBtnDesc": "在输入框工具栏显示提示词库按钮",
+  "pl.set.showComposerBtnDesc": "在输入框工具栏显示词库按钮",
   "pl.set.showPolishBtn": "聊天框显示 AI 润色按钮",
   "pl.set.showPolishBtnDesc": "在输入框工具栏显示 AI 润色按钮",
   "pl.set.tildaTrigger": "输入 # 触发词库选择",
@@ -268,6 +280,14 @@ export const en: Record<keyof typeof zh, string> = {
   "pl.sidebar.tagTotal": "{count} tags",
   "pl.sidebar.recent": "Recently used",
   "pl.saveToLibrary": "Save to library",
+  "pl.floating.title": "Library Assistant",
+  "pl.floating.hint": "Click to open the prompt library",
+  "pl.floating.resize": "Resize",
+  "pl.intro.0": "Jot it down, fetch it anytime; every spark finds a home.",
+  "pl.intro.1": "AI polishes, stone into jade; words refined, ever sharper.",
+  "pl.intro.2": "Filed by kind, found at a glance; learn what is new, revisit the old.",
+  "pl.intro.3": "One tap summons, an essay at hand; a variable lightly filled.",
+  "pl.intro.4": "A pocket library, thinkable any hour; fine lines renewed, a joy to count.",
 
   // Import / Export / Backup
   "pl.moduleImportExport": "Import / Export",
@@ -290,6 +310,7 @@ export const en: Record<keyof typeof zh, string> = {
   "pl.skillGenerating": "Generating…",
   "pl.skillBtnTitle": "Batch-generate the checked prompts into DSH skills (written to ~/.dsh/skills/<name>/SKILL.md; trigger via /skill-name in chat)",
   "pl.skillNeedSelect": "Select prompts to generate skills from first",
+  "pl.skillConfirm": "Generate {count} skill(s)? Checked prompts will be written to ~/.dsh/skills/<name>/SKILL.md (same-name overwrite; AI picks the English name and description).",
   "pl.skillDone": "Generated {count} skill(s)",
   "pl.skillErrors": " ({n} failed)",
   "pl.skillAiUnavailable": "AI service is unavailable, cannot generate skills. Connect an LLM service first.",
@@ -304,6 +325,8 @@ export const en: Record<keyof typeof zh, string> = {
   "pl.tagsNone": "No tags",
   "pl.renameTag": "Rename",
   "pl.renameTagPlaceholder": "New tag name",
+  "pl.renameTagEmpty": "Please enter a new tag name",
+  "pl.renameTagNoChange": "The tag name is unchanged",
   "pl.deleteTag": "Delete",
   "pl.deleteTagConfirm": "Remove tag \"{name}\"?",
   "pl.deleteTagInUse": "Tag \"{name}\" is in use by {count} prompts. Remove the tag from those prompts before deleting.",
@@ -311,6 +334,7 @@ export const en: Record<keyof typeof zh, string> = {
   "pl.renameTagDone": "Renamed tag \u201c{name}\u201d",
   "pl.deleteTagDone": "Deleted tag \u201c{name}\u201d",
   "pl.createTag": "New",
+  "pl.createTagEmpty": "Please enter a tag name",
   "pl.createTagPlaceholder": "Enter a new tag name",
   "pl.createTagDone": "Created tag \u201c{name}\u201d",
 

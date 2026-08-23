@@ -1,5 +1,5 @@
 /**
- * 提示词库设置面板 — 注册到 harness 的 settings.section 插槽。
+ * 词库设置面板 — 注册到 harness 的 settings.section 插槽。
  *
  * 在 DSH 设置界面中显示插件的所有配置项：
  * - 自动学习开关 + 标签/最小长度 + AI 智能完善（含 Provider/模型）
@@ -600,7 +600,6 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           alignItems: "center",
           gap: 8,
           padding: "18px 0 12px",
-          borderTop: `1px solid ${TONE.border}`,
           marginTop: 16,
         }}
       >

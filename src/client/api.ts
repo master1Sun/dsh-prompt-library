@@ -178,6 +178,11 @@ export function getAiSelectables(): Promise<ClientAiSelectable[]> {
   return send<ClientAiSelectable[]>("GET", "/api/prompt-library/ai/providers");
 }
 
+/** 请求 AI 生成词库功能简介（5 句，供浮动小人气泡轮询）；失败时调用方回退到内置简介。 */
+export function genIntro(lang: "zh" | "en"): Promise<{ lines: string[] }> {
+  return send<{ lines: string[] }>("POST", "/api/prompt-library/ai/intro", { lang });
+}
+
 const SETTINGS_BASE = "/api/prompt-library/settings";
 
 /** 获取插件设置。 */

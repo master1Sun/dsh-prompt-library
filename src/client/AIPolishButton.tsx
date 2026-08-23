@@ -1,7 +1,7 @@
 /**
  * AI 润色 composer 按钮控件。
  *
- * 注册到 `conversation.input.left` 插槽：composer 工具栏中「提示词库」旁的
+ * 注册到 `conversation.input.left` 插槽：composer 工具栏中「词库」旁的
  * 一个润色星星按钮。点击后获取当前输入框草稿，调用 harness AI 润色，
  * 处理中按钮图标显示旋转动画；润色完成后弹出结果面板，支持一键覆盖输入框内容。
  *

@@ -155,7 +155,7 @@ export function apply(ctx: Context) {
     }, "prompt-library: routes");
   });
 
-  // 注册 `/prompts` 斜杠命令：把聊天框里 `/prompts` 后面的内容自动保存到提示词库，
+  // 注册 `/prompts` 斜杠命令：把聊天框里 `/prompts` 后面的内容自动保存到词库，
   // 标题与标签由 AI 依据内容自动判断（复用 autoLearn 的 AI 完善流程；命令触发不发给模型）。
   ctx.inject(["commands"], (cmdCtx: Context) => {
     const commands = (cmdCtx as unknown as {
@@ -182,7 +182,7 @@ export function apply(ctx: Context) {
             hint: "输入命令或要保存/处理的正文，直接输入 /prompts 可查看命令示例",
             cmdExamples: buildCmdExamples("zh"),
             unknownFlag: buildUnknownFlag("zh"),
-            saved: "已保存到提示词库",
+            saved: "已保存到词库",
             failed: "操作失败",
             addEmpty: "请在 -add 后输入要保存的正文",
             tagEmpty: "用法：/prompts -tag <标签> <正文>",
@@ -201,7 +201,7 @@ export function apply(ctx: Context) {
               searchLine: (i: number, title: string, tag: string, usage: string, summary: string) => `${i}. ${title}${tag}（使用${usage}次）${summary}`,
               matchCount: (n: number) => `匹配 ${n} 条：`,
               summaryPrefix: (s: string) => `\n   摘要：${s}`,
-              dataHeader: "提示词库数据统计：",
+              dataHeader: "词库数据统计：",
               dataTotal: (n: number) => `- 提示词总数：${n}`,
               dataTotalUsage: (n: number) => `- 累计使用次数：${n}`,
               dataUsed: (used: number, unused: number, pct: number) => `- 曾使用 / 从未使用：${used} / ${unused}（使用率 ${pct}%）`,
@@ -230,7 +230,7 @@ export function apply(ctx: Context) {
               historyAiRefined: (n: number) => `- AI 完善：${n} 条`,
               historyNone: "（暂无历史统计，7天后自动生成）",
               exportDownloaded: (n: number) => `已导出 ${n} 条提示词：JSON 备份文件已下载到浏览器本地。`,
-              exportTextHeader: (n: number) => `提示词库导出（共 ${n} 条）：`,
+              exportTextHeader: (n: number) => `词库导出（共 ${n} 条）：`,
             },
           }
         : {

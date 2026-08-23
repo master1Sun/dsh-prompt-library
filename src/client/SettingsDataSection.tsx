@@ -1,5 +1,5 @@
 /**
- * 提示词库「词库管理」面板 — 注册到 harness 的 settings.section 插槽（独立槽位）。
+ * 词库「词库管理」面板 — 注册到 harness 的 settings.section 插槽（独立槽位）。
  *
  * 集中放置与提示词数据相关的管理操作，全部以内联模块（非弹窗）展示：
  * 1. 导入导出：勾选要导出的提示词生成备份文件，或从备份文件导入（合并式）
@@ -315,7 +315,7 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
     refreshTrash();
   }, [refreshPrompts, refreshTags, refreshTrash]);
 
-  // 数据变化（含 host 侧 /prompts 保存）时同步刷新，保证管理面板内容与提示词库一致。
+  // 数据变化（含 host 侧 /prompts 保存）时同步刷新，保证管理面板内容与词库一致。
   useDataChanged(() => {
     refreshPrompts();
     refreshTags();
@@ -446,7 +446,10 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
   /** 新建标签：先写入标签库（已存在则忽略）。 */
   const addTag = useCallback(() => {
     const name = newTag.trim();
-    if (!name) return;
+    if (!name) {
+      showMsg(T("pl.createTagEmpty"), true);
+      return;
+    }
     apiCreateTag(name).then(
       (res) => {
         showMsg(T("pl.createTagDone", { name: res.name }));
@@ -467,8 +470,12 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
     if (!renamingTag) return;
     const from = renamingTag.from;
     const to = renamingTag.value.trim();
-    if (!to || to === from) {
-      setRenamingTag(null);
+    if (!to) {
+      showMsg(T("pl.renameTagEmpty"), true);
+      return;
+    }
+    if (to === from) {
+      showMsg(T("pl.renameTagNoChange"), true);
       return;
     }
     apiRenameTag(from, to).then(
@@ -706,7 +713,17 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
             variant="ghost"
             size="sm"
             className={plBtn("ghost", "sm")}
-            onClick={generateSelectedSkills}
+            onClick={() => {
+              if (exportSelected.size === 0) {
+                showMsg(T("pl.skillNeedSelect"), true);
+                return;
+              }
+              requestConfirm(
+                T("pl.skillConfirm", { count: Array.from(exportSelected).length }),
+                false,
+                generateSelectedSkills,
+              );
+            }}
             disabled={skillGenerating}
             title={T("pl.skillBtnTitle")}
           >
@@ -882,6 +899,9 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
                         placeholder={T("pl.renameTagPlaceholder")}
                         style={{ ...inputStyle, flex: 1 }}
                       />
+                      <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => setRenamingTag(null)}>
+                        {T("pl.cancel")}
+                      </Button>
                       <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={confirmRenameTag}>
                         {T("pl.save")}
                       </Button>
@@ -1101,7 +1121,6 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
             padding: 20,
             boxSizing: "border-box",
           }}
-          onClick={() => setPendingConfirm(null)}
         >
           <div
             role="dialog"
@@ -1140,7 +1159,7 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
                 variant="primary"
                 size="sm"
                 className={plBtn("primary", "sm")}
-                style={pendingConfirm.danger ? { backgroundColor: TONE.red, borderColor: TONE.red } : undefined}
+                style={pendingConfirm.danger ? { color: TONE.red } : undefined}
                 onClick={() => {
                   const action = pendingConfirm.action;
                   setPendingConfirm(null);

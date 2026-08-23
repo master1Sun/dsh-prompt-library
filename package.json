@@ -1,6 +1,6 @@
 {
   "name": "@sunjuntao/dsh-prompt-library",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "description": "词库助手与侧边栏解耦，统一图标并优化界面",
   "type": "module",
   "main": "./lib/index.js",

@@ -132,6 +132,8 @@ export async function upgradePlugin(): Promise<{ ok: boolean; output: string }> 
         resolve({ ok: false, output: output || String(err) });
         return;
       }
+      // 升级成功后使版本缓存失效：下次检查会重新请求 registry，避免旧缓存让红点持续亮
+      cache = null;
       resolve({ ok: true, output });
     });
   });

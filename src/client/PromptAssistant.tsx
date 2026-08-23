@@ -242,6 +242,10 @@ export function PromptAssistant(props: Props): ReactNode {
     if (updating) return;
     setUpdating(true);
     applyUpdate()
+      .then((r) => {
+        // 更新成功：最新版本已安装，红点提示失效，隐藏红点；失败则保留红点以便重试
+        if (r?.ok) setUpdate((prev) => (prev ? { ...prev, hasUpdate: false } : prev));
+      })
       .catch(() => {
         /* 静默处理；红点仅作状态反馈，不在气泡框展示结果 */
       })
@@ -433,13 +437,8 @@ export function PromptAssistant(props: Props): ReactNode {
     };
   }, [settings?.personTipInterval, settings?.personTipDuration]);
 
-  // 新版本提示文案（按宿主界面语言；仅在有更新时非空）
-  const isZh = !(document.documentElement.lang || "").toLowerCase().startsWith("en");
-  const updateText = update?.hasUpdate
-    ? isZh
-      ? `发现新版本 v${update.latest}`
-      : `New version v${update.latest}`
-    : "";
+  // 新版本提示文案（有更新时非空，文案走 i18n 国际化）
+  const updateText = update?.hasUpdate ? T("pl.update.detected") : "";
 
   return (
     <>
@@ -622,13 +621,13 @@ export function PromptAssistant(props: Props): ReactNode {
         {update?.hasUpdate && (
           <span
             role="button"
-            aria-label={updating ? (isZh ? "更新中…" : "Updating…") : updateText}
+            aria-label={updating ? T("pl.update.updating") : updateText}
             onClick={(e) => {
               e.stopPropagation();
               handleUpdate();
             }}
             onMouseDown={(e) => e.stopPropagation()}
-            title={updating ? (isZh ? "更新中…" : "Updating…") : updateText}
+            title={updating ? T("pl.update.updating") : updateText}
             style={{
               position: "absolute",
               right: 0,

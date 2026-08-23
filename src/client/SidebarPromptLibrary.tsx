@@ -367,23 +367,26 @@ export function SidebarPromptLibrary(props?: {
     T("pl.intro.4"),
   ]);
 
-  // 悬停气泡：功能简介轮询展示（每 3s 切换一条，移开即重置）
+  // 悬停气泡：功能简介轮播展示（固定较快节奏切换，移开即重置）
   const [introIdx, setIntroIdx] = useState(0);
+  const rotMs = 2500;
   useEffect(() => {
     if (!bubble) {
       setIntroIdx(0);
       return;
     }
-    const timer = setInterval(() => setIntroIdx((i) => i + 1), 3000);
+    const timer = setInterval(() => setIntroIdx((i) => i + 1), rotMs);
     return () => clearInterval(timer);
   }, [bubble]);
 
   // 首次加载：请求 AI 生成词库功能简介；AI 不可用或失败时保持 i18n 内置词。
-  // 按语言缓存到 localStorage，避免每次会话都重复请求。
+  // 按「语言 + 当天日期」缓存到 localStorage：每天换新键重新请求一次，让 AI 每天出新的文案。
   useEffect(() => {
     const lang: "zh" | "en" =
       (document.documentElement.lang || "zh").toLowerCase().startsWith("en") ? "en" : "zh";
-    const cacheKey = `pl:intro:${lang}`;
+    const now = new Date();
+    const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const cacheKey = `pl:intro:${lang}:${day}`;
     let cancelled = false;
     try {
       const cached = localStorage.getItem(cacheKey);
@@ -404,6 +407,11 @@ export function SidebarPromptLibrary(props?: {
           const lines = r.lines.slice(0, 6);
           setIntros(lines);
           try {
+            // 只保留当天的简介缓存，移除同语言的历史缓存键，避免 localStorage 无限累积
+            const allKeys = localStorage.keys?.() ?? [];
+            for (const k of allKeys) {
+              if (k.startsWith(`pl:intro:${lang}:`) && k !== cacheKey) localStorage.removeItem(k);
+            }
             localStorage.setItem(cacheKey, JSON.stringify({ lines }));
           } catch {
             /* 忽略存储失败 */
@@ -423,7 +431,9 @@ export function SidebarPromptLibrary(props?: {
     if (!collapsed) return;
     let showT: ReturnType<typeof setTimeout> | undefined;
     let hideT: ReturnType<typeof setTimeout> | undefined;
-    const hideDuration = 5400;
+    // 提示频率（间隔秒）与显示时长（秒），取自设置
+    const intervalMs = Math.max(3, settings.personTipInterval || DEFAULT_SETTINGS.personTipInterval) * 1000;
+    const hideDuration = Math.max(1, settings.personTipDuration || DEFAULT_SETTINGS.personTipDuration) * 1000;
     const loop = () => {
       showT = setTimeout(() => {
         if (hoverRef.current) {
@@ -436,14 +446,14 @@ export function SidebarPromptLibrary(props?: {
           if (!hoverRef.current) setBubble(false);
           loop();
         }, hideDuration);
-      }, 20000 + Math.random() * 16000);
+      }, intervalMs + Math.random() * intervalMs);
     };
     loop();
     return () => {
       if (showT) clearTimeout(showT);
       if (hideT) clearTimeout(hideT);
     };
-  }, [collapsed]);
+  }, [collapsed, settings.personTipInterval, settings.personTipDuration]);
 
   // 固定显示在面板左侧的详情卡片：x 取面板左缘左侧，y 对齐所悬停行的顶部（位置确定可预期）
   const showDetail = (p: Prompt, rowTop: number) => {

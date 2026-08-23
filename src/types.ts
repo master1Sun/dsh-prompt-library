@@ -113,6 +113,10 @@ export interface PluginSettings {
   aiProvider: string;
   /** AI 调用使用的模型 id（留空则自动发现）。 */
   aiModel: string;
+  /** 小人提示间隔（秒）：未悬停时自动冒气泡的频率。 */
+  personTipInterval: number;
+  /** 小人提示显示时长（秒）：自动冒气泡持续展示的时间。 */
+  personTipDuration: number;
   /** [实验室功能] 勾选后，把人格文件注入整个聊天会话，约束整个对话（后果自负）。 */
   applyCharacterToChat: boolean;
 }
@@ -135,5 +139,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   aiEnrichEnabled: false,
   aiProvider: "",
   aiModel: "",
+  personTipInterval: 10, // 10 秒
+  personTipDuration: 20, // 20 秒
   applyCharacterToChat: false,
 };

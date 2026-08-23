@@ -41,15 +41,32 @@ export function ConfirmDialog({
 }: Props): ReactNode {
   if (!open) return null;
   const btn: CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
     border: "none",
     outline: "none",
-    padding: "4px 14px",
-    fontSize: 13,
-    lineHeight: 1.7,
-    borderRadius: 7,
+    height: 28,
+    padding: "0 10px",
+    fontSize: 12,
+    lineHeight: 1,
+    borderRadius: 14,
     cursor: "pointer",
     fontFamily: MONO,
+    background: "transparent",
     transition: "background-color .24s cubic-bezier(.22,1,.36,1), color .24s cubic-bezier(.22,1,.36,1)",
+  };
+  // 与其他按钮（pl-btn）一致的交互高亮：hover 用官方交互背景 token
+  const hover: CSSProperties = {
+    background: "var(--dsw-alias-interactive-bg-hover)",
+    color: TEXT,
+  };
+  const hoverAccent: CSSProperties = {
+    background: "var(--dsw-alias-interactive-bg-hover)",
+  };
+  const hoverDanger: CSSProperties = {
+    background: "var(--dsw-alias-interactive-bg-hover)",
+    color: RED,
   };
   return (
     <div
@@ -86,12 +103,18 @@ export function ConfirmDialog({
       >
         <div style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{message}</div>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-          <button type="button" style={{ ...btn, background: "transparent", color: TEXT }} onClick={onCancel}>
+          <button type="button" style={{ ...btn, color: TEXT }} onMouseEnter={(e) => Object.assign(e.currentTarget.style, hover)} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent" }} onClick={onCancel}>
             {cancelLabel}
           </button>
           <button
             type="button"
-            style={{ ...btn, background: danger ? RED : "var(--dsw-alias-brand-primary, #2563eb)", color: "#fff" }}
+            style={{
+              ...btn,
+              color: danger ? RED : "var(--dsw-alias-brand-primary, #2563eb)",
+              fontWeight: 600,
+            }}
+            onMouseEnter={(e) => Object.assign(e.currentTarget.style, danger ? hoverDanger : hoverAccent)}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent" }}
             onClick={onConfirm}
           >
             {confirmLabel}

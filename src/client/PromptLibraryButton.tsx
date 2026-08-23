@@ -1149,7 +1149,14 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                 flexShrink: 0,
               }}
             >
-              <strong style={{ fontSize: 14, fontWeight: 470 }}>{T("pl.title")}</strong>
+              {/* 面板头部队列对齐：同款书本图标 + 词库名；图标与聊天栏按钮一致 */}
+              <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true" style={{ flexShrink: 0 }}>
+                  <path d="M4 5h11a3 3 0 0 1 3 3v11l-3-2-3 2V8a3 3 0 0 0-3-3H4Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+                  <path d="M8 9h3M8 12h3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                </svg>
+                <strong style={{ fontSize: 14, fontWeight: 470, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{T("pl.title")}</strong>
+              </span>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <Button
                   type="button"

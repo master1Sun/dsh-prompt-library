@@ -33,13 +33,13 @@ import {
   updatePrompt as apiUpdate,
   usePrompt as apiUse,
   polishPrompt,
-  genIntro,
 } from "./api.js";
 import { isRecent, markRecent } from "./recent-created.js";
 import { useHoverDetail } from "./HoverDetail.js";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { notifyDataChanged, useDataChanged } from "./data-sync.js";
 import { PL_BUTTON_CSS, plBtn } from "./button-style.js";
+import { PromptAssistant } from "./PromptAssistant.js";
 import { type PLTranslate, usePLT } from "./i18n.js";
 import { Highlight, SearchBox, TagFilterBar } from "./SearchBox.js";
 import { TagInput } from "./TagInput.js";
@@ -87,7 +87,7 @@ const HOVER_GAP = 12;
 /** 右侧边栏固定宽度：不随共享的 panelWidth 设置变化。 */
 const SIDEBAR_WIDTH = 380;
 
-// ── 浮动面板（可拖动 / 缩放 / 折叠为小人）相关常量 ──────────────────────────
+// ── 浮动面板（可拖动 / 缩放 / 折叠）相关常量 ────────────────────────────────
 /** 浮动面板位置/尺寸/折叠状态在 localStorage 中的存储键。 */
 const FLOAT_KEY = "pl:float-state";
 /** 面板顶部最小留白（给宿主 header）与四周最小边距。 */
@@ -95,8 +95,6 @@ const FLOAT_MARGIN = 8;
 /** 面板最小宽高。 */
 const FLOAT_MIN_W = 300;
 const FLOAT_MIN_H = 340;
-/** 折叠后的小人尺寸。 */
-const PERSON_SIZE = 72;
 
 interface FloatState {
   x: number;
@@ -104,12 +102,9 @@ interface FloatState {
   width: number;
   height: number;
   collapsed: boolean;
-  /** 小人独立位置（左上角坐标），不随面板移动而改变。 */
-  px: number;
-  py: number;
 }
 
-/** 读入上次的浮动状态；首次进入面板落右下角、小人落面板左下的底部区域。 */
+/** 读入上次的浮动状态；首次进入面板落右下角。 */
 function loadFloatState(): FloatState {
   const w = window.innerWidth;
   const h = window.innerHeight;
@@ -119,9 +114,6 @@ function loadFloatState(): FloatState {
     width: SIDEBAR_WIDTH,
     height: 520,
     collapsed: true,
-    // 小人默认放在屏幕底部、默认面板左下角再往左一些，避免与面板重叠
-    px: Math.max(FLOAT_MARGIN, w - SIDEBAR_WIDTH - PERSON_SIZE - 48),
-    py: Math.max(FLOAT_MARGIN, h - PERSON_SIZE - FLOAT_MARGIN),
   };
   try {
     const raw = localStorage.getItem(FLOAT_KEY);
@@ -130,11 +122,6 @@ function loadFloatState(): FloatState {
     /* 读取失败用默认 */
   }
   return def;
-}
-
-/** 把 v 夹取到 [lo, hi]（hi 至少为 lo，避免视口过小）。 */
-function clamp(v: number, lo: number, hi: number): number {
-  return Math.min(Math.max(lo, v), Math.max(lo, hi));
 }
 
 /** 把位置 clamp 到视口内（含最小边距 / 顶部留白）。 */
@@ -326,138 +313,6 @@ export function SidebarPromptLibrary(props?: {
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   };
-
-  // 拖动小人：仅移动小人的独立坐标（px/py），不改变面板位置；松手时若未明显移动视为「点击 → 切换面板开合」
-  const personDragRef = useRef<{ startX: number; startY: number; ox: number; oy: number; moved: boolean } | null>(null);
-  const startPersonDrag = (e: ReactMouseEvent<HTMLElement>) => {
-    e.preventDefault();
-    personDragRef.current = { startX: e.clientX, startY: e.clientY, ox: float.px, oy: float.py, moved: false };
-    const onMove = (ev: MouseEvent) => {
-      const d = personDragRef.current;
-      if (!d) return;
-      const dx = ev.clientX - d.startX;
-      const dy = ev.clientY - d.startY;
-      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) d.moved = true;
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
-      // 小人以自身尺寸夹取到视口内（可拖到屏幕右下角）
-      const px = clamp(d.ox + dx, FLOAT_MARGIN, vw - PERSON_SIZE - FLOAT_MARGIN);
-      const py = clamp(d.oy + dy, FLOAT_MARGIN, vh - PERSON_SIZE - FLOAT_MARGIN);
-      updateFloat({ px, py });
-    };
-    const onUp = () => {
-      const d = personDragRef.current;
-      const clicked = d ? !d.moved : false;
-      personDragRef.current = null;
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      // 点击小人：折叠时展开、展开时折叠（切换面板开合）
-      if (clicked) updateFloat({ collapsed: !float.collapsed });
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  };
-
-  // 小人气泡显隐
-  const [bubble, setBubble] = useState(false);
-  // 鼠标是否悬停在小人上（供「自动冒泡」判断是否打扰用户）
-  const hoverRef = useRef(false);
-  // 气泡展示的功能简介：优先用首次加载时 AI 生成并缓存的词，否则用 i18n 内置词
-  const [intros, setIntros] = useState<string[]>(() => [
-    T("pl.intro.0"),
-    T("pl.intro.1"),
-    T("pl.intro.2"),
-    T("pl.intro.3"),
-    T("pl.intro.4"),
-  ]);
-
-  // 悬停气泡：功能简介轮播展示（固定较快节奏切换，移开即重置）
-  const [introIdx, setIntroIdx] = useState(0);
-  const rotMs = 2500;
-  useEffect(() => {
-    if (!bubble) {
-      setIntroIdx(0);
-      return;
-    }
-    const timer = setInterval(() => setIntroIdx((i) => i + 1), rotMs);
-    return () => clearInterval(timer);
-  }, [bubble]);
-
-  // 首次加载：请求 AI 生成词库功能简介；AI 不可用或失败时保持 i18n 内置词。
-  // 按「语言 + 当天日期」缓存到 localStorage：每天换新键重新请求一次，让 AI 每天出新的文案。
-  useEffect(() => {
-    const lang: "zh" | "en" =
-      (document.documentElement.lang || "zh").toLowerCase().startsWith("en") ? "en" : "zh";
-    const now = new Date();
-    const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-    const cacheKey = `pl:intro:${lang}:${day}`;
-    let cancelled = false;
-    try {
-      const cached = localStorage.getItem(cacheKey);
-      if (cached) {
-        const parsed = JSON.parse(cached) as { lines?: string[] };
-        if (Array.isArray(parsed.lines) && parsed.lines.length > 0) {
-          setIntros(parsed.lines.slice(0, 6));
-          return;
-        }
-      }
-    } catch {
-      /* 缓存解析失败忽略 */
-    }
-    genIntro(lang)
-      .then((r) => {
-        if (cancelled) return;
-        if (Array.isArray(r.lines) && r.lines.length > 0) {
-          const lines = r.lines.slice(0, 6);
-          setIntros(lines);
-          try {
-            // 只保留当天的简介缓存，移除同语言的历史缓存键，避免 localStorage 无限累积
-            const allKeys = localStorage.keys?.() ?? [];
-            for (const k of allKeys) {
-              if (k.startsWith(`pl:intro:${lang}:`) && k !== cacheKey) localStorage.removeItem(k);
-            }
-            localStorage.setItem(cacheKey, JSON.stringify({ lines }));
-          } catch {
-            /* 忽略存储失败 */
-          }
-        }
-      })
-      .catch(() => {
-        /* AI 不可用：保持内置简介 */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // 未悬停时不定时自动冒气泡展示功能简介；无论面板折叠与否都会触发（小人在场即冒泡）。
-  // 悬停中或显示中则跳过本轮，间隔取自设置。
-  useEffect(() => {
-    // 提示频率（间隔秒）与显示时长（秒），取自设置
-    const intervalMs = Math.max(3, settings.personTipInterval || DEFAULT_SETTINGS.personTipInterval) * 1000;
-    const hideDuration = Math.max(1, settings.personTipDuration || DEFAULT_SETTINGS.personTipDuration) * 1000;
-    let showT: ReturnType<typeof setTimeout> | undefined;
-    let hideT: ReturnType<typeof setTimeout> | undefined;
-    const loop = () => {
-      showT = setTimeout(() => {
-        if (hoverRef.current) {
-          loop();
-          return;
-        }
-        setIntroIdx((i) => i + 1);
-        setBubble(true);
-        hideT = setTimeout(() => {
-          if (!hoverRef.current) setBubble(false);
-          loop();
-        }, hideDuration);
-      }, intervalMs + Math.random() * intervalMs);
-    };
-    loop();
-    return () => {
-      if (showT) clearTimeout(showT);
-      if (hideT) clearTimeout(hideT);
-    };
-  }, [settings.personTipInterval, settings.personTipDuration]);
 
   // 固定显示在面板左侧的详情卡片：x 取面板左缘左侧，y 对齐所悬停行的顶部（位置确定可预期）
   const showDetail = (p: Prompt, rowTop: number) => {
@@ -819,166 +674,17 @@ export function SidebarPromptLibrary(props?: {
       <style>{`@keyframes pl-refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 /* 浮动面板展开时的轻微浮入动画 */
 @keyframes pl-pop-in { from { opacity: 0; transform: translateY(6px) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
-/* 小人待机：上下轻盈起伏 + 轻微压扁（像在呼吸/跳动） */
-@keyframes pl-person-bob { 0%,100% { transform: translateY(0) scale(1,1); } 50% { transform: translateY(-5px) scale(1.03,.97); } }
-/* 地面影子：随起伏缩放，增强“悬空”感 */
-@keyframes pl-person-shadow { 0%,100% { transform: scaleX(1); opacity: .22; } 50% { transform: scaleX(.82); opacity: .14; } }
-/* 眼睛眨动 */
-@keyframes pl-person-blink { 0%,88%,100% { transform: scaleY(1); } 94% { transform: scaleY(.08); } }
-/* 气泡浮出 */
-@keyframes pl-bubble-in { from { opacity: 0; transform: translateY(6px) scale(.9); } to { opacity: 1; transform: translateY(0) scale(1); } }
 .pl-grab { cursor: grab; user-select: none; }
 .pl-grab:active { cursor: grabbing; }
-.pl-person-arm { transform-origin: 6px 8px; animation: pl-person-wave 2.4s ease-in-out infinite; }
-@keyframes pl-person-wave { 0%,60%,100% { transform: rotate(0deg); } 70% { transform: rotate(-14deg); } 80% { transform: rotate(0deg); } }
-/* 气泡内简介切换淡入 */
-@keyframes pl-bubble-intro { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
-/* 折叠按钮：层次阴影 + 悬停动效（其上面色随主题，hover 亮起品牌色并轻微上浮） */
-.pl-collapse-btn {
-  color: var(--dsw-alias-label-secondary, #6b7280) !important;
-  box-shadow: 0 -1px 5px rgba(15, 23, 42, .06), inset 0 0 0 1px transparent !important;
-  transition: color .22s ease, background-color .22s ease, box-shadow .22s ease, transform .22s cubic-bezier(.22,1,.36,1) !important;
-}
-.pl-collapse-btn:hover {
-  color: var(--dsw-alias-brand-primary, #2563eb) !important;
-  background-color: color-mix(in srgb, var(--dsw-alias-brand-primary, #2563eb) 10%, transparent) !important;
-  box-shadow: 0 2px 8px color-mix(in srgb, var(--dsw-alias-brand-primary, #2563eb) 22%, transparent), inset 0 0 0 1px transparent !important;
-  transform: translateX(-50%) translateY(1.5px) scale(1.03) !important;
 }`}</style>
       <style>{PL_BUTTON_CSS}</style>
-      {/* 小人：始终显示，可独立拖动，悬停显示气泡；点击切换面板开合（不做原生 title 提示） */}
-      <div
-        aria-label={T("pl.title")}
-        onMouseDown={startPersonDrag}
-        onMouseEnter={() => { hoverRef.current = true; setBubble(true); }}
-        onMouseLeave={() => { hoverRef.current = false; setBubble(false); }}
-        style={{
-          position: "fixed",
-          left: float.px,
-          top: float.py,
-          // 略高于面板，保证面板展开时小人仍显示、可拖拽/点击
-          zIndex: 2147483647,
-          width: PERSON_SIZE,
-          height: PERSON_SIZE,
-          cursor: "grab",
-          animation: "pl-pop-in .3s cubic-bezier(.22,1,.36,1)",
-          userSelect: "none",
-        }}
-      >
-        {/* 气泡：悬停时显示 */}
-        <div
-          style={{
-            position: "absolute",
-            right: 0,
-            bottom: "100%",
-            display: bubble ? "block" : "none",
-            marginBottom: 10,
-            padding: "9px 14px",
-            background: TONE.panel,
-            color: TONE.text,
-            border: `1px solid ${TONE.border}`,
-            borderRadius: 10,
-            fontSize: 12,
-            lineHeight: 1.55,
-            minWidth: 208,
-            maxWidth: 248,
-            textAlign: "center",
-            boxShadow: "none",
-            animation: "pl-bubble-in .2s cubic-bezier(.22,1,.36,1)",
-          }}
-        >
-          <div style={{ fontWeight: 600, letterSpacing: 2, marginBottom: 4 }}>{T("pl.floating.title")}</div>
-          <div
-            key={introIdx}
-            style={{
-              color: TONE.muted,
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-              animation: "pl-bubble-intro .45s ease",
-            }}
-          >
-            {intros[introIdx % intros.length]}
-          </div>
-          {/* 轮询指示点 */}
-          <div style={{ display: "flex", gap: 4, justifyContent: "center", marginTop: 7 }}>
-            {intros.map((_, i) => {
-              const active = i === introIdx % intros.length;
-              return (
-                <span
-                  key={i}
-                  style={{
-                    width: 5,
-                    height: 5,
-                    borderRadius: "50%",
-                    background: active ? TONE.accent : TONE.quiet,
-                    transition: "background .2s, transform .2s",
-                    transform: active ? "scale(1.35)" : "scale(1)",
-                  }}
-                />
-              );
-            })}
-          </div>
-          {/* 气泡小尾巴 */}
-          <span
-            style={{
-              position: "absolute",
-              right: 18,
-              bottom: -6,
-              width: 10,
-              height: 10,
-              background: "inherit",
-              borderRight: `1px solid ${TONE.border}`,
-              borderBottom: `1px solid ${TONE.border}`,
-              transform: "rotate(45deg)",
-            }}
-          />
-        </div>
-        {/* 小人本体：SVG 角色 + 待机动画 */}
-        <div style={{ position: "relative", width: "100%", height: "100%", pointerEvents: "none" }}>
-          <svg width={PERSON_SIZE} height={PERSON_SIZE} viewBox="0 0 72 72" fill="none" style={{ position: "absolute", inset: 0, animation: "pl-person-bob 2.6s ease-in-out infinite", pointerEvents: "none", filter: "drop-shadow(0 2px 7px color-mix(in srgb, var(--dsw-alias-brand-primary, #2563eb) 45%, transparent))" }}>
-            <title>{T("pl.title")}</title>
-            {/* 身体 */}
-            <path d="M22 47 C18 47 14 42 13 34 C12 26 18 21 25 20 C22 15 26 11 33 12 C40 11 44 15 41 20 C48 21 54 26 53 34 C52 42 48 47 44 47 Z" fill="var(--dsw-alias-brand-primary, #2563eb)" opacity=".16" />
-            {/* 小手 */}
-            <g className="pl-person-arm">
-              <ellipse cx="36" cy="52" rx="12" ry="9" fill="var(--dsw-alias-brand-primary, #2563eb)" opacity="0.85" />
-              <ellipse cx="26" cy="50" rx="5" ry="4" fill="var(--dsw-alias-interactive-bg-hover, rgba(100,116,139,.4))" />
-            </g>
-            {/* 脸 */}
-            <circle cx="36" cy="34" r="15" fill="var(--dsw-alias-brand-primary, #2563eb)" />
-            {/* 腮红 */}
-            <circle cx="29" cy="37" r="2.4" fill="#fff" opacity=".55" />
-            <circle cx="43" cy="37" r="2.4" fill="#fff" opacity=".55" />
-            {/* 眼睛（含眨动） */}
-            <g style={{ animation: "pl-person-blink 4s ease-in-out infinite", transformOrigin: "32px 34px" }}>
-              <circle cx="31" cy="33" r="2.6" fill="#fff" />
-              <circle cx="41" cy="33" r="2.6" fill="#fff" />
-              <circle cx="32" cy="33.6" r="1.2" fill="#10141c" />
-              <circle cx="42" cy="33.6" r="1.2" fill="#10141c" />
-            </g>
-            {/* 微笑 */}
-            <path d="M30 39.5 Q36 43.5 42 39.5" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" />
-          </svg>
-          {/* 地面影子 */}
-          <div
-            style={{
-              position: "absolute",
-              left: "50%",
-              bottom: 2,
-              width: 34,
-              height: 8,
-              borderRadius: "50%",
-              background: "color-mix(in srgb, var(--dsw-alias-brand-primary, #2563eb) 45%, rgba(2, 6, 23, .55))",
-              opacity: 0.34,
-              transform: "translateX(-50%)",
-              filter: "blur(1px)",
-              boxShadow: "0 0 6px color-mix(in srgb, var(--dsw-alias-brand-primary, #2563eb) 30%, transparent)",
-              animation: "pl-person-shadow 2.6s ease-in-out infinite",
-            }}
-          />
-        </div>
-      </div>
-      <section
+      {/* 词库助手（小人+气泡）：独立组件，自管理位置/冒泡/简介；点击小人通知面板切换开合 */}
+      <PromptAssistant
+        t={T}
+        settings={settings}
+        onTogglePanel={() => updateFloat({ collapsed: !float.collapsed })}
+      />
+        <section
           ref={panelRef}
           role="dialog"
           aria-label={T("pl.title")}
@@ -1024,23 +730,30 @@ export function SidebarPromptLibrary(props?: {
               <path d="M7 17L17 7M9 17h8V9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </div>
-          {/* 头部 — 可拖动（顶部整条作为拖拽手柄）；左标题、右刷新/新建，折叠按钮贴顶部中央 */}
+          {/* 头部 — 常规布局：左标题（书本图标 + 词库名），右侧依次为刷新/新建/最小化 */}
           <header
             onMouseDown={startPanelDrag}
             className="pl-grab"
             style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
+              display: "flex",
               alignItems: "center",
               gap: 8,
-              position: "relative",
-              padding: "10px 12px",
+              padding: "0 12px",
               borderBottom: `1px solid ${TONE.border}`,
               flexShrink: 0,
               height: 48,
             }}
           >
-            <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, justifySelf: "start" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0, flex: 1 }}>
+              {/* 图标统一为聊天栏按钮同款书本图标 */}
+              <svg
+                width="15" height="15" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"
+                style={{ flexShrink: 0 }}
+              >
+                <path d="M4 5h11a3 3 0 0 1 3 3v11l-3-2-3 2V8a3 3 0 0 0-3-3H4Z" strokeLinejoin="round" />
+                <path d="M8 9h3M8 12h3" strokeLinecap="round" />
+              </svg>
               <strong
                 style={{
                   fontSize: 14,
@@ -1054,36 +767,7 @@ export function SidebarPromptLibrary(props?: {
                 {T("pl.title")}
               </strong>
             </span>
-            {/* 折叠按钮：完全贴面板顶部中央（向下突出的标签），不占行高 */}
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className={plBtn("ghost", "sm") + " pl-collapse-btn"}
-              onMouseDown={(e: ReactMouseEvent<HTMLButtonElement>) => e.stopPropagation()}
-              onClick={() => setCollapsed(true)}
-              title={T("pl.sidebar.collapse")}
-              icon={
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M6 9l6 6 6-6" />
-                </svg>
-              }
-              style={{
-                position: "absolute",
-                top: -1,
-                left: "50%",
-                transform: "translateX(-50%)",
-                zIndex: 3,
-                height: 26,
-                padding: "0 10px",
-                background: TONE.panel,
-                borderTopLeftRadius: 0,
-                borderTopRightRadius: 0,
-                borderBottomLeftRadius: 10,
-                borderBottomRightRadius: 10,
-              }}
-            />
-            <div style={{ justifySelf: "end", display: "flex", gap: 6, alignItems: "center" }}>
+            <div style={{ justifySelf: "end", display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
               <Button
                 type="button"
                 variant="ghost"
@@ -1116,6 +800,21 @@ export function SidebarPromptLibrary(props?: {
               >
                 {T("pl.new")}
               </Button>
+              {/* 最小化按钮：收进右侧操作区，采用常规的下箭头图标按钮 */}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className={plBtn("ghost", "sm")}
+                onMouseDown={(e: ReactMouseEvent<HTMLButtonElement>) => e.stopPropagation()}
+                onClick={() => setCollapsed(true)}
+                title={T("pl.sidebar.collapse")}
+                icon={
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 8l9 9 9-9" />
+                  </svg>
+                }
+              />
             </div>
           </header>
 

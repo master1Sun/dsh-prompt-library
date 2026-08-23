@@ -182,6 +182,10 @@ interface Props {
   onInsertAndSend?: (values: Record<string, string>) => void;
   /** 是否允许插入并发送：需调用方确认输入框草稿为空。 */
   draftEmpty?: boolean;
+  /** 确认按钮文字（如「插入」/「覆盖」），默认「插入」。 */
+  confirmLabel?: string;
+  /** 是否显示「插入并发送」按钮，默认 true。覆盖场景通常无需发送，可设为 false。 */
+  showInsertAndSend?: boolean;
   /** 翻译函数。 */
   t: PLT;
 }
@@ -195,6 +199,8 @@ export function TemplateFillModal({
   onConfirm,
   onInsertAndSend,
   draftEmpty,
+  confirmLabel,
+  showInsertAndSend = true,
   t,
 }: Props): ReactNode {
   const [values, setValues] = useState<Record<string, string>>({});
@@ -209,8 +215,8 @@ export function TemplateFillModal({
     rememberVarValues(values); // 记住本次填充值，下次同名变量自动预填
     onConfirm(values);
   };
-  // 插入并发送：仅在回调存在且草稿为空时可用；否则置灰并提示
-  const canSend = Boolean(onInsertAndSend) && draftEmpty === true;
+  // 插入并发送：仅显示且回调存在且草稿为空时可用；否则置灰并提示
+  const canSend = Boolean(onInsertAndSend) && showInsertAndSend && draftEmpty === true;
 
   return (
     <div
@@ -330,7 +336,7 @@ export function TemplateFillModal({
           <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={onCancel}>
             {t("pl.cancel")}
           </Button>
-          {onInsertAndSend && (
+          {showInsertAndSend && onInsertAndSend && (
             <Button
               type="button"
               size="sm"
@@ -346,7 +352,7 @@ export function TemplateFillModal({
             </Button>
           )}
           <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={submit}>
-            {t("pl.insert")}
+            {confirmLabel ?? t("pl.insert")}
           </Button>
         </div>
       </div>

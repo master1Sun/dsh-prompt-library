@@ -1358,6 +1358,8 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
         onCancel={() => setTemplate(null)}
         onConfirm={applyTemplate}
         onInsertAndSend={insertAndSend}
+        showInsertAndSend={template?.mode !== "overwrite"}
+        confirmLabel={template?.mode === "overwrite" ? T("pl.overwrite") : T("pl.insert")}
         draftEmpty={template?.fromOverlay ? true : !(draft?.trim())}
         t={T}
       />

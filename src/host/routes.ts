@@ -291,7 +291,7 @@ export function makePromptRoutes(): WebRoute[] {
         const settings = await getSettings();
         const polished = await polishPromptBody(body, settings, { keepVariables });
         if (polished === undefined) {
-          return json(res, 503, { ok: false, error: "AI 不可用或润色失败，请确认已连接 LLM 服务" });
+          return json(res, 503, { ok: false, error: "AI 不可用或优化失败，请确认已连接 LLM 服务" });
         }
         return json(res, 200, { ok: true, data: { polished } });
       }

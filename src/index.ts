@@ -61,7 +61,7 @@ const COMMAND_SPECS: CommandSpec[] = [
   { flags: "-enrich / -en", zh: "AI专业完善", en: "AI professional enrichment", zhExample: "/prompts -enrich 请把这段完善得更全面专业", enExample: "/prompts -enrich make this more comprehensive and professional" },
   { flags: "-e / -exp", zh: "导出", en: "export", zhExample: "/prompts -e", enExample: "/prompts -e" },
   { flags: "-data / -d", zh: "统计", en: "stats", zhExample: "/prompts -data", enExample: "/prompts -data" },
-  { flags: "-AI / -a", zh: "AI润色", en: "AI polish", zhExample: "/prompts -AI 请把这段润色得更简洁", enExample: "/prompts -AI make this more concise" },
+  { flags: "-AI / -a", zh: "AI优化", en: "AI polish", zhExample: "/prompts -AI 请把这段优化得更简洁", enExample: "/prompts -AI make this more concise" },
   { flags: "-h", zh: "帮助", en: "help", zhExample: "/prompts -h", enExample: "/prompts -h" },
 ];
 
@@ -178,7 +178,7 @@ export function apply(ctx: Context) {
       const isZh = locale.startsWith("zh") || locale === "";
       const copy = isZh
         ? {
-            description: "保存/润色/完善提示词，并输出词库统计",
+            description: "保存/优化/完善提示词，并输出词库统计",
             hint: "输入命令或要保存/处理的正文，直接输入 /prompts 可查看命令示例",
             cmdExamples: buildCmdExamples("zh"),
             unknownFlag: buildUnknownFlag("zh"),
@@ -189,9 +189,9 @@ export function apply(ctx: Context) {
             searchEmpty: "未找到匹配的提示词",
             searchUsage: "用法：/prompts -s <关键词>（检索词库，支持大小写不敏感）",
             exportEmpty: "词库为空，无内容可导出",
-            aiNoInput: "请在 -AI 后输入要润色的正文",
+            aiNoInput: "请在 -AI 后输入要优化的正文",
             aiUnavailable: "AI 服务不可用，无法处理",
-            aiDone: "已 AI 润色完成，请复制下方内容：",
+            aiDone: "已 AI 优化完成，请复制下方内容：",
             enrichNoInput: "请在 -enrich 后输入要完善的正文",
             enrichFailed: "AI 完善失败",
             enrichDone: "已 AI 专业完善（扩写，与 -AI 相反），请复制下方内容：",

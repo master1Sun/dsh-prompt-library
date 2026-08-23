@@ -179,7 +179,7 @@ function seedDefaultPromptIfEmpty(cur: DatabaseSync): void {
         "",
         "你可以这样使用本插件：",
         "· 在输入框输入 `/prompts -add 把这段好的提示词保存下来`，不错过任何好词；",
-        "· 输入 `/prompts -AI 请把这段润色得更专业`，AI 润色后结果会打印出来供复制；",
+        "· 输入 `/prompts -AI 请把这段优化得更专业`，AI 优化后结果会打印出来供复制；",
         "· 输入 `/prompts -h` 查看完整使用手册。",
         "",
         "也可以直接编辑这条提示词，替换为你自己的内容，并在设置里为它打上标签。",

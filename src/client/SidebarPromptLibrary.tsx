@@ -218,6 +218,10 @@ export function SidebarPromptLibrary(props?: {
   >({ status: "idle" });
   // AI 润色结果（可编辑）
   const [polishResult, setPolishResult] = useState("");
+  // 润色失败提示（独立于编辑器 error，展示在列表区顶部）
+  const [polishError, setPolishError] = useState<string | null>(null);
+  // 润色结果插入时待填充的变量（润色结果没有对应 Prompt 对象，独立记录待插入文本）
+  const [polishInsert, setPolishInsert] = useState<string | null>(null);
   // 模板变量填充弹窗：插入前填写 {{变量}} 占位符
   const [template, setTemplate] = useState<{ prompt: Prompt; mode: "insert" | "overwrite" } | null>(null);
   // 待确认删除的提示词（自定义确认弹窗，替代系统 confirm）
@@ -426,14 +430,14 @@ export function SidebarPromptLibrary(props?: {
     };
   }, []);
 
-  // 未悬停时不定时自动冒气泡展示功能简介（仅折叠成小人时触发；随机间隔短暂展示，随后自动收起）
+  // 未悬停时不定时自动冒气泡展示功能简介；无论面板折叠与否都会触发（小人在场即冒泡）。
+  // 悬停中或显示中则跳过本轮，间隔取自设置。
   useEffect(() => {
-    if (!collapsed) return;
-    let showT: ReturnType<typeof setTimeout> | undefined;
-    let hideT: ReturnType<typeof setTimeout> | undefined;
     // 提示频率（间隔秒）与显示时长（秒），取自设置
     const intervalMs = Math.max(3, settings.personTipInterval || DEFAULT_SETTINGS.personTipInterval) * 1000;
     const hideDuration = Math.max(1, settings.personTipDuration || DEFAULT_SETTINGS.personTipDuration) * 1000;
+    let showT: ReturnType<typeof setTimeout> | undefined;
+    let hideT: ReturnType<typeof setTimeout> | undefined;
     const loop = () => {
       showT = setTimeout(() => {
         if (hoverRef.current) {
@@ -453,7 +457,7 @@ export function SidebarPromptLibrary(props?: {
       if (showT) clearTimeout(showT);
       if (hideT) clearTimeout(hideT);
     };
-  }, [collapsed, settings.personTipInterval, settings.personTipDuration]);
+  }, [settings.personTipInterval, settings.personTipDuration]);
 
   // 固定显示在面板左侧的详情卡片：x 取面板左缘左侧，y 对齐所悬停行的顶部（位置确定可预期）
   const showDetail = (p: Prompt, rowTop: number) => {
@@ -630,12 +634,23 @@ export function SidebarPromptLibrary(props?: {
     [template, insertText, inputActions],
   );
 
+  // 润色结果变量填充确认：用填充后的文本插入，未提供的变量保留原占位符
+  const applyPolishInsert = useCallback(
+    (values: Record<string, string>) => {
+      if (polishInsert === null) return;
+      insertText(applyVariables(polishInsert, values));
+      setPolishInsert(null);
+    },
+    [polishInsert, insertText],
+  );
+
   // 模板变量「插入并发送」：填写变量后 setDraft + submit 直接发送，仅在草稿为空时由弹窗开放。
   const insertAndSend = useCallback(
     (values: Record<string, string>) => {
-      if (!template) return;
-      const filled = applyVariables(template.prompt.body, values);
-      apiUse(template.prompt.id).catch(() => {});
+      const source = polishInsert !== null ? polishInsert : template?.prompt.body;
+      if (source == null) return;
+      const filled = applyVariables(source, values);
+      if (template) apiUse(template.prompt.id).catch(() => {});
       if (inputActions) {
         inputActions.setDraft(filled);
         inputActions.submit?.();
@@ -643,8 +658,9 @@ export function SidebarPromptLibrary(props?: {
         navigator.clipboard.writeText(filled).catch(() => {});
       }
       setTemplate(null);
+      setPolishInsert(null);
     },
-    [template, inputActions],
+    [template, polishInsert, inputActions],
   );
 
   // 复制提示词正文到剪贴板，短暂显示「已复制」
@@ -658,8 +674,9 @@ export function SidebarPromptLibrary(props?: {
       .catch(() => {});
   }, []);
 
-  // 调用 AI 润色提示词正文，成功后进入润色结果视图，用户自行选择复制/插入/保存。
+  // 调用 AI 润色提示词正文，成功后进入润色结果视图，用户自行选择复制/插入/保存；失败展示错误提示。
   const startPolish = useCallback((p: Prompt) => {
+    setPolishError(null);
     setPolish({ status: "loading", id: p.id });
     polishPrompt(p.body).then(
       (res) => {
@@ -667,7 +684,7 @@ export function SidebarPromptLibrary(props?: {
         setPolish({ status: "done", id: p.id });
       },
       (e: unknown) => {
-        setError(e instanceof Error ? e.message : String(e));
+        setPolishError(e instanceof Error ? e.message : String(e));
         setPolish({ status: "idle" });
       },
     );
@@ -677,7 +694,15 @@ export function SidebarPromptLibrary(props?: {
   const closePolish = useCallback(() => {
     setPolish({ status: "idle" });
     setError(null);
+    setPolishInsert(null);
   }, []);
+
+  // AI 优化失败提示展示若干秒后自动关闭（无需手动点击）
+  useEffect(() => {
+    if (!polishError) return;
+    const timer = setTimeout(() => setPolishError(null), 4000);
+    return () => clearTimeout(timer);
+  }, [polishError]);
 
   // 把润色结果保存回词库（更新正文，保留原标题）
   const savePolish = useCallback(() => {
@@ -1125,6 +1150,25 @@ export function SidebarPromptLibrary(props?: {
               <div style={{ padding: "12px 12px", color: TONE.red, fontSize: 13 }}>{error}</div>
             )}
 
+            {polishError && (
+              <div
+                style={{
+                  padding: "9px 12px",
+                  margin: "6px 8px",
+                  color: TONE.red,
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                  textAlign: "center",
+                  wordBreak: "break-word",
+                  background: `color-mix(in srgb, ${TONE.red} 8%, transparent)`,
+                  border: `1px solid ${TONE.border}`,
+                  borderRadius: 7,
+                }}
+              >
+                {polishError}
+              </div>
+            )}
+
             {polish.status === "done" ? (
               <div style={{ padding: "12px 16px", display: "flex", flexDirection: "column", gap: 9 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1141,7 +1185,7 @@ export function SidebarPromptLibrary(props?: {
                   <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => { navigator.clipboard.writeText(polishResult).catch(() => {}); }}>
                     {T("pl.copy")}
                   </Button>
-                  <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => insertText(polishResult)}>
+                  <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => { if (hasVariables(polishResult)) setPolishInsert(polishResult); else insertText(polishResult); }}>
                     {T("pl.insert")}
                   </Button>
                   <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={savePolish}>
@@ -1372,14 +1416,16 @@ export function SidebarPromptLibrary(props?: {
         </section>
         {/* 悬停详情卡片必须在面板 section 之外：面板带 transform 动画，会破坏内部 fixed 元素的定位 */}
         {hoverEnabled && hover.overlay}
-      {/* 模板变量填充弹窗：插入含 {{变量}} 的提示词前弹出 */}
+      {/* 模板变量填充弹窗：插入含 {{变量}} 的提示词或润色结果前弹出 */}
       <TemplateFillModal
-        open={template !== null}
-        variables={template ? extractVariables(template.prompt.body) : []}
-        body={template ? template.prompt.body : ""}
-        onCancel={() => setTemplate(null)}
-        onConfirm={applyTemplate}
+        open={template !== null || polishInsert !== null}
+        variables={polishInsert !== null ? extractVariables(polishInsert) : template ? extractVariables(template.prompt.body) : []}
+        body={polishInsert !== null ? polishInsert : template ? template.prompt.body : ""}
+        onCancel={() => { setTemplate(null); setPolishInsert(null); }}
+        onConfirm={polishInsert !== null ? applyPolishInsert : applyTemplate}
         onInsertAndSend={insertAndSend}
+        showInsertAndSend={polishInsert !== null ? true : template?.mode !== "overwrite"}
+        confirmLabel={polishInsert !== null ? T("pl.insert") : template?.mode === "overwrite" ? T("pl.overwrite") : T("pl.insert")}
         draftEmpty={!(draft?.trim())}
         t={T}
       />

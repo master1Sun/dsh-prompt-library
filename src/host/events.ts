@@ -82,11 +82,9 @@ export function emitDataChanged(): void {
  */
 export function emitFillDraft(body: string): void {
   if (clients.size === 0) {
-    console.log(`[prompt-library] emitFillDraft: 无 SSE 订阅者，body 丢弃（len=${body.length}）`);
     return;
   }
   const frame = `event: fill-draft\ndata: ${JSON.stringify(body)}\n\n`;
-  console.log(`[prompt-library] emitFillDraft: 推送 fill-draft 到 ${clients.size} 个订阅者（len=${body.length}）`);
   for (const res of clients) {
     try {
       res.write(frame);

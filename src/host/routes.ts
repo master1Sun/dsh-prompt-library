@@ -14,6 +14,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { WebRoute } from "@deepseek-ai/dsh-host-webserver";
 import type { ApiResponse, PluginSettings, Prompt, PromptInput, PromptPatch } from "../types.js";
 import { listAiSelectables, polishPromptBody } from "./ai.js";
+import { generateSkillsFromPrompts } from "./skills.js";
 import {
   autoLearn,
   createPrompt,
@@ -236,6 +237,17 @@ export function makePromptRoutes(): WebRoute[] {
       if (method === "GET" && segments[0] === "trash" && segments.length === 1) {
         const data = await listTrash();
         return json(res, 200, { ok: true, data });
+      }
+
+      // POST /skills/generate — 批量把勾选提示词生成为 DSH 技能（~/.dsh/skills/<name>/SKILL.md）
+      if (method === "POST" && tail === "/skills/generate") {
+        const raw = await readJsonBody(req);
+        const ids = extractIds(raw);
+        if (ids.length === 0) {
+          return json(res, 400, { ok: false, error: "invalid body: {ids: string[]}" });
+        }
+        const result = await generateSkillsFromPrompts(ids);
+        return json(res, 200, { ok: true, data: result });
       }
 
       // POST /trash/restore — 从回收站恢复一批提示词

@@ -110,7 +110,7 @@ function useSettings(): PluginSettings {
 }
 
 export function SidebarPromptLibrary(props?: {
-  inputActions?: { setDraft: (text: string) => void };
+  inputActions?: { setDraft: (text: string) => void; submit?: () => void };
   draft?: string;
   t?: PLTranslate;
 }): ReactNode {
@@ -356,6 +356,23 @@ export function SidebarPromptLibrary(props?: {
       setTemplate(null);
     },
     [template, insertText, inputActions],
+  );
+
+  // 模板变量「插入并发送」：填写变量后 setDraft + submit 直接发送，仅在草稿为空时由弹窗开放。
+  const insertAndSend = useCallback(
+    (values: Record<string, string>) => {
+      if (!template) return;
+      const filled = applyVariables(template.prompt.body, values);
+      apiUse(template.prompt.id).catch(() => {});
+      if (inputActions) {
+        inputActions.setDraft(filled);
+        inputActions.submit?.();
+      } else {
+        navigator.clipboard.writeText(filled).catch(() => {});
+      }
+      setTemplate(null);
+    },
+    [template, inputActions],
   );
 
   // 复制提示词正文到剪贴板，短暂显示「已复制」
@@ -1017,6 +1034,8 @@ export function SidebarPromptLibrary(props?: {
         body={template ? template.prompt.body : ""}
         onCancel={() => setTemplate(null)}
         onConfirm={applyTemplate}
+        onInsertAndSend={insertAndSend}
+        draftEmpty={!(draft?.trim())}
         t={T}
       />
       {/* 删除确认弹窗（自定义，替代系统 confirm） */}

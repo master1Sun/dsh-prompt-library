@@ -4,8 +4,8 @@
  * /prompts 命令输出会在聊天框按纯文本展示：markdown 与 HTML 均无法解析，
  * 因此这里用普通字符串 + 换行符组织内容，中英双语并存于同一模块。
  *
- * 注意：本手册还会经 system prompt 变量 {{welcome_manual}} 注入首次欢迎语，
- * 宿主替换变量后不再二次扫描，故手册中的字面 {{变量}} 不会触发变量解析。
+ * 本手册仅用于 /prompts -h 与欢迎引导，不再经系统 prompt 注入打印到聊天框；
+ * 会话上下文由 HARNESS 文件（~/.dsh/prompt-library/prompts/HARNESS.md）提供。
  */
 export const manualZh = [
   "dsh-prompt-library 提示词库 — 使用手册",
@@ -66,10 +66,10 @@ export const manualZh = [
   "- 每周自动统计：每 7 天自动生成一次「近 7 天」的增量统计快照（新增/使用/AI 完善），在 /prompts -data 结尾展示，不会重复统计；",
   "- 删除确认：涉及删除的操作使用自定义确认弹窗，避免误删。",
   "",
-  "【八、灵魂边界（实验室功能）】",
-  "- 五个灵魂文件：SOUL（灵魂）、AGENTS（工作手册）、USER（用户画像）、IDENTITY（对外身份）、MEMORY（长期记忆），位于 ~/.dsh/prompt-library/character/；",
-  "- 内容需手动填写维护，形成稳定的人格与长期记忆；被删除的文件会在下次启动时自动重建为默认模板；",
-  "- 在设置中勾选「整个聊天应用灵魂边界」后，会约束之后新建的会话（不影响进行中的对话）。",
+  "【八、人格（实验室功能）】",
+  "- 人格文件：~/.dsh/prompt-library/character/SOUL.md，聚合身份、性格/语气、工作规范；",
+  "- 内容需手动填写维护，形成稳定的助手人格；被删除的文件会在下次启动时自动重建为默认模板；",
+  "- 在设置中勾选「整个聊天应用人格」后，会约束之后新建的会话（不影响进行中的对话）。",
   "",
   "【九、常见问题】",
   "Q：保存后面板没变化？",
@@ -144,10 +144,10 @@ export const manualEn = [
   "- Weekly auto-stats: every 7 days a snapshot of the last-7-days increments (added/used/AI-refined) is generated and shown at the end of /prompts -data; no double counting;",
   "- Delete confirmation: delete operations use a custom confirm dialog to avoid accidents.",
   "",
-  "[8. Soul Boundaries (Lab Feature)]",
-  "- Five soul files: SOUL (identity), AGENTS (workflow), USER (user profile), IDENTITY (public image), MEMORY (long-term memory), located at ~/.dsh/prompt-library/character/;",
-  "- Fill them in manually to form a stable personality and long-term memory; deleted files are rebuilt with default templates on the next startup;",
-  "- Enable \"Apply soul boundaries to the whole chat\" in settings to constrain new conversations (does not affect ongoing ones).",
+  "[8. Personality (Lab Feature)]",
+  "- Personality file: ~/.dsh/prompt-library/character/SOUL.md, combining identity, tone, and work guidelines;",
+  "- Fill it in manually to form a stable assistant personality; a deleted file is rebuilt with the default template on the next startup;",
+  "- Enable \"Apply personality to the whole chat\" in settings to constrain new conversations (does not affect ongoing ones).",
   "",
   "[9. FAQ]",
   "Q: Why doesn't the panel update after saving?",

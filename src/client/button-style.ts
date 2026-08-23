@@ -6,7 +6,7 @@
  * 这里对照官方 dsh-web-frontend 内 Button.module.css 的规则注入等价 CSS，
  * 让按钮「默认无背景、鼠标移入才出现背景」与官方一致：
  * - ghost：默认透明，hover 出现交互背景
- * - primary：品牌填充背景，hover 加深
+ * - primary：改为常规样式（与 ghost 一致），默认透明，hover 出现浅交互背景，去掉品牌填充高亮
  * 所有色值走 --dsw-alias-* 语义化 token，运行时随主题自动生效。
  */
 export const PL_BUTTON_CSS = `
@@ -14,15 +14,12 @@ export const PL_BUTTON_CSS = `
 .pl-btn:disabled{cursor:not-allowed;opacity:.4}
 .pl-btn--md{height:36px}
 .pl-btn--sm{height:28px;font-size:12px;line-height:18px;padding:0 10px;border-radius:14px}
-.pl-btn--primary{background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground)}
-.pl-btn--primary:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover)}
+.pl-btn--primary:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
+.pl-btn--primary:active:not(:disabled){background:var(--dsw-alias-interactive-bg-active)}
 .pl-btn--ghost:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
 .pl-btn--ghost:active:not(:disabled){background:var(--dsw-alias-interactive-bg-active)}
-.pl-btn--outline{border:1px solid var(--dsw-alias-border-l2)}
-.pl-btn--outline:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
-.pl-btn--outline:active:not(:disabled){background:var(--dsw-alias-interactive-bg-active)}
 `;
 
 /** 生成官方按钮的组合样式类名。size 默认 sm。 */
-export const plBtn = (variant: "primary" | "ghost" | "outline", size: "sm" | "md" = "sm") =>
+export const plBtn = (variant: "primary" | "ghost", size: "sm" | "md" = "sm") =>
   `pl-btn pl-btn--${variant} pl-btn--${size}`;

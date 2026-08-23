@@ -58,6 +58,7 @@ interface ButtonProps {
   useInput: <T>(selector: (s: { draft: string }) => T) => T;
   inputActions: {
     setDraft: (text: string) => void;
+    submit?: () => void;
   };
   t?: PLTranslate;
 }
@@ -828,6 +829,27 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
     [template, draft, inputActions],
   );
 
+  // 模板变量「插入并发送」：填写变量后 setDraft + submit 直接发送。
+  // # 浮层场景额外过滤掉「#」及其后的筛选内容，仅保留此前正文后连同提示词一起发，避免覆盖用户内容。
+  const insertAndSend = useCallback(
+    (values: Record<string, string>) => {
+      if (!template) return;
+      const filled = applyVariables(template.prompt.body, values);
+      apiUse(template.prompt.id).catch(() => {});
+      let send = filled;
+      if (template.fromOverlay) {
+        const idx = draft.lastIndexOf("#");
+        const before = idx >= 0 ? draft.slice(0, idx) : "";
+        send = before && before.trim() ? `${before}\n\n${filled}` : filled;
+      }
+      inputActions.setDraft(send);
+      inputActions.submit?.();
+      setTemplate(null);
+      setOpen(false);
+    },
+    [template, draft, inputActions],
+  );
+
   const editing = editor.mode !== "none";
 
   const NO_EDITOR = { mode: "none" as const, title: "", body: "", tags: "" };
@@ -1320,6 +1342,8 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
         body={template ? template.prompt.body : ""}
         onCancel={() => setTemplate(null)}
         onConfirm={applyTemplate}
+        onInsertAndSend={insertAndSend}
+        draftEmpty={template?.fromOverlay ? true : !(draft?.trim())}
         t={T}
       />
       {/* 删除确认弹窗（自定义，替代系统 confirm） */}

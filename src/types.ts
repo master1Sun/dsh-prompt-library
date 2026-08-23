@@ -2,7 +2,7 @@
  * 提示词库共享类型（host ↔ client）。
  */
 
-/** 一条可复用的提示词片段，持久化到 ~/.dsh/prompt-library.json。 */
+/** 一条可复用的提示词片段，持久化到 SQLite（~/.dsh/prompt-library/db/prompts.db）。 */
 export interface Prompt {
   /** 稳定标识（UUID）。 */
   id: string;
@@ -113,7 +113,7 @@ export interface PluginSettings {
   aiProvider: string;
   /** AI 调用使用的模型 id（留空则自动发现）。 */
   aiModel: string;
-  /** [实验室功能] 勾选后，把灵魂边界注入整个聊天会话，约束整个对话（后果自负）。 */
+  /** [实验室功能] 勾选后，把人格文件注入整个聊天会话，约束整个对话（后果自负）。 */
   applyCharacterToChat: boolean;
 }
 

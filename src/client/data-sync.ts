@@ -33,7 +33,6 @@ export function startDataChangedSubscription(): void {
     es.addEventListener("data-changed", () => notifyDataChanged());
     // host 侧 `/prompts -AI` 推送的润色正文：转发给填充监听的组件。
     es.addEventListener("fill-draft", (ev) => {
-      console.log("[prompt-library] 收到 fill-draft", ev.data);
       let body = "";
       try {
         body = ev.data ? (JSON.parse(ev.data) as string) : "";
@@ -98,7 +97,6 @@ export function useFillDraft(fill: (body: string) => void): void {
     startDataChangedSubscription();
     const onFill = (ev: Event) => {
       const body = (ev as CustomEvent<{ body: string }>).detail?.body ?? "";
-      console.log("[prompt-library] useFillDraft 收到窗口事件", body.length);
       if (body) fillRef.current(body);
     };
     window.addEventListener(FILL_DRAFT_EVENT, onFill);

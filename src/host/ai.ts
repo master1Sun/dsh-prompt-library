@@ -4,7 +4,7 @@
  * 封装 harness 的 LLM 服务（ctx.llm.stream()）：
  * - registerLlm / isAiAvailable：由 host 入口在 llm 服务可用时注入引用；
  * - enrichLearnedPrompt：保存到词库后，在后台调用 AI 生成/完善
- *   标题、标签/分类、摘要/使用说明，并优化改写正文（仅供词库内完善，不回写灵魂文件）；
+ *   标题、标签/分类、摘要/使用说明，并优化改写正文（仅供词库内完善，不回写人格文件）；
  * - polishPromptBody / enrichPromptProfessional：供界面与 /prompts 命令调用的润色与完善。
  *
  * 所有 AI 调用都带超时；任何失败都静默降级，绝不阻塞或破坏主流程。
@@ -16,9 +16,8 @@ import { listTags, updatePrompt } from "./store.js";
 import { parseRefineResult, type AiRefineResult } from "./refine.js";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { buildCharacterSystem, readCharacterDocs } from "./character.js";
+import { buildSoulBoundary, readSoulDoc } from "./character.js";
 import { logDir } from "./paths.js";
-import type { CharacterKind } from "./paths.js";
 
 /** 单次 AI 完善调用的超时（毫秒）。 */
 const AI_TIMEOUT_MS = 30_000;
@@ -224,25 +223,12 @@ async function resolveCandidates(
   return candidates;
 }
 
-/** 组装 system prompt：把 USER.md 与 MEMORY.md 作为上下文，让 AI 越用越懂用户。 */
-function systemPrompt(
-  userDoc: string,
-  memoryDoc: string,
-  existingTags: string[],
-  existingVars: string[],
-): string {
-  const user = userDoc.trim() || "（暂无）";
-  const memory = memoryDoc.trim() || "（暂无）";
+/** 组装 system prompt：引导 AI 依据标签库整理提示词（人格由外部 withSoulSystem 注入）。 */
+async function systemPrompt(existingTags: string[], existingVars: string[]): Promise<string> {
   // 标签库：优先复用已有标签，避免重复创建
   const tagLib = existingTags.length ? existingTags.join("、") : "（暂无）";
-  return [
+  const system = [
     "你是一名提示词库整理助手，帮助用户把原始输入整理成高质量、可复用的提示词。",
-    "",
-    "【用户档案 USER.md】这是用户习惯、偏好与关注领域，请贴合（可能为空，越用越准）：",
-    user,
-    "",
-    "【长期记忆 MEMORY.md】这是此前沉淀的用户风格与经验洞察，供你参考（可能为空）：",
-    memory,
     "",
     "【标签库】以下是当前已有的标签，请优先复用最贴合的一个，避免重复创建：",
     tagLib,
@@ -262,6 +248,7 @@ function systemPrompt(
       : []),
     "- 若正文某处内容会因使用场景而变化（如角色、对象、主题、风格、细节等），可在那处新增命名清晰、贴合语境的 {{变量名}} 占位符，提升提示词可复用性；没有这种需求时不要画蛇添足；",
   ].join("\n");
+  return withSoulSystem(system);
 }
 
 /** 组装 user 消息：原始提示词正文 + 候选标签 + 已有模板变量。 */
@@ -275,24 +262,16 @@ function userMessage(rawBody: string, tag?: string, existingVars?: string[]): st
 }
 
 /**
- * 把五维灵魂边界（SOUL/AGENTS/USER/IDENTITY/MEMORY）注入 AI 的 system prompt，
- * 让 AI 在润色 / 完善 / 洞察时都遵守这些边界。
+ * 把 SOUL.md 人格注入 AI 的 system prompt，让 AI 遵守用户自定义的人设/语气/工作规范。
  * 读取失败时静默忽略，不影响本次调用。
  *
- * 调用方若已用 readCharacterDocs() 读过 docs，应直接传入复用，避免重复读盘；
- * docs 为空时回退到自行读取。
+ * 调用方若已用 readSoulDoc() 读过 soul，应直接传入复用；soul 为空时回退到自行读取。
  */
-async function withCharacterSystem(system: string, docs?: Record<CharacterKind, string>): Promise<string> {
+async function withSoulSystem(system: string, soul?: string): Promise<string> {
   try {
-    const boundaryDocs = docs ?? (await readCharacterDocs());
-    const boundary = buildCharacterSystem(boundaryDocs);
+    const boundary = buildSoulBoundary(soul ?? (await readSoulDoc()));
     if (!boundary) return system;
-    return [
-      system,
-      "",
-      "【灵魂边界】以下是你在本次任务中必须严格遵循的身份与行为边界：",
-      boundary,
-    ].join("\n");
+    return [system, "", "# SOUL · 人格", boundary].join("\n");
   } catch {
     return system;
   }
@@ -385,7 +364,7 @@ function parseJson(text: string): AiRefineResult | undefined {
 
 /**
  * 后台完善一条自动学习到的提示词：
- * 1. 读取用户画像作为上下文，调用 harness LLM 生成标题/标签/摘要/改写正文；
+ * 1. 依据标签库与人格注入调用 harness LLM 生成标题/标签/摘要/改写正文；
  * 2. 把结果写回提示词库（标记 aiRefined，改写时保留 sourceBody）。
  *
  * 任何失败都静默返回，不影响主流程。
@@ -420,8 +399,6 @@ async function enrichLearnedPromptInner(
   if (!llm) return;
   const candidates = await resolveCandidates(llm, settings);
   if (candidates.length === 0) return;
-  const docs = await readCharacterDocs();
-  logAI(`enrich: 灵魂上下文 USER=${docs.USER.length} 字 MEMORY=${docs.MEMORY.length} 字`);
   // 读取标签库，让 AI 优先复用已有标签（不存在时才新建），只生成一个标签
   const tagList = await listTags().catch(() => []);
   const existingTags = tagList.map((t) => t.name);
@@ -433,10 +410,7 @@ async function enrichLearnedPromptInner(
   const text = await collectTextWithFallback(
     llm,
     candidates,
-    await withCharacterSystem(
-      systemPrompt(docs.USER, docs.MEMORY, existingTags, existingVars),
-      docs,
-    ),
+    await systemPrompt(existingTags, existingVars),
     userMessage(prompt.body, prompt.tags?.[0], existingVars),
   );
   if (!text) return;
@@ -483,16 +457,8 @@ export async function enrichPromptProfessional(
   }
   const candidates = await resolveCandidates(llm, settings);
   if (candidates.length === 0) return undefined;
-  const docs = await readCharacterDocs();
-  logAI(`enrich: 灵魂上下文 USER=${docs.USER.length} 字 MEMORY=${docs.MEMORY.length} 字`);
   const system = [
     "你是一名专业的提示词完善助手，擅长把用户的提示词完善成更全面、更专业、结构完整、可直接执行的高质量作品。",
-    "",
-    "【用户档案 USER.md】这是用户习惯、偏好与关注领域，请贴合（可能为空）：",
-    docs.USER.trim() || "（暂无）",
-    "",
-    "【长期记忆 MEMORY.md】这是此前沉淀的用户风格与经验洞察，供你参考（可能为空）：",
-    docs.MEMORY.trim() || "（暂无）",
     "",
     "要求（与「润色」相反：润色是把内容换得更简洁精炼；此处是扩写完善，使其更完整专业）：",
     "- 只完善提示词正文本身，不要涉及标题、标签、分类；",
@@ -505,7 +471,7 @@ export async function enrichPromptProfessional(
   const text = await collectTextWithFallback(
     llm,
     candidates,
-    await withCharacterSystem(system, docs),
+    await withSoulSystem(system),
     `请把以下提示词完善成更专业、更全面、结构完整的版本：\n\n${body}`,
   );
   if (!text) return undefined;
@@ -515,8 +481,7 @@ export async function enrichPromptProfessional(
 
 /**
  * AI 润色一段提示词正文（只返回结果，不写回词库；只润色内容本身）。
- * 结合用户档案（prompt-library-user.md 的用户画像）润色，
- * 保持原意与关键细节，优化表达，使其更贴合用户风格、清晰通用、可直接复用。
+ * 保持原意与关键细节，优化表达，使其更清晰通用、可直接复用。
  * 无可用 LLM / 无法解析路由 / 调用失败时返回 undefined。
  */
 export async function polishPromptBody(
@@ -531,9 +496,6 @@ export async function polishPromptBody(
   }
   const candidates = await resolveCandidates(llm, settings);
   if (candidates.length === 0) return undefined;
-  // 读取灵魂文件（USER.md / MEMORY.md）作为上下文，让润色更贴合用户（越用越准）
-  const docs = await readCharacterDocs();
-  logAI(`polish: 灵魂上下文 USER=${docs.USER.length} 字 MEMORY=${docs.MEMORY.length} 字`);
   // 是否启用「模板变量 {{}} 保留/新增」能力：聊天框按钮润色关闭，词库内润色开启（默认开启）
   const keepVariables = opts?.keepVariables !== false;
   // 检测正文中已有的模板变量（{{变量名}}），用于告知模型原样保留
@@ -545,12 +507,6 @@ export async function polishPromptBody(
   const system = [
     "你是一名专业的提示词润色助手，擅长贴合用户的写作风格对提示词进行润色。",
     "",
-    "【用户档案 USER.md】这是用户习惯、偏好与关注领域，请贴合（可能为空）：",
-    docs.USER.trim() || "（暂无）",
-    "",
-    "【长期记忆 MEMORY.md】这是此前沉淀的用户风格与经验洞察，供你参考（可能为空）：",
-    docs.MEMORY.trim() || "（暂无）",
-    "",
     "要求：",
     "- 只润色提示词内容本身，不要涉及标题、标签、分类等；",
     "- 保持原意与所有关键细节，不得遗漏、曲解或删减；",
@@ -560,7 +516,6 @@ export async function polishPromptBody(
           "- 若正文某处内容会因使用场景而变化（如角色、对象、主题、风格、细节等），可在该处新增命名清晰、贴合语境的 {{变量名}} 占位符，提升提示词可复用性；没有这种需求时不要画蛇添足；",
         ]
       : []),
-    "- 结合 USER.md 中的写作风格与关注领域进行润色，使表达更贴合用户习惯；",
     "- 让提示词更清晰、通用、结构清晰、可直接复用；",
     "- 直接输出润色后的提示词正文，不要任何解释或 Markdown 代码块。",
   ].join("\n");
@@ -571,7 +526,7 @@ export async function polishPromptBody(
   const text = await collectTextWithFallback(
     llm,
     candidates,
-    await withCharacterSystem(system, docs),
+    await withSoulSystem(system),
     content,
   );
   if (!text) return undefined;
@@ -590,24 +545,109 @@ export async function commentOnStats(
   if (!llm) return "";
   const candidates = await resolveCandidates(llm, settings);
   if (candidates.length === 0) return "";
-  const docs = await readCharacterDocs();
   const system = [
     "你是一名提示词库运营分析助手，擅长根据统计数据给出简洁、可执行的点评与改进建议。",
     "",
-    "【用户档案 USER.md】这是用户习惯、偏好与关注领域（可能为空）：",
-    docs.USER.trim() || "（暂无）",
-    "",
     "要求：",
     "- 用一段中文点评以上统计数据（100 字以内），指出亮点与可优化点；",
-    "- 结合用户档案给出接地气、可执行的建议，不要空话套话；",
+    "- 给出接地气、可执行的建议，不要空话套话；",
     "- 直接输出点评文本，不要标题、编号或 Markdown 代码块，不要复述原始统计数据。",
   ].join("\n");
   const content = `以下是提示词库的使用统计数据，请点评：\n\n${statsText}`;
+  const text = await collectTextWithFallback(llm, candidates, system, content);
+  return text?.trim() ?? "";
+}
+
+// ── 技能（Skill）生成 ───────────────────────────────────────────────────────
+
+/** 由 AI 依据提示词内容生成的技能描述符。 */
+export interface SkillDescriptor {
+  /** 技能名：小写 kebab-case 英文（目录名 & 聊天框 /触发名）。 */
+  name: string;
+  /** 技能描述（含触发场景，供模型匹配与聊天框输入 / 时展示）。 */
+  description: string;
+  /** 建议使用时机（可选）。 */
+  whenToUse?: string;
+}
+
+/** 容错地从模型输出中提取技能描述符 JSON 对象（可带 Markdown 代码块包裹）。 */
+function parseSkillJson(text: string): { name?: string; description?: string; whenToUse?: string } | undefined {
+  const cleaned = text.replace(/```[a-z]*\n?/gi, "").trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(cleaned.slice(start, end + 1));
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null) return undefined;
+  const obj = parsed as Record<string, unknown>;
+  return {
+    name: typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : undefined,
+    description: typeof obj.description === "string" && obj.description.trim() ? obj.description.trim() : undefined,
+    whenToUse: typeof obj.whenToUse === "string" && obj.whenToUse.trim() ? obj.whenToUse.trim() : undefined,
+  };
+}
+
+/**
+ * 用 AI 依据提示词内容生成技能描述符（英文 kebab-case 技能名 + 描述 + 使用时机）。
+ * 并行生成时受 llm 串行锁约束，逐个调用，避免打爆模型配额。
+ * 无可用 LLM / 无法解析路由 / 调用或解析失败时返回 undefined。
+ */
+export async function generateSkillDescriptor(
+  prompt: { title: string; body: string; summary?: string; tags?: string[] },
+  settings: PluginSettings,
+): Promise<SkillDescriptor | undefined> {
+  logAI(`skill: 开始 title="${prompt.title}" 正文长度=${prompt.body.length}`);
+  if (!llm) {
+    logAI("skill: 跳过（llm 服务未注入）");
+    return undefined;
+  }
+  const candidates = await resolveCandidates(llm, settings);
+  if (candidates.length === 0) return undefined;
+  // 检测正文是否含 {{}} 模板变量：有则让描述注明「自动按语义补全占位符」能力
+  const hasVars = /\{\{\s*[^{}]+\s*\}\}/.test(prompt.body);
+  const system = [
+    "你是一名 DSH 技能（Skill）作者。你会把一段提示词封装成可复用的 DSH 技能定义。",
+    "技能定义将被写入 ~/.dsh/skills/<name>/SKILL.md，frontmatter 元数据要求：",
+    "- name：技能目录名，同时是用户在聊天框输入 /<name> 触发的名字，必须是纯小写 kebab-case 英文（只能含小写字母、数字、连字符），长度不超过 40 字符；",
+    "- description：一段中长描述，说明这个技能做什么、能解决什么问题，并尽量列出触发场景（用户说什么话时会用到本技能），供模型自动匹配和聊天框输入 / 时展示；如需换行用 \\n 转义；",
+    "- whenToUse：一句话说明适合在什么场景使用（可选，没有则省略）。",
+    ...(hasVars
+      ? [
+          "- 正文包含 {{变量名}} 模板变量，使用时会按用户语义场景自动补全：请在 description 中说明这一「占位符自动补全」能力；",
+        ]
+      : []),
+    "请严格输出一个 JSON 对象，不要 Markdown 代码块，不要任何多余文字：",
+    '{ "name": "kebab-case英文名", "description": "技能描述含触发场景", "whenToUse": "使用时机" }',
+  ].join("\n");
+  const meta = [
+    `标题：${prompt.title}`,
+    prompt.summary ? `摘要：${prompt.summary}` : "",
+    prompt.tags?.length ? `标签：${prompt.tags.join("、")}` : "",
+    "正文：",
+    prompt.body,
+  ]
+    .filter(Boolean)
+    .join("\n");
   const text = await collectTextWithFallback(
     llm,
     candidates,
-    await withCharacterSystem(system, docs),
-    content,
+    await withSoulSystem(system),
+    `以下是提示词，请据此生成技能描述符（name 为英文 kebab-case）：\n\n${meta}`,
   );
-  return text?.trim() ?? "";
+  if (!text) return undefined;
+  const parsed = parseSkillJson(text);
+  if (!parsed || !parsed.name || !parsed.description) {
+    logAI(`skill: 模型输出无法解析：${text.slice(0, 300)}`);
+    return undefined;
+  }
+  logAI(`skill: 完成 name="${parsed.name}" 描述长度=${parsed.description.length}`);
+  return {
+    name: parsed.name,
+    description: parsed.description,
+    whenToUse: parsed.whenToUse,
+  };
 }

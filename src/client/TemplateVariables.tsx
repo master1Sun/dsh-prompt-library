@@ -178,6 +178,10 @@ interface Props {
   onCancel: () => void;
   /** 确认填充：以 { 变量名: 值 } 提交。 */
   onConfirm: (values: Record<string, string>) => void;
+  /** 插入并发送按钮（填写变量后直接发送）。仅当输入框草稿为空时可用。 */
+  onInsertAndSend?: (values: Record<string, string>) => void;
+  /** 是否允许插入并发送：需调用方确认输入框草稿为空。 */
+  draftEmpty?: boolean;
   /** 翻译函数。 */
   t: PLT;
 }
@@ -189,6 +193,8 @@ export function TemplateFillModal({
   body,
   onCancel,
   onConfirm,
+  onInsertAndSend,
+  draftEmpty,
   t,
 }: Props): ReactNode {
   const [values, setValues] = useState<Record<string, string>>({});
@@ -203,6 +209,8 @@ export function TemplateFillModal({
     rememberVarValues(values); // 记住本次填充值，下次同名变量自动预填
     onConfirm(values);
   };
+  // 插入并发送：仅在回调存在且草稿为空时可用；否则置灰并提示
+  const canSend = Boolean(onInsertAndSend) && draftEmpty === true;
 
   return (
     <div
@@ -322,6 +330,21 @@ export function TemplateFillModal({
           <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={onCancel}>
             {t("pl.cancel")}
           </Button>
+          {onInsertAndSend && (
+            <Button
+              type="button"
+              size="sm"
+              className={plBtn(canSend ? "primary" : "ghost", "sm")}
+              onClick={() => {
+                rememberVarValues(values);
+                onInsertAndSend(values);
+              }}
+              disabled={!canSend}
+              title={canSend ? t("pl.insertSend") : t("pl.insertSendDisabled")}
+            >
+              {t("pl.insertSend")}
+            </Button>
+          )}
           <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={submit}>
             {t("pl.insert")}
           </Button>

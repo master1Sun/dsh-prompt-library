@@ -116,6 +116,19 @@ export function createTag(name: string): Promise<{ name: string }> {
   return send<{ name: string }>("POST", "/api/prompt-library/tags", { name });
 }
 
+/** 批量生成技能的结果结构。 */
+export interface SkillGenerateResult {
+  generated: number;
+  items: { title: string; name: string }[];
+  errors: { title: string; reason: string }[];
+  aiUnavailable: boolean;
+}
+
+/** 批量把勾选的提示词生成为 DSH 技能（写到 ~/.dsh/skills/<name>/SKILL.md）。 */
+export function generateSkills(ids: string[]): Promise<SkillGenerateResult> {
+  return send<SkillGenerateResult>("POST", "/api/prompt-library/skills/generate", { ids });
+}
+
 // ── 回收站管理 ────────────────────────────────────────────────────────────
 
 /** 列出回收站中的全部提示词（按删除时间降序）。 */

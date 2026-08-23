@@ -104,7 +104,6 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
   // 兜底监听 host 推送的 fill-draft（/prompts -AI / -enrich 结果）：
   // 与 PromptLibraryButton 同slot挂载，任一方存在都能把内容填进聊天框。
   useFillDraft((body) => {
-    console.log("[prompt-library] AIPolishButton 应用 fill-draft 到输入框", body.length);
     if (body) inputActions.setDraft(body);
   });
 
@@ -204,7 +203,7 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
         className={plBtn("ghost", "sm")}
         onClick={handlePolish}
         disabled={status === "polishing"}
-        title={status === "polishing" ? T("pl.polishLoadingTitle") : T("pl.polishBtnTitle2")}
+        title={status === "polishing" ? T("pl.polishLoadingTitle") : T("pl.polishBtnTitle")}
         aria-label={T("pl.polish")}
         icon={<SparkleIcon spinning={status === "polishing"} />}
       >

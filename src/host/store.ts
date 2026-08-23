@@ -27,11 +27,7 @@ import {
   storePath,
   systemSettingsPath,
 } from "./paths.js";
-
-/** 去掉 UTF-8 BOM（Windows 记事本/PowerShell 等工具可能写入），避免 JSON.parse 失败。 */
-function stripBom(text: string): string {
-  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
-}
+import { stripBom } from "./text.js";
 
 // ── SQLite 连接与初始化 ────────────────────────────────────────────────────
 
@@ -114,6 +110,15 @@ function getDb(): DatabaseSync {
       value TEXT
     );
   `);
+  // 提示词 → 技能名 关联表：同一提示词二次生成技能时复用原技能名，
+  // 覆盖写盘而非无限新增目录。
+  next.exec(`
+    CREATE TABLE IF NOT EXISTS prompt_skill_links (
+      promptId  TEXT PRIMARY KEY,
+      skillName TEXT NOT NULL,
+      updatedAt INTEGER NOT NULL
+    );
+  `);
   // 统计历史表：每 7 天自动生成的词库统计快照（含 AI 点评）。
   next.exec(`
     CREATE TABLE IF NOT EXISTS stats_history (
@@ -185,22 +190,18 @@ function seedDefaultPromptIfEmpty(cur: DatabaseSync): void {
   syncTagsFromPrompts(cur);
 }
 
-// ── 首次欢迎：只对第一个新会话注入一次 AI 开场白 ────────────────────────────
+// ── 首次欢迎：只对第一个新会话注入一次简短问候 ─────────────────────────────
 //
 // 注意：这段文本会进入宿主 systemPrompt 的 section，宿主会把其中完整的
 // `{{...}}` 当作模板变量引用并强制校验变量名（须匹配 /^[a-z][a-z0-9_]*$/）。
-// 这里唯一允许的字面引用是 {{welcome_manual}}（由 index.ts 注册的合法变量）；
-// 手册全文经该变量注入，宿主替换后不再二次扫描，故手册中的字面 {{变量}}
-// 不会触发变量解析。切勿在本文件直接书写其他字面 {{}}。
+// 这里不得书写任何字面 {{}}；使用规则/手册不再打印到聊天框，而是由
+// index.ts 注入的 HARNESS 会话上下文（文件化）提供，用户可用 /prompts -h 查看。
 
-/** 首次欢迎时注入到 system prompt 的开场指令（让 AI 第一条回复引导用户）。 */
+/** 首次欢迎时注入到 system prompt 的简短问候（不再输出整本手册）。 */
 const WELCOME_SYSTEM = [
-  "（首次使用引导）本会话是你与带「提示词库」插件的助手第一次对话。",
-  "请在本次会话的【第一条回复】中用一段简洁、自然、友好的开场白欢迎用户。",
-  "开场白之后，请完整呈现下面的插件使用手册，作为对用户的正式介绍：",
-  "{{welcome_manual}}",
-  "手册请以纯文本形式完整呈现：逐条原样输出，保留每行内容与换行，不要用 markdown 的加粗、列表、代码块等符号重排，也不要自己精简改写；",
-  "此后的回复不要重复欢迎，也不要重复整本手册。",
+  "（首次使用引导）这是你与带「提示词库」插件的助手第一次对话。",
+  "请在本次会话的【第一条回复】中用一句简洁、自然、友好的话欢迎用户即可。",
+  "不要输出插件使用手册全文；若用户主动询问插件功能，可引导其输入 /prompts -h 查看使用手册。",
 ].join("\n");
 
 /** 已把欢迎指令绑定到某个会话 scope。 */
@@ -509,6 +510,24 @@ export function listPrompts(): Promise<Prompt[]> {
   } catch (e) {
     return Promise.reject(e);
   }
+}
+
+/** 取某提示词上次生成的技能名；未关联过则返回 undefined。 */
+export function getSkillNameForPrompt(promptId: string): string | undefined {
+  if (!db) return undefined;
+  const row = db
+    .prepare("SELECT skillName FROM prompt_skill_links WHERE promptId = ?")
+    .get(promptId) as { skillName: string } | undefined;
+  return row?.skillName;
+}
+
+/** 记录提示词对应的技能名（upsert）。 */
+export function setSkillNameForPrompt(promptId: string, skillName: string): void {
+  if (!db) return;
+  db.prepare(
+    "INSERT INTO prompt_skill_links (promptId, skillName, updatedAt) VALUES (?, ?, ?) " +
+      "ON CONFLICT(promptId) DO UPDATE SET skillName = excluded.skillName, updatedAt = excluded.updatedAt",
+  ).run(promptId, skillName, Date.now());
 }
 
 export function createPrompt(input: {
@@ -1482,7 +1501,7 @@ export function updateSettings(patch: Partial<PluginSettings>): Promise<PluginSe
   return readSettingsRaw().then(async (settings) => {
     const next: PluginSettings = { ...settings, ...patch };
     await writeSettingsRaw(next);
-    // 立即同步会话级灵魂边界开关，让勾选即刻生效。
+    // 立即同步会话级人格注入开关，让勾选即刻生效。
     // 关闭只阻止「新会话」注入，已注入的会话永久保持注入，不受中途开关影响。
     syncCharacterChatInto(next.applyCharacterToChat ?? false);
     return next;

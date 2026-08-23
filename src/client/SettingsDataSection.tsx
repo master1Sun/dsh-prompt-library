@@ -22,6 +22,7 @@ import {
   deleteTag as apiDeleteTag,
   deleteTrash as apiDeleteTrash,
   exportPrompts as apiExport,
+  generateSkills as apiGenerateSkills,
   importPrompts as apiImport,
   listPrompts as apiListPrompts,
   listTags as apiListTags,
@@ -222,6 +223,8 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
   const [promptList, setPromptList] = useState<Prompt[]>([]);
   const [promptLoading, setPromptLoading] = useState(false);
   const [exportSelected, setExportSelected] = useState<Set<string>>(new Set());
+  // 是否正在批量生成技能（AI 逐条串行，可能较慢）
+  const [skillGenerating, setSkillGenerating] = useState(false);
 
   // ── 标签管理 ─────────────────────────────────────────────────────────────
   const [tagList, setTagList] = useState<Array<{ name: string; count: number }>>([]);
@@ -344,6 +347,32 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
         showMsg(T("pl.exported", { count: backup.prompts.length }));
       },
       (e: unknown) => showMsg(e instanceof Error ? e.message : String(e), true),
+    );
+  }, [exportSelected, showMsg, T]);
+
+  /** 把勾选的提示词批量生成为 DSH 技能（AI 生成英文技能名与描述，写入 ~/.dsh/skills）。 */
+  const generateSelectedSkills = useCallback(() => {
+    const ids = Array.from(exportSelected);
+    if (ids.length === 0) {
+      showMsg(T("pl.skillNeedSelect"), true);
+      return;
+    }
+    setSkillGenerating(true);
+    apiGenerateSkills(ids).then(
+      (res) => {
+        setSkillGenerating(false);
+        if (res.aiUnavailable) {
+          showMsg(T("pl.skillAiUnavailable"), true);
+          return;
+        }
+        const errNote = res.errors.length ? T("pl.skillErrors", { n: res.errors.length }) : "";
+        const names = res.items.length ? `：${res.items.map((i) => i.name).join(", ")}` : "";
+        showMsg(`${T("pl.skillDone", { count: res.generated })}${names}${errNote}`);
+      },
+      (e: unknown) => {
+        setSkillGenerating(false);
+        showMsg(e instanceof Error ? e.message : String(e), true);
+      },
     );
   }, [exportSelected, showMsg, T]);
 
@@ -672,6 +701,17 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
           >
             {T("pl.import")}
           </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className={plBtn("ghost", "sm")}
+            onClick={generateSelectedSkills}
+            disabled={skillGenerating}
+            title={T("pl.skillBtnTitle")}
+          >
+            {skillGenerating ? T("pl.skillGenerating") : T("pl.skillGenerate")}
+          </Button>
           <span style={{ fontSize: 11, color: TONE.quiet }}>
             {exportSelected.size > 0 ? `${exportSelected.size}/${promptList.length}` : T("pl.sidebar.total", { count: promptList.length })}
           </span>
@@ -684,7 +724,7 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
           </div>
         ) : promptList.length === 0 ? (
           <div style={{ padding: "12px 0", fontSize: 12, color: TONE.muted }}>
-            {T("pl.noPrompts")}
+            {T("pl.empty")}
           </div>
         ) : exportView === "group" ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: 300, overflow: "auto" }}>

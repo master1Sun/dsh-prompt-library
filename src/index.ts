@@ -29,7 +29,8 @@ import {
   polishPromptBody,
   registerLlm,
 } from "./host/ai.js";
-import { characterSystemSync, ensureCharacterFiles, shouldInjectChatCharacter } from "./host/character.js";
+import { soulSystemSync, ensureSoulFile, shouldInjectChatCharacter } from "./host/character.js";
+import { ensureHarnessFile, harnessSystemSync } from "./host/harness.js";
 // 操作手册：纯文本字符串，聊天消息按纯文本渲染（markdown/HTML 都无法解析），用换行符排版
 import { manualEn, manualZh } from "./manual.js";
 
@@ -88,9 +89,6 @@ function buildUnknownFlag(lang: "zh" | "en"): string {
   return `${prefix}${parts.join(" / ")}`;
 }
 
-/** 首次欢迎注入的手册全文：变量 provider 必须同步返回，故先默认中文，apply 内按宿主语言异步刷新。 */
-let welcomeManual: string = manualZh;
-
 export function apply(ctx: Context) {
   const routes = makePromptRoutes();
 
@@ -98,22 +96,23 @@ export function apply(ctx: Context) {
   // 并在 db 无数据时一次性迁移旧 prompts.json 到 SQLite（导入后删除旧文件）。
   // 失败静默忽略，不影响其他功能，故此处无需显式初始化调用。
 
-  // 确保 AI 人格/边界体系（OpenCLaW 式）五维文件存在（SOUL/AGENTS/USER/IDENTITY/MEMORY），
-  // 缺失时写入默认模板，供 AI 润色/完善/洞察时遵守这些灵魂边界。
-  ensureCharacterFiles().catch(() => {});
+  // 确保 AI 人格文件 SOUL.md 存在（缺失时写入默认模板），供 AI 润色/完善/会话组装时遵守。
+  ensureSoulFile().catch(() => {});
+  // 确保 HARNESS 会话上下文文件存在（~/.dsh/prompt-library/prompts/HARNESS.md），
+  // 缺失时写入默认模板；每次发送消息时自动注入当前会话（不进聊天框）。
+  ensureHarnessFile().catch(() => {});
 
-  // [实验室功能] 把灵魂边界注入「新会话」整个聊天，约束整个对话；不影响启用前正在进行的对话。
+  // 把「会话上下文」注入当前聊天：HARNESS 文件内容每次发送都注入（不要求回显）；
+  // 人格（实验室开关控制）只对「新会话」注入整个聊天；首次使用再附一句简短欢迎。
   // systemPrompt 服务可用时注册一个动态 prompt section：每次对话组装时，按会话 scope 判断：
-  // - 功能关闭 → 返回空串（不注入），并把该会话记为既存；
-  // - 功能开启 → 这个 scope 若是「新会话」（从未见过）才注入五维边界，既存会话返回空串。
-  // 同时注册 welcome_manual 变量：欢迎语引用它注入手册全文（宿主替换后不再扫描值，
-  // 手册中的字面 {{变量}} 不会触发宿主的变量解析）。
+  // - HARNESS：恒注入当前会话（内部上下文，不要向用户回显）；
+  // - 人格：功能关闭 → 不注入，并把该会话记为既存；开启且是新会话 → 注入 SOUL.md；
+  // - 欢迎：只对第一个新会话注入一次简短问候（手册不再打印，用户可用 /prompts -h 查看）。
   ctx.inject(["systemPrompt"], (promptCtx: Context) => {
     // 宿主会把 systemPrompt 服务挂到注入的 ctx 上，但宿主类型未声明，这里作结构化类型转换
     const sp = (promptCtx as unknown as {
       systemPrompt: {
         section: (s: PromptSection) => () => void;
-        variable: (name: string, provider: (context: unknown) => string) => () => void;
       };
     }).systemPrompt;
     const dispose = sp.section({
@@ -121,22 +120,17 @@ export function apply(ctx: Context) {
       order: 50,
       text: (context) => {
         const scope = (context as { scope?: unknown } | undefined)?.scope;
-        // 灵魂边界（实验室开关控制）+ 首次使用欢迎（只对第一个新会话注入一次）
+        // HARNESS 会话上下文（每次发送注入）+ 人格（实验室开关控制，仅新会话）+ 简短欢迎（仅首次）
         const parts: string[] = [];
-        if (shouldInjectChatCharacter(scope)) parts.push(characterSystemSync());
+        parts.push(harnessSystemSync());
+        if (shouldInjectChatCharacter(scope)) parts.push(soulSystemSync());
         const welcome = welcomePromptOnce(scope);
         if (welcome) parts.push(welcome);
         return parts.filter((p) => p.trim()).join("\n\n");
       },
     });
-    const disposeVar = sp.variable("welcome_manual", () => welcomeManual);
-    // 按宿主界面语言异步刷新手册全文（默认中文，与 /prompts 命令的语言判定一致）。
-    void readGlobalLocale().then((locale) => {
-      welcomeManual = locale.startsWith("zh") || locale === "" ? manualZh : manualEn;
-    });
     return () => {
       dispose();
-      disposeVar();
     };
   });
 

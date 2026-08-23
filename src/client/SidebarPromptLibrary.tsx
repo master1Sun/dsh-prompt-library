@@ -254,18 +254,19 @@ export function SidebarPromptLibrary(props?: {
   const bodyRef = useRef<HTMLTextAreaElement>(null);
 
   // ── 浮动面板：拖拽定位 / 缩放尺寸 / 折叠小人 ────────────────────────────
-  // 视口变化时把面板 clamp 回可视区，避免浏览器缩放后面板跑出屏幕
+  // 视口变化标记：浏览器缩放时只触发渲染层重新夹取位置，不改写 home 位置（float.x/y），
+  // 这样缩小窗口会把面板夹回可视区，而拉大窗口又能回到原来的位置
+  const [viewTick, setViewTick] = useState(0);
   useEffect(() => {
-    const onViewport = () => {
-      setFloat((prev) => {
-        const p = clampPos(prev.x, prev.y, prev.width, prev.height);
-        if (p.x === prev.x && p.y === prev.y) return prev;
-        return { ...prev, ...p };
-      });
-    };
+    const onViewport = () => setViewTick((t) => t + 1);
     window.addEventListener("resize", onViewport);
     return () => window.removeEventListener("resize", onViewport);
   }, []);
+  // 展示位置：把 home（float.x/y）按当前视口夹取得到实际渲染坐标；home 保持不变
+  const view = useMemo(
+    () => clampPos(float.x, float.y, float.width, float.height),
+    [float.x, float.y, float.width, float.height, viewTick],
+  );
 
   // 拖动面板（头部作为拖拽手柄；避开头部的交互按钮）
   const dragRef = useRef<{ startX: number; startY: number; ox: number; oy: number } | null>(null);
@@ -273,7 +274,7 @@ export function SidebarPromptLibrary(props?: {
     // 命中头部内按钮时不触发拖动（按钮各自有点击行为）
     if ((e.target as HTMLElement).closest("button")) return;
     e.preventDefault();
-    dragRef.current = { startX: e.clientX, startY: e.clientY, ox: float.x, oy: float.y };
+    dragRef.current = { startX: e.clientX, startY: e.clientY, ox: view.x, oy: view.y };
     const onMove = (ev: MouseEvent) => {
       const d = dragRef.current;
       if (!d) return;
@@ -301,8 +302,8 @@ export function SidebarPromptLibrary(props?: {
       if (!r) return;
       const vw = window.innerWidth;
       const vh = window.innerHeight;
-      const width = Math.min(Math.max(r.ow + (ev.clientX - r.startX), FLOAT_MIN_W), vw - float.x - FLOAT_MARGIN);
-      const height = Math.min(Math.max(r.oh + (ev.clientY - r.startY), FLOAT_MIN_H), vh - float.y - FLOAT_MARGIN);
+      const width = Math.min(Math.max(r.ow + (ev.clientX - r.startX), FLOAT_MIN_W), vw - view.x - FLOAT_MARGIN);
+      const height = Math.min(Math.max(r.oh + (ev.clientY - r.startY), FLOAT_MIN_H), vh - view.y - FLOAT_MARGIN);
       updateFloat({ width, height });
     };
     const onUp = () => {
@@ -688,8 +689,8 @@ export function SidebarPromptLibrary(props?: {
           aria-label={T("pl.title")}
           style={{
             position: "fixed",
-            left: float.x,
-            top: float.y,
+            left: view.x,
+            top: view.y,
             zIndex: 2147483646,
             width: float.width,
             height: float.height,

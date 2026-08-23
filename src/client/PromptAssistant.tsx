@@ -171,11 +171,14 @@ export function PromptAssistant(props: Props): ReactNode {
   // 拖拽中标记：拖拽时禁用位移动画，保证实时跟手
   const [dragging, setDragging] = useState(false);
 
-  // 监听全局活动：任何鼠标/键盘操作都刷新「最后活动时间」，并从贴边状态恢复
+  // 监听全局活动：任何鼠标/键盘操作都刷新「最后活动时间」，并从贴边状态恢复。
+  // 鼠标移动仅当指针真实位移（>2px）才视为活动，过滤宿主重复派发的同坐标/微颤事件，
+  // 避免 30s 空闲计时被一直重置而永远不贴边。
+  const lastCursorRef = useRef<{ x: number; y: number } | null>(null);
   useEffect(() => {
     lastActiveRef.current = Date.now();
     const IDLE_MS = 30_000;
-    const bump = () => {
+    const markActive = () => {
       lastActiveRef.current = Date.now();
       if (dockedRef.current) {
         dockedRef.current = false;
@@ -184,9 +187,15 @@ export function PromptAssistant(props: Props): ReactNode {
         preDockRef.current = null;
       }
     };
-    window.addEventListener("mousemove", bump);
-    window.addEventListener("mousedown", bump);
-    window.addEventListener("keydown", bump);
+    const onMove = (e: MouseEvent) => {
+      const prev = lastCursorRef.current;
+      lastCursorRef.current = { x: e.clientX, y: e.clientY };
+      if (prev && Math.abs(e.clientX - prev.x) < 2 && Math.abs(e.clientY - prev.y) < 2) return;
+      markActive();
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mousedown", markActive);
+    window.addEventListener("keydown", markActive);
     // 每 2s 检查一次空闲；贴边期间暂停自动冒泡，避免打扰
     const iv = window.setInterval(() => {
       if (!dockedRef.current && !bubbleRefId.current && !hoverRef.current && Date.now() - lastActiveRef.current >= IDLE_MS) {
@@ -195,9 +204,9 @@ export function PromptAssistant(props: Props): ReactNode {
       }
     }, 2000);
     return () => {
-      window.removeEventListener("mousemove", bump);
-      window.removeEventListener("mousedown", bump);
-      window.removeEventListener("keydown", bump);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mousedown", markActive);
+      window.removeEventListener("keydown", markActive);
       window.clearInterval(iv);
     };
   }, [setPos]);
@@ -218,11 +227,10 @@ export function PromptAssistant(props: Props): ReactNode {
     const vh = viewportRef.current.h;
     const hiX = Math.max(FLOAT_MARGIN, vw - PERSON_SIZE - FLOAT_MARGIN);
     const hiY = Math.max(FLOAT_MARGIN, vh - PERSON_SIZE - FLOAT_MARGIN);
-    // 贴边中：若窗口拉大到 home 位置能完整放回，则不再贴边、直接回到原位置；
-    // 若 home 仍放不下（窗口还小），才重新贴到离它最近的边，保证缩小窗口后小人始终可见。
-    if (docked && (pos.px < FLOAT_MARGIN || pos.px > hiX || pos.py < FLOAT_MARGIN || pos.py > hiY)) {
-      return edgePos(pos, vw, vh);
-    }
+    // 空闲触发的贴边：无条件把小人缩到离它最近的屏幕边（与当前是否出界无关）。
+    // 恢复靠 markActive 里还原 preDock 的 home 位置实现。
+    if (docked) return edgePos(pos, vw, vh);
+    // 未贴边：按当前视口夹取 home 位置，窗口缩小夹进可视区、拉大回到原位置（home 保持不变）。
     return { px: clamp(pos.px, FLOAT_MARGIN, hiX), py: clamp(pos.py, FLOAT_MARGIN, hiY) };
   }, [pos, docked, viewVersion]);
   // 气泡展示的功能简介：优先用首次加载时 AI 生成并缓存的词，否则用 i18n 内置词
@@ -417,8 +425,15 @@ export function PromptAssistant(props: Props): ReactNode {
     let hideT: ReturnType<typeof setTimeout> | undefined;
     const loop = () => {
       showT = setTimeout(() => {
-        // 贴边期间暂停自动冒泡，不弹出气泡
-        if (hoverRef.current || dockedRef.current) {
+        // 到点要弹气泡：若当前处于贴边状态，先取消贴边回到原位再弹，保证提示正常展示
+        if (dockedRef.current) {
+          dockedRef.current = false;
+          setDocked(false);
+          if (preDockRef.current) setPos(preDockRef.current);
+          preDockRef.current = null;
+        }
+        // 悬停中（气泡已由悬停展示）则跳过本轮，避免与悬停气泡叠加
+        if (hoverRef.current) {
           loop();
           return;
         }

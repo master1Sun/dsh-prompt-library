@@ -375,7 +375,7 @@ export const en: Record<keyof typeof zh, string> = {
   "pl.set.labWarning": "Experimental features below may affect all AI conversations. Enable with caution.",
   "pl.set.chatCharacter": "Apply personality to entire chat",
   "pl.set.chatCharacterDesc": "Constrain the whole chat with the personality file, but only for new sessions, not current ones",
-  "pl.set.dataSection": "Data management",
+  "pl.set.dataSection": "Library management",
   "pl.set.dataSectionDesc": "Export all prompts as a backup file, import from a backup file, and manage prompt tags centrally (rename / delete).",
   "pl.setSectionTitle": "Library settings",
   "pl.set.setSectionDesc": "Configure how prompts are saved, panel display, interaction entries, and AI capabilities.",

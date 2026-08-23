@@ -602,7 +602,7 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
       {/* 面板顶部标题 + 描述 */}
       <div style={{ padding: "2px 0 4px", display: "flex", flexDirection: "column", gap: 4 }}>
         <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: 1, color: TONE.text, lineHeight: 1.2 }}>
-          词库管理
+          {T("pl.set.dataSection")}
         </div>
         <span style={{ fontSize: 12, color: TONE.quiet, lineHeight: 1.5 }}>
           {T("pl.set.dataSectionDesc")}

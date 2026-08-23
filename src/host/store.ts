@@ -11,7 +11,7 @@
  * 所有读写在单进程单连接上串行执行，天然避免并发交错导致的丢失更新。
  */
 import { readFile, rm, writeFile } from "node:fs/promises";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
@@ -151,30 +151,56 @@ export function closeDb(): void {
 }
 
 /**
+ * 同步读取宿主界面语言（`~/.dsh/settings.yaml` 的 `locale.preference`）。
+ * 供默认播种等同步流程判断中/英文案；读取失败默认按中文处理。
+ */
+function readUiLangSync(): "zh" | "en" {
+  try {
+    const text = readFileSync(systemSettingsPath(), "utf8");
+    const pref = (load(text) as { locale?: { preference?: unknown } } | undefined)?.locale?.preference;
+    return typeof pref === "string" && pref.toLowerCase().startsWith("en") ? "en" : "zh";
+  } catch {
+    return "zh";
+  }
+}
+
+/**
  * 首次使用（prompts 表为空）时写入一条默认提示词与标签，作为上手引导。
- * 已有数据（含迁移自旧 JSON 的数据）时不执行，保证只播种一次。
+ * 中/英文按宿主界面语言选择。已有数据（含迁移自旧 JSON 的数据）时不执行，保证只播种一次。
  */
 function seedDefaultPromptIfEmpty(cur: DatabaseSync): void {
   const row = cur.prepare("SELECT COUNT(*) AS c FROM prompts").get() as { c: number };
   if ((row.c ?? 0) > 0) return;
   const now = Date.now();
-  const body = [
-    "这是你保存的第一条提示词，也是提示词库的上手引导。",
-    "",
-    "你可以这样使用本插件：",
-    "· 在输入框输入 `/prompts -add 把这段好的提示词保存下来`，不错过任何好词；",
-    "· 输入 `/prompts -AI 请把这段润色得更专业`，AI 润色后结果会打印出来供复制；",
-    "· 输入 `/prompts -h` 查看完整使用手册。",
-    "",
-    "也可以直接编辑这条提示词，替换为你自己的内容，并在设置里为它打上标签。",
-  ].join("\n");
+  const isZh = readUiLangSync() === "zh";
+  const body = isZh
+    ? [
+        "这是你保存的第一条提示词，也是提示词库的上手引导。",
+        "",
+        "你可以这样使用本插件：",
+        "· 在输入框输入 `/prompts -add 把这段好的提示词保存下来`，不错过任何好词；",
+        "· 输入 `/prompts -AI 请把这段润色得更专业`，AI 润色后结果会打印出来供复制；",
+        "· 输入 `/prompts -h` 查看完整使用手册。",
+        "",
+        "也可以直接编辑这条提示词，替换为你自己的内容，并在设置里为它打上标签。",
+      ].join("\n")
+    : [
+        "This is the first prompt you saved and your quick guide to the prompt library.",
+        "",
+        "Here is how to use this plugin:",
+        "· Type `/prompts -add save this great prompt` in the input box to keep any good prompt;",
+        "· Type `/prompts -AI polish this to be more professional` and the polished result is printed for you to copy;",
+        "· Type `/prompts -h` to see the full manual.",
+        "",
+        "You can also edit this prompt and replace it with your own content, and tag it in the settings.",
+      ].join("\n");
   const prompt: Prompt = {
     id: randomUUID(),
-    title: "欢迎使用提示词库",
+    title: isZh ? "欢迎使用提示词库" : "Welcome to the Prompt Library",
     body,
     // 不能在此调用 ensureTags()：它会重新进入 getDb()，而 db 尚未赋值导致无限递归。
     // 标签的落表由紧随其后的 syncTagsFromPrompts(cur) 用当前连接完成。默认数据仅单标签。
-    tags: ["欢迎"],
+    tags: isZh ? ["欢迎"] : ["Welcome"],
     updatedAt: now,
     createdAt: now,
     usageCount: 0,

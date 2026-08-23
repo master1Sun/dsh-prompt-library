@@ -15,7 +15,7 @@ export const NS = "prompt-library";
 /** 中文（默认）字典。 */
 export const zh = {
   // 通用按钮 / 提示
-  "pl.title": "提示词库",
+  "pl.title": "词库",
   "pl.search": "搜索…",
   "pl.tagFilterAll": "全部",
   "pl.empty": "暂无提示词",
@@ -204,7 +204,7 @@ export const zh = {
 /** 英文字典（键与中文完全一致）。 */
 export const en: Record<keyof typeof zh, string> = {
   // Common buttons / hints
-  "pl.title": "Prompt Library",
+  "pl.title": "Library",
   "pl.search": "Search…",
   "pl.empty": "No prompts",
   "pl.loading": "Loading…",

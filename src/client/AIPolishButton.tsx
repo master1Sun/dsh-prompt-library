@@ -235,10 +235,10 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
         </span>
       )}
 
-      {/* 润色结果面板：可编辑，支持覆盖输入框 */}
+      {/* 润色结果面板：可编辑，支持覆盖输入框。
+          不设置点击遮罩关闭——点击其他位置不会关闭面板，只能通过显式按钮操作。 */}
       {status === "done" && (
         <>
-          <div onClick={closeResult} style={{ position: "fixed", inset: 0, zIndex: 999 }} />
           <section role="dialog" aria-label={T("pl.polishResult")} style={panelStyle}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
               <strong style={{ fontSize: 13, fontWeight: 470 }}>{T("pl.polishResult")}</strong>

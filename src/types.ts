@@ -129,7 +129,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   autoLearnManualConfirm: false,
   panelWidth: 360,
   panelHeight: 500,
-  rightPanelEnabled: false,
+  rightPanelEnabled: true,
   showComposerButton: true,
   showAIPolishButton: true,
   tildaTriggerEnabled: true,

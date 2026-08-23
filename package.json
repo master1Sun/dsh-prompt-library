@@ -1,7 +1,7 @@
 {
   "name": "@sunjuntao/dsh-prompt-library",
-  "version": "0.8.3",
-  "description": "更新",
+  "version": "0.8.4",
+  "description": "优化",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/types/index.d.ts",

@@ -533,8 +533,8 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
         <NumberRow
           label={T("pl.set.personTipInterval")}
           value={draft.personTipInterval}
-          min={3}
-          max={120}
+          min={5}
+          max={60}
           step={1}
           defaultValue={DEFAULT_SETTINGS.personTipInterval}
           onChange={(v) => updateAndSave({ personTipInterval: v })}
@@ -542,7 +542,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
         <NumberRow
           label={T("pl.set.personTipDuration")}
           value={draft.personTipDuration}
-          min={1}
+          min={10}
           max={30}
           step={1}
           defaultValue={DEFAULT_SETTINGS.personTipDuration}

@@ -35,6 +35,7 @@ import {
   updatePrompt,
   updateSettings,
 } from "./store.js";
+import { checkUpdate, upgradePlugin } from "./update.js";
 
 const PREFIX = "/api/prompt-library";
 
@@ -312,6 +313,18 @@ export function makePromptRoutes(): WebRoute[] {
       if (method === "GET" && tail === "/settings") {
         const settings = await getSettings();
         return json(res, 200, { ok: true, data: settings });
+      }
+
+      // GET /update — 检查插件是否有新版本（npm registry，结果带缓存）
+      if (method === "GET" && tail === "/update") {
+        const info = await checkUpdate();
+        return json(res, 200, { ok: true, data: info });
+      }
+
+      // POST /update/apply — 点击气泡「更新」按钮后执行安装命令升级插件到最新版
+      if (method === "POST" && tail === "/update/apply") {
+        const result = await upgradePlugin();
+        return json(res, 200, { ok: result.ok, data: result });
       }
 
       // PUT /settings — 更新设置

@@ -16,7 +16,7 @@ import {
 } from "react";
 import type { PluginSettings } from "../types.js";
 import { DEFAULT_SETTINGS } from "../types.js";
-import { genIntro } from "./api.js";
+import { applyUpdate, genIntro, getUpdate, type UpdateInfo } from "./api.js";
 import { type PLTranslate, usePLT } from "./i18n.js";
 
 const TONE = {
@@ -26,6 +26,7 @@ const TONE = {
   panel: "var(--dsw-specific-sidebar-fill, #f5f6f7)",
   border: "var(--dsw-alias-border-l2, rgba(17, 24, 39, 0.12))",
   accent: "var(--dsw-alias-brand-primary, #2563eb)",
+  red: "var(--dsw-alias-state-error-primary, #dc2626)",
 } as const;
 
 /** 小人尺寸。 */
@@ -51,6 +52,23 @@ function clamp(v: number, lo: number, hi: number): number {
 interface Pos {
   px: number;
   py: number;
+}
+
+/** 计算贴边位置：依据给定位置（目标坐标）与传入视口，把小人缩到离它最近的屏幕边。 */
+function edgePos(p: Pos, vw: number, vh: number): Pos {
+  const EDGE = 12; // 贴边后留出的可见宽度/高度（像素）
+  const leftSpace = p.px;
+  const rightSpace = vw - (p.px + PERSON_SIZE);
+  const topSpace = p.py;
+  const bottomSpace = vh - (p.py + PERSON_SIZE);
+  const min = Math.min(leftSpace, rightSpace, topSpace, bottomSpace);
+  let px = p.px;
+  let py = p.py;
+  if (min === leftSpace) px = -(PERSON_SIZE - EDGE);
+  else if (min === rightSpace) px = vw - EDGE;
+  else if (min === topSpace) py = -(PERSON_SIZE - EDGE);
+  else py = vh - EDGE;
+  return { px, py };
 }
 
 /** 读入上次的小人位置；首次进入默认落屏幕右下角。 */
@@ -88,31 +106,51 @@ export function PromptAssistant(props: Props): ReactNode {
     });
   }, []);
 
-  // 视口变化时把小人 clamp 回可视区
+  // 记录最近一次视口尺寸；任何视口/缩放变化都只触发重新计算「展示位置」，
+  // 不再直接改写持久化的 home 位置，避免窗口缩小后放大无法回到原位置。
+  const viewportRef = useRef({ w: window.innerWidth, h: window.innerHeight });
+  const [viewVersion, setViewVersion] = useState(0);
   useEffect(() => {
     const onViewport = () => {
-      setPos((prev) => {
-        const px = clamp(prev.px, FLOAT_MARGIN, window.innerWidth - PERSON_SIZE - FLOAT_MARGIN);
-        const py = clamp(prev.py, FLOAT_MARGIN, window.innerHeight - PERSON_SIZE - FLOAT_MARGIN);
-        if (px === prev.px && py === prev.py) return prev;
-        return { px, py };
-      });
+      viewportRef.current = { w: window.innerWidth, h: window.innerHeight };
+      setViewVersion((v) => v + 1);
     };
+    // 桌面端缩放不一定触发 window.resize，常见伴随 visualViewport 或 devicePixelRatio 变化，
+    // 因此一并监听，确保缩放后贴边位置仍贴在新边上。
+    const vv = window.visualViewport;
     window.addEventListener("resize", onViewport);
-    return () => window.removeEventListener("resize", onViewport);
+    vv?.addEventListener("resize", onViewport);
+    vv?.addEventListener("scroll", onViewport);
+    let lastDpr = window.devicePixelRatio;
+    const iv = window.setInterval(() => {
+      if (window.devicePixelRatio !== lastDpr) {
+        lastDpr = window.devicePixelRatio;
+        onViewport();
+      }
+    }, 500);
+    return () => {
+      window.removeEventListener("resize", onViewport);
+      vv?.removeEventListener("resize", onViewport);
+      vv?.removeEventListener("scroll", onViewport);
+      window.clearInterval(iv);
+    };
   }, []);
 
   // 气泡显隐
   const [bubble, setBubble] = useState(false);
-  // 气泡实际渲染宽度：宽高随内容动态伸缩（max-content），实时测量用于居中与尖角定位
+  // 气泡实际渲染宽高：随内容动态伸缩（max-content），实时测量用于居中、贴头与尖角定位
   const bubbleRef = useRef<HTMLDivElement | null>(null);
   const [bubbleW, setBubbleW] = useState(176);
+  const [bubbleH, setBubbleH] = useState(56);
 
-  // 气泡显示时测量实际宽度；内容变化（简介轮播）时同步更新
+  // 气泡显示时测量实际宽高；内容变化（简介轮播）时同步更新
   useEffect(() => {
     if (!bubble || !bubbleRef.current) return;
     const el = bubbleRef.current;
-    const update = () => setBubbleW(el.offsetWidth || 176);
+    const update = () => {
+      setBubbleW(el.offsetWidth || 176);
+      setBubbleH(el.offsetHeight || 56);
+    };
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
@@ -120,6 +158,73 @@ export function PromptAssistant(props: Props): ReactNode {
   }, [bubble]);
   // 鼠标是否悬停在小人上（供「自动冒泡」判断是否打扰用户）
   const hoverRef = useRef(false);
+
+  // ── 空闲自动贴边：鼠标/键盘超过 30s 无操作，小人自动缩到最近的屏幕边 ──
+  const lastActiveRef = useRef(Date.now());
+  const [docked, setDocked] = useState(false);
+  const dockedRef = useRef(false);
+  const preDockRef = useRef<Pos | null>(null);
+  const bubbleRefId = useRef(false);
+  useEffect(() => {
+    bubbleRefId.current = bubble;
+  }, [bubble]);
+  // 拖拽中标记：拖拽时禁用位移动画，保证实时跟手
+  const [dragging, setDragging] = useState(false);
+
+  // 监听全局活动：任何鼠标/键盘操作都刷新「最后活动时间」，并从贴边状态恢复
+  useEffect(() => {
+    lastActiveRef.current = Date.now();
+    const IDLE_MS = 30_000;
+    const bump = () => {
+      lastActiveRef.current = Date.now();
+      if (dockedRef.current) {
+        dockedRef.current = false;
+        setDocked(false);
+        if (preDockRef.current) setPos(preDockRef.current);
+        preDockRef.current = null;
+      }
+    };
+    window.addEventListener("mousemove", bump);
+    window.addEventListener("mousedown", bump);
+    window.addEventListener("keydown", bump);
+    // 每 2s 检查一次空闲；贴边期间暂停自动冒泡，避免打扰
+    const iv = window.setInterval(() => {
+      if (!dockedRef.current && !bubbleRefId.current && !hoverRef.current && Date.now() - lastActiveRef.current >= IDLE_MS) {
+        dockedRef.current = true;
+        setDocked(true);
+      }
+    }, 2000);
+    return () => {
+      window.removeEventListener("mousemove", bump);
+      window.removeEventListener("mousedown", bump);
+      window.removeEventListener("keydown", bump);
+      window.clearInterval(iv);
+    };
+  }, [setPos]);
+
+  // 贴边：记录贴边前的 home 位置便于恢复；展示位置由下方 useMemo 按贴边计算，不写入 pos
+  useEffect(() => {
+    if (!docked) return;
+    preDockRef.current = { px: pos.px, py: pos.py };
+    // 贴边瞬间收起气泡、清除悬停标记，避免贴边后气泡仍悬在旁边
+    setBubble(false);
+    hoverRef.current = false;
+  }, [docked]);
+
+  // 展示位置：把 home 位置按当前视口/贴边状态夹取后得到实际渲染坐标。
+  // home（pos）保持不变，只有窗口扩大 return 到原始位置，也就不会丢失「放大后应回到的位置」。
+  const view = useMemo<Pos>(() => {
+    const vw = viewportRef.current.w;
+    const vh = viewportRef.current.h;
+    const hiX = Math.max(FLOAT_MARGIN, vw - PERSON_SIZE - FLOAT_MARGIN);
+    const hiY = Math.max(FLOAT_MARGIN, vh - PERSON_SIZE - FLOAT_MARGIN);
+    // 贴边中：若窗口拉大到 home 位置能完整放回，则不再贴边、直接回到原位置；
+    // 若 home 仍放不下（窗口还小），才重新贴到离它最近的边，保证缩小窗口后小人始终可见。
+    if (docked && (pos.px < FLOAT_MARGIN || pos.px > hiX || pos.py < FLOAT_MARGIN || pos.py > hiY)) {
+      return edgePos(pos, vw, vh);
+    }
+    return { px: clamp(pos.px, FLOAT_MARGIN, hiX), py: clamp(pos.py, FLOAT_MARGIN, hiY) };
+  }, [pos, docked, viewVersion]);
   // 气泡展示的功能简介：优先用首次加载时 AI 生成并缓存的词，否则用 i18n 内置词
   const [intros, setIntros] = useState<string[]>(() => [
     T("pl.intro.0"),
@@ -129,10 +234,25 @@ export function PromptAssistant(props: Props): ReactNode {
     T("pl.intro.4"),
   ]);
 
+  // 新版本检查结果；null 表示尚未查或查询失败（host 侧失败会返回 hasUpdate=false）
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  // 「红点点击更新」状态：执行中红点变灰、停止动画；结果不在气泡框展示
+  const [updating, setUpdating] = useState(false);
+  const handleUpdate = useCallback(() => {
+    if (updating) return;
+    setUpdating(true);
+    applyUpdate()
+      .catch(() => {
+        /* 静默处理；红点仅作状态反馈，不在气泡框展示结果 */
+      })
+      .finally(() => setUpdating(false));
+  }, [updating]);
+
   // 拖动小人：仅移动小人独立坐标；松手时若未明显移动视为「点击 → 通知父级」
   const personDragRef = useRef<{ startX: number; startY: number; ox: number; oy: number; moved: boolean } | null>(null);
   const startPersonDrag = (e: ReactMouseEvent<HTMLElement>) => {
     e.preventDefault();
+    setDragging(true); // 拖拽中禁用位移动画，保证实时跟手
     personDragRef.current = { startX: e.clientX, startY: e.clientY, ox: pos.px, oy: pos.py, moved: false };
     const onMove = (ev: MouseEvent) => {
       const d = personDragRef.current;
@@ -150,6 +270,7 @@ export function PromptAssistant(props: Props): ReactNode {
       const d = personDragRef.current;
       const clicked = d ? !d.moved : false;
       personDragRef.current = null;
+      setDragging(false); // 恢复位移动画
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
       // 点击小人：交给父级（右侧面板）决定是否切换开合
@@ -171,28 +292,52 @@ export function PromptAssistant(props: Props): ReactNode {
     return () => clearInterval(timer);
   }, [bubble]);
 
-  // 气泡固定定位：相对视口计算并 clamp，避免小人拖到屏幕边缘时气泡被遮挡。
-  // 默认显示在小人上方居中；上方放不下则显示下方，水平方向贴着小人中心并限制在视口内。
+  // 气泡固定定位：根据小人所在位置，在上/下/左/右四个方向中选择一个能完整容纳的方向展示，
+  // 并保证气泡整体落在视口内，避免小人拖到屏幕边缘时气泡被遮挡「显示没了」。
+  // 优先级：上方 → 下方 → 左侧 → 右侧。
   const bubblePos = useMemo(() => {
     if (!bubble) return null;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
     const W = bubbleW;
-    const H = 118;
-    const cx = pos.px + PERSON_SIZE / 2;
-    // 锚点取「小人盒子顶部往下的可视头部高度」，让尖角指向头部而非盒子顶部的空区，
-    // 避免气泡虽然贴住盒子顶边、视觉上却离头部很远。
+    const H = bubbleH;
+    const cx = view.px + PERSON_SIZE / 2; // 小人水平中心
+    const cy = view.py + PERSON_SIZE / 2; // 小人垂直中心
+    // 锚点取「小人盒子顶部往下的可视头部高度」，让尖角指向头部而非盒子空区。
     const ANCHOR = 18;
-    const above = pos.py + ANCHOR - H >= FLOAT_MARGIN;
-    const left = Math.min(Math.max(FLOAT_MARGIN, cx - W / 2), vw - W - FLOAT_MARGIN);
-    // 上方：气泡底边留出 5px 悬出量，尖角恰好触到头部位置；下方：尖角朝上触到小人身下。
-    const top = Math.min(
-      Math.max(FLOAT_MARGIN, above ? pos.py + ANCHOR - 5 - H : pos.py + PERSON_SIZE - ANCHOR + 5),
-      vh - H - FLOAT_MARGIN,
-    );
-    const tailLeft = cx - left - 5;
-    return { left, top, above, tailLeft };
-  }, [bubble, bubbleW, pos.px, pos.py]);
+    const gap = 5;
+
+    let dir: "above" | "below" | "left" | "right";
+    let left: number;
+    let top: number;
+
+    if (view.py + ANCHOR - gap - H >= FLOAT_MARGIN) {
+      // 上方放得下：气泡悬于小人头顶上方，与头部保持一点可见空隙，尖角指向头部
+      dir = "above";
+      top = view.py + ANCHOR - 8 - H;
+      left = Math.min(Math.max(FLOAT_MARGIN, cx - W / 2), vw - W - FLOAT_MARGIN);
+    } else if (view.py + PERSON_SIZE + gap + H <= vh - FLOAT_MARGIN) {
+      // 下方放得下
+      dir = "below";
+      top = view.py + PERSON_SIZE - ANCHOR + gap;
+      left = Math.min(Math.max(FLOAT_MARGIN, cx - W / 2), vw - W - FLOAT_MARGIN);
+    } else if (view.px - gap - W >= FLOAT_MARGIN) {
+      // 左侧放得下：垂直贴着小人中心并限制在视口内
+      dir = "left";
+      left = view.px - gap - W;
+      top = Math.min(Math.max(FLOAT_MARGIN, cy - H / 2), vh - H - FLOAT_MARGIN);
+    } else {
+      // 右侧兜底：贴着小人右侧，垂直居中
+      dir = "right";
+      left = Math.min(view.px + PERSON_SIZE + gap, vw - W - FLOAT_MARGIN);
+      top = Math.min(Math.max(FLOAT_MARGIN, cy - H / 2), vh - H - FLOAT_MARGIN);
+    }
+
+    // 尖角锚点：上/下方 → 用水平偏移让尖角指小人中心；左/右方 → 用垂直偏移
+    const tailX = cx - left - 5; // 尖角在气泡水平方向上的偏移（above/below）
+    const tailY = cy - top - 5; // 尖角在气泡垂直方向上的偏移（left/right）
+    return { left, top, dir, tailX, tailY };
+  }, [bubble, bubbleW, bubbleH, view.px, view.py, viewVersion]);
 
   // 首次加载：请求 AI 生成词库功能简介；AI 不可用或失败时保持 i18n 内置词。
   // 按「语言 + 当天日期」缓存到 localStorage：每天换新键重新请求一次，让 AI 每天出新的文案。
@@ -241,25 +386,42 @@ export function PromptAssistant(props: Props): ReactNode {
     };
   }, []);
 
+  // 检查是否有新版本：挂载时请求一次；host 侧带缓存，结果写入 update 状态。
+  // 失败或不可用时保持 hasUpdate=false，只静默关闭提示，不打扰用户。
+  useEffect(() => {
+    let cancelled = false;
+    getUpdate()
+      .then((info) => {
+        if (!cancelled) setUpdate(info);
+      })
+      .catch(() => {
+        /* 静默失败 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // 未悬停时不定时自动冒气泡展示功能简介；无论面板折叠与否都会触发（小人在场即冒泡）。
   // 悬停中或显示中则跳过本轮，间隔取自设置。
   useEffect(() => {
     const intervalMs =
-      Math.max(3, settings?.personTipInterval ?? DEFAULT_SETTINGS.personTipInterval) * 1000;
+      Math.max(5, settings?.personTipInterval ?? DEFAULT_SETTINGS.personTipInterval) * 1000;
     const hideDuration =
-      Math.max(1, settings?.personTipDuration ?? DEFAULT_SETTINGS.personTipDuration) * 1000;
+      Math.max(10, settings?.personTipDuration ?? DEFAULT_SETTINGS.personTipDuration) * 1000;
     let showT: ReturnType<typeof setTimeout> | undefined;
     let hideT: ReturnType<typeof setTimeout> | undefined;
     const loop = () => {
       showT = setTimeout(() => {
-        if (hoverRef.current) {
+        // 贴边期间暂停自动冒泡，不弹出气泡
+        if (hoverRef.current || dockedRef.current) {
           loop();
           return;
         }
         setIntroIdx((i) => i + 1);
         setBubble(true);
         hideT = setTimeout(() => {
-          if (!hoverRef.current) setBubble(false);
+          if (!hoverRef.current && !dockedRef.current) setBubble(false);
           loop();
         }, hideDuration);
       }, intervalMs + Math.random() * intervalMs);
@@ -271,6 +433,14 @@ export function PromptAssistant(props: Props): ReactNode {
     };
   }, [settings?.personTipInterval, settings?.personTipDuration]);
 
+  // 新版本提示文案（按宿主界面语言；仅在有更新时非空）
+  const isZh = !(document.documentElement.lang || "").toLowerCase().startsWith("en");
+  const updateText = update?.hasUpdate
+    ? isZh
+      ? `发现新版本 v${update.latest}`
+      : `New version v${update.latest}`
+    : "";
+
   return (
     <>
       <style>{`
@@ -280,6 +450,8 @@ export function PromptAssistant(props: Props): ReactNode {
 @keyframes pl-person-blink { 0%,88%,100% { transform: scaleY(1); } 94% { transform: scaleY(.08); } }
 @keyframes pl-bubble-in { from { opacity: 0; transform: translateY(6px) scale(.9); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes pl-bubble-intro { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes pl-update-pulse { 0%,100% { transform: scale(1); opacity: .9; } 50% { transform: scale(1.35); opacity: .45; } }
+@keyframes pl-update-ring { 0%,100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220,38,38,.5); } 70% { box-shadow: 0 0 0 4px rgba(220,38,38,0); } }
 .pl-grab { cursor: grab; user-select: none; }
 .pl-grab:active { cursor: grabbing; }
 .pl-person-arm { transform-origin: 6px 8px; animation: pl-person-wave 2.4s ease-in-out infinite; }
@@ -293,13 +465,15 @@ export function PromptAssistant(props: Props): ReactNode {
         onMouseLeave={() => { hoverRef.current = false; setBubble(false); }}
         style={{
           position: "fixed",
-          left: pos.px,
-          top: pos.py,
+          left: view.px,
+          top: view.py,
           zIndex: 2147483647,
           width: PERSON_SIZE,
           height: PERSON_SIZE,
           cursor: "grab",
           animation: "pl-pop-in .3s cubic-bezier(.22,1,.36,1)",
+          // 拖拽中跟手无动画，其余（贴边/恢复）平滑过渡
+          transition: dragging ? "none" : "left .35s cubic-bezier(.22,1,.36,1), top .35s cubic-bezier(.22,1,.36,1)",
           userSelect: "none",
         }}
       >
@@ -313,19 +487,19 @@ export function PromptAssistant(props: Props): ReactNode {
               top: bubblePos.top,
               zIndex: 2147483646, // 建立层叠上下文，使尾巴 zIndex:-1 相对本气泡生效（否则会逃逸层级）
               width: "max-content", // 宽随内容动态伸缩
-              minWidth: 200,
-              maxWidth: 320,
-              padding: "9px 14px",
+              minWidth: 160,
+              maxWidth: 288,
+              padding: "6px 10px",
               background: TONE.panel,
               color: TONE.text,
               border: `1px solid ${TONE.border}`,
-              borderRadius: 10,
-              fontSize: 12,
-              lineHeight: 1.55,
+              borderRadius: 8,
+              fontSize: 10.5,
+              lineHeight: 1.45,
               textAlign: "center",
               boxShadow: "none",
               animation: "pl-bubble-in .2s cubic-bezier(.22,1,.36,1)",
-              pointerEvents: "none",
+              pointerEvents: "none", // 气泡仅展示，穿透不挡页面点击
             }}
           >
             <div style={{ fontWeight: 600, letterSpacing: 2, marginBottom: 4 }}>{T("pl.floating.title")}</div>
@@ -359,25 +533,41 @@ export function PromptAssistant(props: Props): ReactNode {
                 );
               })}
             </div>
-            {/* 气泡小尾巴：始终指向小人中心（上方→朝下，下方→朝上）。
-                方块边长 10，旋转 45° 后三角底线（两平角连线）位于方块中心。
-                悬出量取半宽 5，使底线恰好落在卡片边界上，与卡片顶/底边无缝连接，
-                消除「三角飘在卡片外、中间留空隙」的问题。 */}
+            {/* 气泡小尾巴：始终指向小人中心（上→朝下、下→朝上、左→朝右、右→朝左）。
+                方块边长 10，旋转 45° 后三角底线（两平角连线）位于方块中心，悬出量取半宽 5，
+                使底线恰好落在卡片边界上，与卡片边无缝连接，消除「三角飘在卡片外、中间留空隙」。 */}
             <span
               style={{
                 position: "absolute",
-                left: bubblePos.tailLeft,
-                top: bubblePos.above ? "auto" : -5,
-                bottom: bubblePos.above ? -5 : "auto",
+                // 上/下方向：尖角在气泡水平居中（相对小人中心）；左/右方向：垂直居中
+                ...(bubblePos.dir === "above"
+                  ? { left: bubblePos.tailX, bottom: -5 }
+                  : bubblePos.dir === "below"
+                    ? { left: bubblePos.tailX, top: -5 }
+                    : bubblePos.dir === "left"
+                      ? { top: bubblePos.tailY, right: -5 }
+                      : { top: bubblePos.tailY, left: -5 }),
                 width: 10,
                 height: 10,
                 background: "inherit",
                 zIndex: -1, // 让伸入气泡内的部分沉到背景之下，避免压盖内容
-                borderRight: bubblePos.above ? `1px solid ${TONE.border}` : "none",
-                borderBottom: bubblePos.above ? `1px solid ${TONE.border}` : "none",
-                borderLeft: bubblePos.above ? "none" : `1px solid ${TONE.border}`,
-                borderTop: bubblePos.above ? "none" : `1px solid ${TONE.border}`,
-                // 两种朝向均旋 45°：上方→right+bottom 边框朝下，下方→left+top 边框朝上
+                // 朝向决定用哪对邻边；四种朝向均旋转 45°，尖角指各方向
+                borderTop:
+                  bubblePos.dir === "below" || bubblePos.dir === "left"
+                    ? `1px solid ${TONE.border}`
+                    : "none",
+                borderRight:
+                  bubblePos.dir === "above" || bubblePos.dir === "left"
+                    ? `1px solid ${TONE.border}`
+                    : "none",
+                borderBottom:
+                  bubblePos.dir === "above" || bubblePos.dir === "right"
+                    ? `1px solid ${TONE.border}`
+                    : "none",
+                borderLeft:
+                  bubblePos.dir === "below" || bubblePos.dir === "right"
+                    ? `1px solid ${TONE.border}`
+                    : "none",
                 transform: "rotate(45deg)",
               }}
             />
@@ -427,7 +617,36 @@ export function PromptAssistant(props: Props): ReactNode {
             }}
           />
         </div>
-      </div>
+        {/* 有新版本时：小人右上角挂一个红色呼吸徽标（「新版本」动画提示）。
+            点击该红点即执行插件更新；阻断 mousedown 冒泡，避免误触小人的拖动/切面板。 */}
+        {update?.hasUpdate && (
+          <span
+            role="button"
+            aria-label={updating ? (isZh ? "更新中…" : "Updating…") : updateText}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleUpdate();
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            title={updating ? (isZh ? "更新中…" : "Updating…") : updateText}
+            style={{
+              position: "absolute",
+              right: 0,
+              top: 14,
+              width: 9,
+              height: 9,
+              borderRadius: "50%",
+              background: TONE.red,
+              border: "2px solid var(--dsw-specific-sidebar-fill, #f5f6f7)",
+              animation: updating ? "none" : "pl-update-ring 1.4s ease-out infinite",
+              pointerEvents: "auto",
+              cursor: updating ? "default" : "pointer",
+              opacity: updating ? 0.6 : 1,
+              transition: "opacity .24s ease",
+            }}
+          />
+        )}
+        </div>
     </>
   );
 }

@@ -614,9 +614,7 @@ export function SidebarPromptLibrary(props?: {
     return ordered;
   }, [filtered, T]);
 
-  // 当设置中启用侧边栏（浮动面板）时显示，禁用时隐藏
-  if (!settings.rightPanelEnabled) return null;
-
+  // 词库助手常驻屏幕（不受面板开关控制）；下面的浮动面板由 rightPanelEnabled 单独控制显示
   const editing = editor.mode !== "none";
 
   const startCreate = () =>
@@ -695,7 +693,7 @@ export function SidebarPromptLibrary(props?: {
             zIndex: 2147483646,
             width: float.width,
             height: float.height,
-            display: collapsed ? "none" : "flex",
+            display: !settings.rightPanelEnabled || collapsed ? "none" : "flex",
             flexDirection: "column",
             animation: collapsed ? "none" : "pl-pop-in .24s cubic-bezier(.22,1,.36,1)",
             overflow: "hidden",

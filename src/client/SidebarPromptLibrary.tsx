@@ -807,7 +807,19 @@ export function SidebarPromptLibrary(props?: {
 .pl-person-arm { transform-origin: 6px 8px; animation: pl-person-wave 2.4s ease-in-out infinite; }
 @keyframes pl-person-wave { 0%,60%,100% { transform: rotate(0deg); } 70% { transform: rotate(-14deg); } 80% { transform: rotate(0deg); } }
 /* 气泡内简介切换淡入 */
-@keyframes pl-bubble-intro { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }`}</style>
+@keyframes pl-bubble-intro { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+/* 折叠按钮：层次阴影 + 悬停动效（其上面色随主题，hover 亮起品牌色并轻微上浮） */
+.pl-collapse-btn {
+  color: var(--dsw-alias-label-secondary, #6b7280) !important;
+  box-shadow: 0 -1px 5px rgba(15, 23, 42, .06), inset 0 0 0 1px transparent !important;
+  transition: color .22s ease, background-color .22s ease, box-shadow .22s ease, transform .22s cubic-bezier(.22,1,.36,1) !important;
+}
+.pl-collapse-btn:hover {
+  color: var(--dsw-alias-brand-primary, #2563eb) !important;
+  background-color: color-mix(in srgb, var(--dsw-alias-brand-primary, #2563eb) 10%, transparent) !important;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--dsw-alias-brand-primary, #2563eb) 22%, transparent), inset 0 0 0 1px transparent !important;
+  transform: translateX(-50%) translateY(1.5px) scale(1.03) !important;
+}`}</style>
       <style>{PL_BUTTON_CSS}</style>
       {/* 小人：始终显示，可独立拖动，悬停显示气泡；点击切换面板开合（不做原生 title 提示） */}
       <div
@@ -1004,10 +1016,6 @@ export function SidebarPromptLibrary(props?: {
             }}
           >
             <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, justifySelf: "start" }}>
-              {/* 拖拽手柄提示图标（六个点） */}
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style={{ color: TONE.quiet, flexShrink: 0 }}>
-                <circle cx="9" cy="6" r="1.5" /><circle cx="15" cy="6" r="1.5" /><circle cx="9" cy="12" r="1.5" /><circle cx="15" cy="12" r="1.5" /><circle cx="9" cy="18" r="1.5" /><circle cx="15" cy="18" r="1.5" />
-              </svg>
               <strong
                 style={{
                   fontSize: 14,
@@ -1026,7 +1034,7 @@ export function SidebarPromptLibrary(props?: {
               type="button"
               variant="ghost"
               size="sm"
-              className={plBtn("ghost", "sm")}
+              className={plBtn("ghost", "sm") + " pl-collapse-btn"}
               onMouseDown={(e: ReactMouseEvent<HTMLButtonElement>) => e.stopPropagation()}
               onClick={() => setCollapsed(true)}
               title={T("pl.sidebar.collapse")}

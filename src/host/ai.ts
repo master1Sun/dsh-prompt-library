@@ -12,7 +12,7 @@
 import { BlockAssembler, createUserMessage } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, LlmRuntime, LlmModelInfo } from "@deepseek-ai/dsh-llm";
 import type { PluginSettings, Prompt } from "../types.js";
-import { listTags, updatePrompt } from "./store.js";
+import { listTags, readGlobalLocale, updatePrompt } from "./store.js";
 import { parseRefineResult, type AiRefineResult } from "./refine.js";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -60,6 +60,145 @@ function logAI(msg: string): void {
   }
 }
 
+/**
+ * AI 日志的文案模板（按语言返回格式化函数），zh / en 双语同步维护。
+ * 前缀标签（route / collect / fallback / enrich / parse / polish / intro / skill）保留不译，
+ * 便于按固定标签过滤日志；其余旁白按语言切换。
+ */
+interface AiLogCopy {
+  injected: (ok: boolean) => string;
+  routeManualOk: (p: string, m: string) => string;
+  routeManualBad: (p: string, m: string) => string;
+  routeNoProviders: string;
+  routeListFail: (id: string, e: string) => string;
+  routeNoModel: (id: string) => string;
+  routeAuto: (p: string, m: string) => string;
+  routeNone: string;
+  collectErr: (e: string) => string;
+  collectAbort: (kind: string) => string;
+  collectEmpty: string;
+  collectDone: (kind: string, n: number) => string;
+  fbNone: string;
+  fbTry: (p: string, m: string) => string;
+  fbUse: (p: string, m: string) => string;
+  fbNext: (p: string, m: string) => string;
+  fbAllFail: string;
+  enrichStart: (title: string, n: number) => string;
+  enrichSkipNoLlmTitle: (title: string) => string;
+  enrichSkipBusy: (title: string) => string;
+  enrichTags: (n: number, list: string) => string;
+  parseFail: (t: string) => string;
+  parseOk: (title: string, tags: string, summary: number, body: number) => string;
+  enrichDone: (title: string, changed: boolean) => string;
+  enrichStartBody: (n: number) => string;
+  enrichSkipNoLlm: string;
+  enrichDoneBody: (n: number) => string;
+  polishStart: (n: number) => string;
+  polishDone: (n: number) => string;
+  introStart: (lang: string) => string;
+  introDone: (n: number) => string;
+  introLine: (i: number, l: string) => string;
+  skillStart: (title: string, n: number) => string;
+  skillParseFail: (t: string) => string;
+  skillDone: (name: string, n: number) => string;
+}
+
+/** 构建 AI 日志文案（按语言），zh / en 双语同步维护。 */
+function buildAiLogCopy(lang: string): AiLogCopy {
+  if (lang === "en") {
+    return {
+      injected: (ok) => (ok ? "llm service injected (AI enrichment available)" : "llm service unregistered (AI enrichment disabled)"),
+      routeManualOk: (p, m) => `route: manual config available provider=${p} model=${m}`,
+      routeManualBad: (p, m) => `route: manual model ${p}/${m} unavailable, auto-polling available models`,
+      routeNoProviders: "route: listProviders() returned empty (no provider in harness)",
+      routeListFail: (id, e) => `route: listModels(${id}) failed: ${e}, trying next provider`,
+      routeNoModel: (id) => `route: provider=${id} has no available model, trying next`,
+      routeAuto: (p, m) => `route: auto-discovered provider=${p} model=${m}`,
+      routeNone: "route: no usable model found",
+      collectErr: (e) => `collect: LLM streaming error: ${e}`,
+      collectAbort: (kind) => `collect: finish=${kind} (model call failed or aborted)`,
+      collectEmpty: "collect: model returned empty text",
+      collectDone: (kind, n) => `collect: done kind=${kind} text length=${n}`,
+      fbNone: "fallback: no candidate routes, skipping this call",
+      fbTry: (p, m) => `fallback: trying provider=${p} model=${m}`,
+      fbUse: (p, m) => `fallback: using provider=${p} model=${m}`,
+      fbNext: (p, m) => `fallback: provider=${p} model=${m} failed, polling next`,
+      fbAllFail: "fallback: all candidate models failed",
+      enrichStart: (title, n) => `enrich: start prompt="${title}" body length=${n}`,
+      enrichSkipNoLlmTitle: (title) => `enrich: skipped (llm service not injected) prompt=${title}`,
+      enrichSkipBusy: (title) => `enrich: skipped (${title} has an ongoing enrichment)`,
+      enrichTags: (n, list) => `enrich: tag library ${n} [${list}]`,
+      parseFail: (t) => `parse: model output could not be parsed as JSON: ${t}`,
+      parseOk: (title, tags, summary, body) =>
+        `parse: ok title="${title}" tags=[${tags}] summary length=${summary} rewritten body length=${body}`,
+      enrichDone: (title, changed) => `enrich: done prompt="${title}" body ${changed ? "rewritten" : "unchanged"}`,
+      enrichStartBody: (n) => `enrich: start body length=${n}`,
+      enrichSkipNoLlm: "enrich: skipped (llm service not injected)",
+      enrichDoneBody: (n) => `enrich: done result length=${n}`,
+      polishStart: (n) => `polish: start body length=${n}`,
+      polishDone: (n) => `polish: done result length=${n}`,
+      introStart: (lang) => `intro: start lang=${lang}`,
+      introDone: (n) => `intro: done lines=${n}`,
+      introLine: (i, l) => `intro:   [${i}] ${l}`,
+      skillStart: (title, n) => `skill: start title="${title}" body length=${n}`,
+      skillParseFail: (t) => `skill: model output could not be parsed: ${t}`,
+      skillDone: (name, n) => `skill: done name="${name}" description length=${n}`,
+    };
+  }
+  return {
+    injected: (ok) => (ok ? "llm 服务已注入（AI 完善可用）" : "llm 服务已注销（AI 完善停用）"),
+    routeManualOk: (p, m) => `route: 手动配置可用 provider=${p} model=${m}`,
+    routeManualBad: (p, m) => `route: 手动配置模型 ${p}/${m} 不可用，自动轮询可用模型`,
+    routeNoProviders: "route: listProviders() 返回空（harness 无可用 provider）",
+    routeListFail: (id, e) => `route: listModels(${id}) 失败：${e}，尝试下一个 provider`,
+    routeNoModel: (id) => `route: provider=${id} 无可用模型，尝试下一个`,
+    routeAuto: (p, m) => `route: 自动发现 provider=${p} model=${m}`,
+    routeNone: "route: 未找到任何可用模型",
+    collectErr: (e) => `collect: LLM 流式调用异常：${e}`,
+    collectAbort: (kind) => `collect: finish=${kind}（模型调用失败或被中止）`,
+    collectEmpty: "collect: 模型返回空文本",
+    collectDone: (kind, n) => `collect: 完成 kind=${kind} 文本长度=${n}`,
+    fbNone: "fallback: 无可用候选路由，跳过本次调用",
+    fbTry: (p, m) => `fallback: 尝试 provider=${p} model=${m}`,
+    fbUse: (p, m) => `fallback: 采用 provider=${p} model=${m}`,
+    fbNext: (p, m) => `fallback: provider=${p} model=${m} 失败，轮询下一个`,
+    fbAllFail: "fallback: 所有候选模型均失败",
+    enrichStart: (title, n) => `enrich: 开始 prompt="${title}" 正文长度=${n}`,
+    enrichSkipNoLlmTitle: (title) => `enrich: 跳过（llm 服务未注入）prompt=${title}`,
+    enrichSkipBusy: (title) => `enrich: 跳过（${title} 已有完善任务进行中）`,
+    enrichTags: (n, list) => `enrich: 标签库 ${n} 个 [${list}]`,
+    parseFail: (t) => `parse: 模型输出无法解析为 JSON：${t}`,
+    parseOk: (title, tags, summary, body) =>
+      `parse: 成功 title="${title}" tags=[${tags}] 摘要长度=${summary} 改写正文长度=${body}`,
+    enrichDone: (title, changed) => `enrich: 完成 prompt="${title}" body ${changed ? "已改写" : "未改写"}`,
+    enrichStartBody: (n) => `enrich: 开始 正文长度=${n}`,
+    enrichSkipNoLlm: "enrich: 跳过（llm 服务未注入）",
+    enrichDoneBody: (n) => `enrich: 完成 结果长度=${n}`,
+    polishStart: (n) => `polish: 开始 正文长度=${n}`,
+    polishDone: (n) => `polish: 完成 结果长度=${n}`,
+    introStart: (lang) => `intro: 开始 lang=${lang}`,
+    introDone: (n) => `intro: 完成 行数=${n}`,
+    introLine: (i, l) => `intro:   [${i}] ${l}`,
+    skillStart: (title, n) => `skill: 开始 title="${title}" 正文长度=${n}`,
+    skillParseFail: (t) => `skill: 模型输出无法解析：${t}`,
+    skillDone: (name, n) => `skill: 完成 name="${name}" 描述长度=${n}`,
+  };
+}
+
+/** AI 日志当前使用的语言（模块加载后异步预取，未取到前默认中文）。 */
+let aiLogLang = "zh";
+// 模块加载即后台预取一次全局语言，供后续同步的 logAI 使用；失败保持默认中文。
+void readGlobalLocale()
+  .then((lang) => {
+    aiLogLang = lang === "en" ? "en" : "zh";
+  })
+  .catch(() => {});
+
+/** 当前语言对应的 AI 日志文案（每次按需构建，成本可忽略）。 */
+function aiLogCopy(): AiLogCopy {
+  return buildAiLogCopy(aiLogLang);
+}
+
 /** 模块级持有的 harness LLM 服务（由 host 入口注入，可能为 undefined）。 */
 let llm: LlmRuntime | undefined;
 
@@ -96,7 +235,7 @@ export function registerLlm(runtime: LlmRuntime | undefined): void {
 
 /** 记录 llm 服务注入状态（供入口调用，用于排查 AI 完善未生效）。 */
 export function logAiInjected(injected: boolean): void {
-  logAI(injected ? "llm 服务已注入（AI 完善可用）" : "llm 服务已注销（AI 完善停用）");
+  logAI(aiLogCopy().injected(injected));
 }
 
 /** 当前是否有可用的 harness LLM 服务。 */
@@ -184,29 +323,27 @@ async function resolveCandidates(
     if (avail) {
       candidates.push({ provider: settings.aiProvider, model: settings.aiModel });
       seen.add(`${settings.aiProvider}/${settings.aiModel}`);
-      logAI(`route: 手动配置可用 provider=${settings.aiProvider} model=${settings.aiModel}`);
+      logAI(aiLogCopy().routeManualOk(settings.aiProvider, settings.aiModel));
     } else {
-      logAI(
-        `route: 手动配置模型 ${settings.aiProvider}/${settings.aiModel} 不可用，自动轮询可用模型`,
-      );
+      logAI(aiLogCopy().routeManualBad(settings.aiProvider, settings.aiModel));
     }
   }
 
   // 2. 自动发现：遍历各 provider，选第一个有可用模型的
   const providers = runtime.listProviders();
   if (providers.length === 0) {
-    logAI("route: listProviders() 返回空（harness 无可用 provider）");
+    logAI(aiLogCopy().routeNoProviders);
   }
   for (const provider of providers) {
     let models: readonly LlmModelInfo[];
     try {
       models = await runtime.listModels(provider.id);
     } catch (e) {
-      logAI(`route: listModels(${provider.id}) 失败：${String(e)}，尝试下一个 provider`);
+      logAI(aiLogCopy().routeListFail(provider.id, String(e)));
       continue;
     }
     if (models.length === 0) {
-      logAI(`route: provider=${provider.id} 无可用模型，尝试下一个`);
+      logAI(aiLogCopy().routeNoModel(provider.id));
       continue;
     }
     const pick = models.find((m) => /chat|deepseek/i.test(m.id)) ?? models[0]!;
@@ -214,10 +351,10 @@ async function resolveCandidates(
     if (seen.has(key)) continue;
     candidates.push({ provider: provider.id, model: pick.id });
     seen.add(key);
-    logAI(`route: 自动发现 provider=${provider.id} model=${pick.id}`);
+    logAI(aiLogCopy().routeAuto(provider.id, pick.id));
   }
   if (candidates.length === 0) {
-    logAI("route: 未找到任何可用模型");
+    logAI(aiLogCopy().routeNone);
   }
   routeCache = { key, ts: Date.now(), value: candidates };
   return candidates;
@@ -307,11 +444,11 @@ async function collectText(
       assembler.push(chunk);
     }
   } catch (e) {
-    logAI(`collect: LLM 流式调用异常：${String(e)}`);
+    logAI(aiLogCopy().collectErr(String(e)));
     return undefined;
   }
   if (assembler.finish.kind !== "stop" && assembler.finish.kind !== "max-tokens") {
-    logAI(`collect: finish=${assembler.finish.kind}（模型调用失败或被中止）`);
+    logAI(aiLogCopy().collectAbort(assembler.finish.kind));
     return undefined;
   }
   const text = assembler
@@ -321,10 +458,10 @@ async function collectText(
     .join("")
     .trim();
   if (!text) {
-    logAI("collect: 模型返回空文本");
+    logAI(aiLogCopy().collectEmpty);
     return undefined;
   }
-  logAI(`collect: 完成 kind=${assembler.finish.kind} 文本长度=${text.length}`);
+  logAI(aiLogCopy().collectDone(assembler.finish.kind, text.length));
   return text;
 }
 
@@ -340,20 +477,20 @@ async function collectTextWithFallback(
   content: string,
 ): Promise<string | undefined> {
   if (candidates.length === 0) {
-    logAI("fallback: 无可用候选路由，跳过本次调用");
+    logAI(aiLogCopy().fbNone);
     return undefined;
   }
   for (const route of candidates) {
-    logAI(`fallback: 尝试 provider=${route.provider} model=${route.model}`);
+    logAI(aiLogCopy().fbTry(route.provider, route.model));
     // 通过全局锁串行执行，保证同一时刻只有一个 LLM 调用
     const text = await withLlmLock(() => collectText(runtime, route, system, content));
     if (text !== undefined) {
-      logAI(`fallback: 采用 provider=${route.provider} model=${route.model}`);
+      logAI(aiLogCopy().fbUse(route.provider, route.model));
       return text;
     }
-    logAI(`fallback: provider=${route.provider} model=${route.model} 失败，轮询下一个`);
+    logAI(aiLogCopy().fbNext(route.provider, route.model));
   }
-  logAI("fallback: 所有候选模型均失败");
+  logAI(aiLogCopy().fbAllFail);
   return undefined;
 }
 
@@ -370,14 +507,14 @@ function parseJson(text: string): AiRefineResult | undefined {
  * 任何失败都静默返回，不影响主流程。
  */
 export async function enrichLearnedPrompt(prompt: Prompt, settings: PluginSettings): Promise<void> {
-  logAI(`enrich: 开始 prompt="${prompt.title}" 正文长度=${prompt.body.length}`);
+  logAI(aiLogCopy().enrichStart(prompt.title, prompt.body.length));
   if (!llm) {
-    logAI(`enrich: 跳过（llm 服务未注入）prompt=${prompt.title}`);
+    logAI(aiLogCopy().enrichSkipNoLlmTitle(prompt.title));
     return;
   }
   // 同一提示词只允许一个进行中的 AI 完善，避免并发重复生成
   if (enrichInFlight.has(prompt.id)) {
-    logAI(`enrich: 跳过（${prompt.title} 已有完善任务进行中）`);
+    logAI(aiLogCopy().enrichSkipBusy(prompt.title));
     return;
   }
   enrichInFlight.add(prompt.id);
@@ -402,7 +539,7 @@ async function enrichLearnedPromptInner(
   // 读取标签库，让 AI 优先复用已有标签（不存在时才新建），只生成一个标签
   const tagList = await listTags().catch(() => []);
   const existingTags = tagList.map((t) => t.name);
-  logAI(`enrich: 标签库 ${existingTags.length} 个 [${existingTags.join(", ")}]`);
+  logAI(aiLogCopy().enrichTags(existingTags.length, existingTags.join(", ")));
   // 检测正文已有的模板变量（{{}}），告知模型原样保留并可按需新增，与润色的 keepVariables 逻辑保持一致
   const existingVars = [...prompt.body.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)]
     .map((m) => m[1]!.trim())
@@ -416,12 +553,10 @@ async function enrichLearnedPromptInner(
   if (!text) return;
   const result = parseJson(text);
   if (!result) {
-    logAI(`parse: 模型输出无法解析为 JSON：${text.slice(0, 300)}`);
+    logAI(aiLogCopy().parseFail(text.slice(0, 300)));
     return;
   }
-  logAI(
-    `parse: 成功 title="${result.title}" tags=[${result.tags.join(", ")}] 摘要长度=${result.summary.length} 改写正文长度=${result.body.length}`,
-  );
+  logAI(aiLogCopy().parseOk(result.title || "", result.tags.join(", "), result.summary.length, result.body.length));
 
   const changed = result.body !== prompt.body;
   await updatePrompt(prompt.id, {
@@ -433,7 +568,7 @@ async function enrichLearnedPromptInner(
     sourceBody: changed ? prompt.body : undefined,
     aiRefined: true,
   });
-  logAI(`enrich: 完成 prompt="${result.title || prompt.title}" body ${changed ? "已改写" : "未改写"}`);
+  logAI(aiLogCopy().enrichDone(result.title || prompt.title, changed));
 }
 
 /**
@@ -450,9 +585,9 @@ export async function enrichPromptProfessional(
   body: string,
   settings: PluginSettings,
 ): Promise<string | undefined> {
-  logAI(`enrich: 开始 正文长度=${body.length}`);
+  logAI(aiLogCopy().enrichStartBody(body.length));
   if (!llm) {
-    logAI("enrich: 跳过（llm 服务未注入）");
+    logAI(aiLogCopy().enrichSkipNoLlm);
     return undefined;
   }
   const candidates = await resolveCandidates(llm, settings);
@@ -475,7 +610,7 @@ export async function enrichPromptProfessional(
     `请把以下提示词完善成更专业、更全面、结构完整的版本：\n\n${body}`,
   );
   if (!text) return undefined;
-  logAI(`enrich: 完成 结果长度=${text.length}`);
+  logAI(aiLogCopy().enrichDoneBody(text.length));
   return text;
 }
 
@@ -489,9 +624,9 @@ export async function polishPromptBody(
   settings: PluginSettings,
   opts?: { keepVariables?: boolean },
 ): Promise<string | undefined> {
-  logAI(`polish: 开始 正文长度=${body.length}`);
+  logAI(aiLogCopy().polishStart(body.length));
   if (!llm) {
-    logAI("polish: 跳过（llm 服务未注入）");
+    logAI(aiLogCopy().enrichSkipNoLlm);
     return undefined;
   }
   const candidates = await resolveCandidates(llm, settings);
@@ -530,7 +665,7 @@ export async function polishPromptBody(
     content,
   );
   if (!text) return undefined;
-  logAI(`polish: 完成 结果长度=${text.length}`);
+  logAI(aiLogCopy().polishDone(text.length));
   return text;
 }
 
@@ -566,9 +701,9 @@ export async function generateIntro(
   lang: "zh" | "en",
   settings: PluginSettings,
 ): Promise<string[] | undefined> {
-  logAI(`intro: 开始 lang=${lang}`);
+  logAI(aiLogCopy().introStart(lang));
   if (!llm) {
-    logAI("intro: 跳过（llm 服务未注入）");
+    logAI(aiLogCopy().enrichSkipNoLlm);
     return undefined;
   }
   const candidates = await resolveCandidates(llm, settings);
@@ -611,8 +746,8 @@ export async function generateIntro(
     .split(/\r?\n/)
     .map((l) => l.trim().replace(/^\d+[.、)）]\s*/, "").replace(/^-+\s*/, ""))
     .filter(Boolean);
-  logAI(`intro: 完成 行数=${lines.length}`);
-  lines.forEach((l, i) => logAI(`intro:   [${i}] ${l}`));
+  logAI(aiLogCopy().introDone(lines.length));
+  lines.forEach((l, i) => logAI(aiLogCopy().introLine(i, l)));
   return lines.slice(0, 5);
 }
 
@@ -658,9 +793,9 @@ export async function generateSkillDescriptor(
   prompt: { title: string; body: string; summary?: string; tags?: string[] },
   settings: PluginSettings,
 ): Promise<SkillDescriptor | undefined> {
-  logAI(`skill: 开始 title="${prompt.title}" 正文长度=${prompt.body.length}`);
+  logAI(aiLogCopy().skillStart(prompt.title, prompt.body.length));
   if (!llm) {
-    logAI("skill: 跳过（llm 服务未注入）");
+    logAI(aiLogCopy().enrichSkipNoLlm);
     return undefined;
   }
   const candidates = await resolveCandidates(llm, settings);
@@ -699,10 +834,10 @@ export async function generateSkillDescriptor(
   if (!text) return undefined;
   const parsed = parseSkillJson(text);
   if (!parsed || !parsed.name || !parsed.description) {
-    logAI(`skill: 模型输出无法解析：${text.slice(0, 300)}`);
+    logAI(aiLogCopy().skillParseFail(text.slice(0, 300)));
     return undefined;
   }
-  logAI(`skill: 完成 name="${parsed.name}" 描述长度=${parsed.description.length}`);
+  logAI(aiLogCopy().skillDone(parsed.name, parsed.description.length));
   return {
     name: parsed.name,
     description: parsed.description,

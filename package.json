@@ -1,6 +1,6 @@
 {
   "name": "@sunjuntao/dsh-prompt-library",
-  "version": "0.8.9",
+  "version": "0.8.10",
   "description": "DSH 提示词库插件：提供提示词库管理（增删改查、分类标签、导入导出、AI 智能优化、选择文本一键剪藏）、侧边栏与词库助手气泡提醒等能力。",
   "type": "module",
   "main": "./lib/index.js",
@@ -61,7 +61,8 @@
     "git:patch": "pnpm version patch",
     "git:minor": "pnpm version minor",
     "git:major": "pnpm version major",
-    "git-push": "git push && git push --tags"
+    "git-push": "git push && git push --tags",
+    "release": "node scripts/release.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1-rc.1",

@@ -1,0 +1,27 @@
+# 自动创建 GitHub Release。
+#
+# 推送 v 前缀的版本 tag（如 v0.8.9、v0.9.0-beta1）时，自动生成对应的 Release。
+# - tag 含 beta/rc/alpha 视为预发布（测试版），供插件 GitHub 通道检测；
+# - 插件实际更新走 npm registry（dsh plugin add），此处不携带构建产物。
+name: Auto Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') || contains(github.ref_name, 'alpha') }}
+          draft: false

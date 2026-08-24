@@ -453,8 +453,12 @@ export function PromptAssistant(props: Props): ReactNode {
     };
   }, [settings?.personTipInterval, settings?.personTipDuration]);
 
-  // 新版本提示文案（有测试版时非空，文案走 i18n 国际化）
-  const updateText = update?.hasBeta ? T("pl.update.detected") : "";
+  // 新版本提示文案：体验计划开启 → 「测试版本」；未开启 → 「有新的版本」。文案走 i18n 国际化。
+  const updateText = update?.hasBeta
+    ? (settings?.experienceProgramEnabled ?? DEFAULT_SETTINGS.experienceProgramEnabled)
+      ? T("pl.update.detectedBeta")
+      : T("pl.update.detected")
+    : "";
 
   return (
     <>

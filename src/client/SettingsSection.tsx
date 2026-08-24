@@ -608,6 +608,12 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           checked={draft.applyCharacterToChat}
           onChange={(v) => updateAndSave({ applyCharacterToChat: v })}
         />
+        <ToggleRow
+          label={T("pl.set.experienceProgram")}
+          desc={T("pl.set.experienceProgramDesc")}
+          checked={draft.experienceProgramEnabled}
+          onChange={(v) => updateAndSave({ experienceProgramEnabled: v })}
+        />
       </ModuleCard>
 
       {/* 底部署名 */}

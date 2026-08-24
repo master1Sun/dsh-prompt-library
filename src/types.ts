@@ -119,6 +119,8 @@ export interface PluginSettings {
   personTipDuration: number;
   /** [实验室功能] 勾选后，把人格文件注入整个聊天会话，约束整个对话（后果自负）。 */
   applyCharacterToChat: boolean;
+  /** [实验室功能] 加入体验计划后，优先自动更新正式版（npm/GitHub），测试版（预发布）以红点提示手动更新。 */
+  experienceProgramEnabled: boolean;
 }
 
 /** 设置的默认值。 */
@@ -142,4 +144,5 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   personTipInterval: 10, // 10 秒
   personTipDuration: 20, // 20 秒
   applyCharacterToChat: false,
+  experienceProgramEnabled: true, // 体验计划默认勾选：优先自动更新正式版，测试版红点手动更新
 };

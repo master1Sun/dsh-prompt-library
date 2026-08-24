@@ -26,6 +26,8 @@ import { logDir } from "./paths.js";
 const REGISTRY_URL = "https://registry.npmjs.org/@sunjuntao%2fdsh-prompt-library/latest";
 /** GitHub Releases 列表端点（含预发布；返回后在本模块内筛选版本号最大的一条，tag 即版本号）。 */
 const GITHUB_API_URL = "https://api.github.com/repos/master1Sun/dsh-prompt-library/releases";
+/** GitHub 仓库（owner/repo），用于测试版走 git 安装命令时的 `github:` 引用。 */
+const GITHUB_REPO = "master1Sun/dsh-prompt-library";
 /** 版本检查结果的缓存时长。 */
 const CACHE_MS = 24 * 60 * 60 * 1000;
 /** 请求外网（npm / github）的超时。 */
@@ -42,6 +44,8 @@ export interface UpdateInfo {
   betaLatest: string;
   /** 是否有红点手动更新（体验计划：仅最新测试版；未加入：GitHub 版本领先 npm）。 */
   hasBeta: boolean;
+  /** 红点测试版对应的 GitHub release tag（如 v0.9.0-beta1）；无测试版时为空串。测试版走 git 安装需要用它作 ref。 */
+  betaTag: string;
 }
 
 /** 上次的检查结果缓存（成功则长缓存；失败给短缓存，避免频繁重试外网）。 */
@@ -210,6 +214,8 @@ async function fetchLatestVersion(): Promise<string> {
 interface GithubVersions {
   official: string;
   test: string;
+  /** 最高测试版对应的完整 release tag（如 v0.9.0-beta1）；无测试版时为空串。 */
+  testTag: string;
 }
 
 /**
@@ -222,7 +228,7 @@ async function fetchGithubVersions(): Promise<GithubVersions> {
     accept: "application/vnd.github+json",
     "user-agent": "dsh-prompt-library-updater",
   })) as Array<{ tag_name?: unknown; draft?: unknown; prerelease?: unknown }>;
-  const result: GithubVersions = { official: "", test: "" };
+  const result: GithubVersions = { official: "", test: "", testTag: "" };
   if (!Array.isArray(body)) return result;
   for (const r of body) {
     if (typeof r.tag_name !== "string" || r.draft === true) continue;
@@ -230,7 +236,10 @@ async function fetchGithubVersions(): Promise<GithubVersions> {
     if (!v) continue;
     // 预发布视为测试版；其余视为正式版（两通道各自取版本号最大的一条）
     if (r.prerelease === true) {
-      if (compareVersions(v, result.test) > 0) result.test = v;
+      if (compareVersions(v, result.test) > 0) {
+        result.test = v;
+        result.testTag = r.tag_name;
+      }
     } else if (compareVersions(v, result.official) > 0) {
       result.official = v;
     }
@@ -276,7 +285,7 @@ export async function checkUpdate(force = false): Promise<UpdateInfo> {
   // 所有源都访问不到（或均无可用版本）→ 不做任何处理
   if (!npm && !ghOfficial && !ghTest) {
     logVersion(vlog.noSource);
-    const info: UpdateInfo = { current, latest: current, hasUpdate: false, betaLatest: current, hasBeta: false };
+    const info: UpdateInfo = { current, latest: current, hasUpdate: false, betaLatest: current, hasBeta: false, betaTag: "" };
     cache = { at: now, info, ttl: CACHE_MS / 2 };
     return info;
   }
@@ -306,6 +315,8 @@ export async function checkUpdate(force = false): Promise<UpdateInfo> {
       hasUpdate,
       betaLatest: hasBeta ? ghTest : latest,
       hasBeta,
+      // 测试版才记录 git tag（供升级时用 github: 方式安装）；正式版/无更新则留空走 npm
+      betaTag: hasBeta ? gh?.testTag || "" : "",
     };
     logVersion(vlog.expResult(latest, hasUpdate, hasBeta, info.betaLatest));
     cache = { at: now, info, ttl: CACHE_MS };
@@ -328,6 +339,8 @@ export async function checkUpdate(force = false): Promise<UpdateInfo> {
     hasUpdate,
     betaLatest: ghAny || latest,
     hasBeta,
+    // 未加入体验计划：保持旧的 npm 安装方式，不附带 git tag
+    betaTag: "",
   };
   logVersion(vlog.normalResult(latest, hasUpdate, hasBeta, info.betaLatest));
   cache = { at: now, info, ttl: CACHE_MS };
@@ -349,17 +362,32 @@ export async function upgradePlugin(target?: string): Promise<{ ok: boolean; out
   const profile = process.env.DSH_PLUGIN_PROFILE || "web";
   const pkg = "@sunjuntao/dsh-prompt-library";
   let version = target;
+  // 测试版走 git 安装时的 GitHub ref（如 v0.9.0-beta1）；为空表示走 npm 安装。
+  let gitRef = "";
   if (!version) {
     try {
       const info = await checkUpdate(true); // 强制刷新，确保拿到最新版本信息
-      if (info.hasBeta && /^\d+\.\d+\.\d+/.test(info.betaLatest)) version = info.betaLatest;
-      else if (/^\d+\.\d+\.\d+/.test(info.latest)) version = info.latest;
+      // 体验计划下的「最新测试版」仅存在于 GitHub 预发布，npm 上没有 → 用 git 方式安装
+      if (info.hasBeta && info.betaTag && /^v\d+\.\d+\.\d+/.test(info.betaTag)) {
+        gitRef = info.betaTag;
+        version = info.betaLatest;
+      } else if (info.hasBeta && /^\d+\.\d+\.\d+/.test(info.betaLatest)) {
+        version = info.betaLatest; // 兼容：无 tag 信息时仍按 npm 安装测试版版本号
+      } else if (/^\d+\.\d+\.\d+/.test(info.latest)) {
+        version = info.latest;
+      }
     } catch {
       /* 拿不到版本就安装 latest 标签 */
     }
   }
   const targetStr = version && /^\d+\.\d+\.\d+/.test(version) ? `${pkg}@${version}` : pkg;
-  const cmd = process.env.DSH_PLUGIN_UPGRADE_CMD || `dsh plugin --profile ${profile} add ${targetStr}`;
+  // 测试版（GitHub 预发布）用 git 安装命令；其余（npm/正式版）保持 npm 命令不变。
+  // 二者都可通过 DSH_PLUGIN_UPGRADE_CMD 完全自定义整条命令（优先级最高）。
+  const cmd =
+    process.env.DSH_PLUGIN_UPGRADE_CMD ||
+    (gitRef
+      ? `dsh plugin --profile ${profile} add github:${GITHUB_REPO}#${gitRef}`
+      : `dsh plugin --profile ${profile} add ${targetStr}`);
   const vlog = buildVersionLogCopy(await readGlobalLocale());
   logVersion(vlog.upgradeStart(version || pkg, cmd));
   return new Promise((resolve) => {

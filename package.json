@@ -55,7 +55,6 @@
     "sync": "node scripts/sync-to-profile.mjs",
     "deploy": "npm run build && npm run sync",
     "typecheck": "tsc --noEmit",
-    "prepare": "node scripts/build.mjs",
     "prepublishOnly": "node scripts/build.mjs",
     "npm-publish": "npm publish --access public",
     "git:patch": "pnpm version patch",

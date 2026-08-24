@@ -1,5 +1,4 @@
 node_modules
-lib
 *.map
 .build-meta.json
 debug.log

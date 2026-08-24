@@ -190,6 +190,8 @@ export interface UpdateInfo {
   hasUpdate: boolean;
   betaLatest: string;
   hasBeta: boolean;
+  /** 红点测试版对应的 GitHub release tag（如 v0.9.0-beta1）；无测试版时为空串。 */
+  betaTag: string;
 }
 
 /** 检查插件是否有新版本（host 侧含缓存；双源都失败时 hasUpdate/hasBeta 为 false）。 */

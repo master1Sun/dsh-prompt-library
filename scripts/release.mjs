@@ -8,7 +8,9 @@
  * 约定：
  *   - 正式版 version 形如 0.8.9        → tag = v0.8.9
  *   - 测试版 version 形如 0.9.0-beta1  → tag = v0.9.0-beta1（workflow 自动标记为预发布）
- *   - 该版本需已 publish 到 npm，插件更新走 npm registry。
+ *   - 发版前需已 build 并把 lib 提交（lib 已纳入版本管理，tag 自带编译产物）；
+ *     git 方式安装的插件（dsh plugin add github:...#<tag>）直接用到 tag 里的 lib。
+ *   - 该版本若走 npm 通道仍需另 publish 到 npm。
  *
  * 安全校验：工作区必须干净；tag 已存在（本地或远端）时不重复创建/推送。
  */

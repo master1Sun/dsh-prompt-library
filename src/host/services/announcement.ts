@@ -1,104 +1,87 @@
 /**
- * 公告通告远程拉取。
+ * 公告通告读取（本地 + 多语言）。
  *
- * 双击词库助手弹出公告弹窗时，从默认公告地址（Gitee 仓库 README）
- * 实时拉取内容；拉取失败时回退内置文案。
+ * 数据全部来自代码：
+ *  - 使用手册：i18n 文案键 pl.announce.manual.*，跟随系统语言；
+ *  - 通告（版本更新说明）：src/host/services/version-notes.ts，按版本号 + 标题 + 条目排版，支持多语言。
  *
- * 支持两种内容格式（按能否解析为 JSON 自动识别）：
- * - JSON：{ "manual": string[], "notice": string }（manual 可缺省）
- * - 纯文本：整体作为通告（notice），若为 Markdown 会做轻量清洗
+ * 不再读取任何网络 JSON。远程拉取、缓存、URL 校验等整套逻辑已移除。
+ * 接口保持不变（/api/prompt-library/announcement），调用方传入 lang 查询参数可指定语言。
  */
+import { getAllVersionNotes, normalizeLang, type LangKey } from "./version-notes.js";
 
-/** 拉取结果。source 为 remote 时 manual/notice 来自远程；builtin 表示回退内置。 */
+/** 单版本条目（供前端排版使用）。 */
+export interface VersionEntry {
+  /** 版本号，如 "0.8.11"。 */
+  version: string;
+  /** 发布日期 YYYY-MM-DD，可选。 */
+  date?: string;
+  /** 版本标题。 */
+  title: string;
+  /** 版本更新要点列表。 */
+  items: string[];
+}
+
+/** 拉取结果：source=local 表示本地产物，manual/versions 都已根据语言填充。 */
 export interface AnnouncementData {
-  source: "remote" | "builtin";
-  manual?: string[];
-  notice?: string;
+  source: "local";
+  /** 语言（归一化后），zh 或 en。 */
+  lang: LangKey;
+  /** 使用手册条目（已按语言翻译）。 */
+  manual: { key: string; text: string }[];
+  /** 版本更新说明（按版本倒序，每版本含标题 + 要点）。 */
+  versions: VersionEntry[];
 }
 
-/** 默认公告地址：Gitee 仓库 announcement.json（JSON 可同时动态配置使用手册 manual 与通告 notice）。 */
-const DEFAULT_ANNOUNCEMENT_URL =
-  "https://gitee.com/superBigYo/dsh-prompt-library/raw/master/announcement.json";
+/** 使用手册的 i18n 键（顺序展示）。与前端 AnnouncementModal 共用同一套键。 */
+const MANUAL_KEYS: readonly string[] = [
+  "pl.announce.manual.0",
+  "pl.announce.manual.1",
+  "pl.announce.manual.2",
+  "pl.announce.manual.3",
+  "pl.announce.manual.4",
+];
 
-/** 远程拉取超时（毫秒）：Gitee 首次访问/解析 DNS 可能较慢，放宽到 8s 减少误判失败。 */
-const FETCH_TIMEOUT_MS = 8000;
-/** 拉取结果缓存时长（毫秒）：30 秒内不重复请求远程，兼顾实时更新与请求频率。 */
-const CACHE_TTL_MS = 30_000;
+/** 内置手动文案（当 i18n 翻译函数不可用/取不到时的兜底，zh/en 各一份）。 */
+const MANUAL_FALLBACK: Record<LangKey, string[]> = {
+  zh: [
+    "输入 # 呼出词库：实时筛选、↑↓ 选择、回车插入",
+    "自动学习聊天中有价值的提示词，可随时编辑或删除",
+    "支持 AI 优化与智能完善，提升提示词质量",
+    "支持 {{变量}} 占位符，插入时弹窗逐个填写",
+    "侧边栏 / 聊天面板双入口管理词库，支持导出与备份",
+  ],
+  en: [
+    "Type # to open the library: live filter, up/down to select, Enter to insert",
+    "Automatically learn valuable prompts from chats; edit or delete anytime",
+    "AI polish and smart enrichment to improve prompt quality",
+    "Supports {{variable}} placeholders, filled in a popup before insert",
+    "Manage the library from the sidebar / chat panel, with export & backup",
+  ],
+};
 
-let cached: { at: number; data: AnnouncementData } | null = null;
-
-/** 校验 URL 协议，只允许 http/https，避免异常协议拉取本地文件。 */
-function isHttpUrl(url: string): boolean {
-  try {
-    const u = new URL(url);
-    return u.protocol === "http:" || u.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-/** 轻量清洗 Markdown：保留正文换行，去掉标题/加粗/链接/列表/代码等标记。 */
-function cleanMarkdown(text: string): string {
-  return text
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, "") // 图片
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1") // 链接 → 文本
-    .replace(/^\s{0,3}#{1,6}\s+/gm, "") // 标题 #
-    .replace(/\*\*([^*]+)\*\*/g, "$1") // 加粗
-    .replace(/~~([^~]+)~~/g, "$1") // 删除线
-    .replace(/`([^`]+)`/g, "$1") // 行内代码
-    .replace(/```/g, "") // 代码块分隔符
-    .replace(/^[\s]*[-*+]\s+/gm, "• ") // 无序列表 → •
-    .replace(/^[\s]*(\d+)\.\s+/gm, "$1. ") // 有序列表保留序号
-    .replace(/\n{3,}/g, "\n\n") // 压缩多余空行
-    .trim();
-}
-
-/** 解析远程内容：JSON 结构或纯文本（Markdown 时轻量清洗）。 */
-function parseRemote(text: string): { manual?: string[]; notice?: string } {
-  try {
-    const obj = JSON.parse(text) as { manual?: unknown; notice?: unknown };
-    const manual = Array.isArray(obj.manual)
-      ? obj.manual.filter((x): x is string => typeof x === "string")
-      : undefined;
-    const notice = typeof obj.notice === "string" ? obj.notice : undefined;
-    if (manual || notice) return { manual, notice };
-  } catch {
-    /* 非 JSON，按纯文本处理 */
-  }
-  const trimmed = cleanMarkdown(text);
-  return trimmed ? { notice: trimmed } : {};
-}
-
-/** 拉取公告通告：从默认 Gitee 地址实时拉取，失败回退内置。成功结果带 60s 缓存。 */
-export async function getAnnouncement(): Promise<AnnouncementData> {
-  try {
-    const url = DEFAULT_ANNOUNCEMENT_URL;
-    if (!url || !isHttpUrl(url)) {
-      return { source: "builtin" };
-    }
-    // 成功结果缓存 60s；失败不缓存，下次打开仍会重试
-    if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
-      return cached.data;
-    }
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    try {
-      const res = await fetch(url, {
-        redirect: "follow",
-        signal: controller.signal,
-        headers: { accept: "text/plain, application/json, text/markdown" },
-      });
-      if (!res.ok) return { source: "builtin" };
-      const text = await res.text();
-      const { manual, notice } = parseRemote(text);
-      const data: AnnouncementData = { source: "remote", manual, notice };
-      cached = { at: Date.now(), data };
-      return data;
-    } finally {
-      clearTimeout(timer);
-    }
-  } catch {
-    // 拉取失败 / 设置读取失败：回退内置文案
-    return { source: "builtin" };
-  }
+/**
+ * 读取公告通告：
+ *  - manual：使用手册，使用传入的翻译函数填充，缺翻译则回退内置；
+ *  - versions：各版本更新说明，直接读本地 VERSION_NOTES，按语言返回。
+ *
+ * @param lang 请求语言，默认 zh；可传入浏览器语言任意形式，内部归一化。
+ * @param t 可选 i18n 翻译函数；传入时优先用于手册键翻译。
+ */
+export function getAnnouncement(
+  lang: string = "zh",
+  t?: (key: string) => string | undefined,
+): AnnouncementData {
+  const L: LangKey = normalizeLang(lang);
+  // 使用手册：逐键翻译；缺翻译时用内置兜底（保证显示非空）。
+  const fb = MANUAL_FALLBACK[L];
+  const manual = MANUAL_KEYS.map((key, i) => {
+    const translated = typeof t === "function" ? t(key) : undefined;
+    const text =
+      typeof translated === "string" && translated.length > 0 ? translated : (fb[i] ?? key);
+    return { key, text };
+  });
+  // 版本说明：直接读本地版本文件（已按语言返回，按版本倒序）。
+  const versions = getAllVersionNotes(L);
+  return { source: "local", lang: L, manual, versions };
 }

@@ -345,9 +345,19 @@ export function makePromptRoutes(): WebRoute[] {
         return json(res, 200, { ok: true, data });
       }
 
-      // GET /announcement — 公告通告（双击词库助手弹窗实时拉取；未配置/失败回退内置文案）
+      // GET /announcement — 公告通告（双击词库助手弹窗读取；本地多语言，支持 lang 查询参数）
       if (method === "GET" && tail === "/announcement") {
-        const data = await getAnnouncement();
+        let lang = "zh";
+        try {
+          const raw = req.url ?? "";
+          const q = raw.includes("?") ? raw.slice(raw.indexOf("?") + 1) : "";
+          const params = new URLSearchParams(q);
+          const lv = params.get("lang");
+          if (lv) lang = lv;
+        } catch {
+          /* 解析失败忽略，默认 zh */
+        }
+        const data = getAnnouncement(lang);
         return json(res, 200, { ok: true, data });
       }
 

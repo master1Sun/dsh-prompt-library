@@ -241,14 +241,33 @@ export function getActivity(): Promise<ActivitySnapshot> {
 
 // ── 公告通告 ────────────────────────────────────────────────────────────
 
-/** 公告通告内容。source 为 remote 时 manual/notice 来自远程；builtin 表示回退内置。 */
-export interface AnnouncementData {
-  source: "remote" | "builtin";
-  manual?: string[];
-  notice?: string;
+/** 单版本更新条目（由 host 的 VERSION_NOTES 生成，按语言填充）。 */
+export interface VersionEntry {
+  /** 版本号。 */
+  version: string;
+  /** 发布日期 YYYY-MM-DD，可选。 */
+  date?: string;
+  /** 版本标题。 */
+  title: string;
+  /** 版本更新要点列表。 */
+  items: string[];
 }
 
-/** 拉取公告通告（双击词库助手弹窗时调用；未配置/失败时 host 回退内置文案）。 */
-export function getAnnouncement(): Promise<AnnouncementData> {
-  return send<AnnouncementData>("GET", "/api/prompt-library/announcement");
+/** 公告通告内容（全部为本地多语言数据，不再读取网络 JSON）。 */
+export interface AnnouncementData {
+  source: "local";
+  /** 生效语言（zh / en）。 */
+  lang: "zh" | "en";
+  /** 使用手册条目（key 对应 i18n 键，text 已按当前语言填充）。 */
+  manual: { key: string; text: string }[];
+  /** 版本更新说明（按版本倒序）。 */
+  versions: VersionEntry[];
+}
+
+/** 拉取公告通告（双击词库助手弹窗时调用；lang 传入浏览器/系统语言，内部归一化）。 */
+export function getAnnouncement(lang?: string): Promise<AnnouncementData> {
+  const url = lang
+    ? `/api/prompt-library/announcement?lang=${encodeURIComponent(lang)}`
+    : "/api/prompt-library/announcement";
+  return send<AnnouncementData>("GET", url);
 }

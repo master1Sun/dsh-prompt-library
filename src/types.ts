@@ -123,6 +123,8 @@ export interface PluginSettings {
   applyCharacterToChat: boolean;
   /** [实验室功能] 是否自动更新：开启后后台发现有新版本即自动安装，无需手动干预。 */
   autoUpdateEnabled: boolean;
+  /** 是否启用公告弹窗（双击词库助手弹出使用手册 + 版本通告）。仅当词库助手显示时可开关，默认开启。 */
+  announcementEnabled: boolean;
 }
 
 /** 设置的默认值。 */
@@ -148,4 +150,5 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   personTipDuration: 20, // 20 秒
   applyCharacterToChat: false,
   autoUpdateEnabled: true, // 自动更新默认开启：发现新版本后台自动安装
+  announcementEnabled: true, // 公告默认开启：双击词库助手展示使用手册与版本通告
 };

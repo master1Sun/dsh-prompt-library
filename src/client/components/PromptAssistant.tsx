@@ -575,7 +575,10 @@ export function PromptAssistant(props: Props): ReactNode {
         aria-label={T("pl.title")}
         onMouseDown={startPersonDrag}
         onDoubleClick={() => {
-          // 双击：取消未决的单击（避免先开合面板一次），打开公告弹窗
+          // 双击：仅当「显示公告」开关开启时才打开公告；
+          // 开启时取消未决的单击（避免先开合面板一次）。
+          const enabled = (settings?.announcementEnabled ?? DEFAULT_SETTINGS.announcementEnabled);
+          if (!enabled) return;
           pendingClickRef.current = false;
           if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
           clickTimerRef.current = null;

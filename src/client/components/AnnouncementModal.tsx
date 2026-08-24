@@ -1,18 +1,19 @@
 /**
  * 公告弹窗 — 双击词库助手时展示。
  *
- * 内容分两块：插件使用手册（要点列表）与通告（版本/更新说明）。
- * 通告内容实时读取：打开时若设置了远程公告地址（设置 → 公告通告），
- * 通过 host 接口拉取远程 manual/notice；失败或未配置时回退内置 i18n 文案。
+ * 内容分两块：
+ *  - 使用手册：插件核心能力要点（本地 i18n 文案，跟随系统语言切换）；
+ *  - 版本说明：仅展示最新一个版本的标题 + 更新要点；
+ *    数据来自 host/services/version-notes.ts（本地多语言），不再读取网络 JSON。
  * 与其它弹窗交互保持一致：只能通过右上角关闭按钮或底部「知道了」按钮关闭，
  * 禁止点击遮罩/外部区域关闭。
  */
-import { type CSSProperties, useEffect, useState, type ReactNode } from "react";
+import { type CSSProperties, useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { plBtn } from "../utils/button-style.js";
 import { type PLT } from "../i18n/i18n.js";
-import { getAnnouncement, type AnnouncementData } from "../services/api.js";
+import { getAnnouncement, type AnnouncementData, type VersionEntry } from "../services/api.js";
 
 const MONO =
   'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif)';
@@ -58,6 +59,21 @@ function CheckIcon(): ReactNode {
   );
 }
 
+/** 版本要点条目图标：小菱形点。 */
+function BulletIcon(): ReactNode {
+  return (
+    <svg
+      width="8"
+      height="8"
+      viewBox="0 0 8 8"
+      style={{ flexShrink: 0, color: TONE.accent, marginTop: 8 }}
+      aria-hidden="true"
+    >
+      <path d="M4 0 L8 4 L4 8 L0 4 Z" fill="currentColor" />
+    </svg>
+  );
+}
+
 interface Props {
   /** 是否显示。 */
   open: boolean;
@@ -67,7 +83,7 @@ interface Props {
   t: PLT;
 }
 
-/** 使用手册条目对应的 i18n 键（按顺序展示）。 */
+/** 使用手册对应的 i18n 键（按顺序展示），若 host 返回值缺失时回退使用。 */
 const MANUAL_KEYS = [
   "pl.announce.manual.0",
   "pl.announce.manual.1",
@@ -76,36 +92,47 @@ const MANUAL_KEYS = [
   "pl.announce.manual.4",
 ] as const;
 
-/** 居中遮罩公告弹窗：使用手册 + 通告。 */
+/** 归一化语言：zh / en。 */
+function currentLang(): "zh" | "en" {
+  const raw =
+    (typeof document !== "undefined" ? document.documentElement.lang : "") ||
+    (typeof navigator !== "undefined" ? navigator.language : "zh") ||
+    "zh";
+  return raw.toLowerCase().startsWith("en") ? "en" : "zh";
+}
+
+/** 居中遮罩公告弹窗：使用手册 + 版本通告。 */
 export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
-  // 远程通告内容：打开时拉取；拉取成功（source=remote）则用它覆盖展示
-  const [remote, setRemote] = useState<AnnouncementData | null>(null);
+  // 打开时拉取版本通告数据；传入浏览器/系统语言，host 返回对应语言的 manual 与 versions
+  const [data, setData] = useState<AnnouncementData | null>(null);
+  const lang = useMemo(() => currentLang(), [open]);
   useEffect(() => {
     if (!open) return;
     let alive = true;
-    setRemote(null); // 重新打开时先回退默认展示，再等远程返回
-    getAnnouncement()
-      .then((data) => {
-        if (alive) setRemote(data);
+    setData(null);
+    getAnnouncement(lang)
+      .then((res) => {
+        if (alive) setData(res);
       })
       .catch(() => {
-        /* 拉取失败保持默认展示 */
+        /* 拉取失败保持 null，使用本地 i18n 回退展示手册，通告为空 */
       });
     return () => {
       alive = false;
     };
-  }, [open]);
+  }, [open, lang]);
 
   if (!open) return null;
 
-  // 手册条目：远程提供 manual 时优先，否则回退内置 i18n
+  // 使用手册：优先 host 返回的 manual（已按语言翻译），缺失则用前端 i18n 回退
   const manualItems: string[] =
-    remote?.source === "remote" && remote.manual && remote.manual.length > 0
-      ? remote.manual
+    data?.manual && data.manual.length > 0
+      ? data.manual.map((m) => m.text).filter(Boolean)
       : MANUAL_KEYS.map((key) => t(key));
-  // 通告正文：远端有内容时显示内容，否则显示「暂无通告」
-  const noticeText: string =
-    remote?.source === "remote" && remote.notice ? remote.notice : t("pl.announce.noNotice");
+
+  // 通告版本：host 返回 versions（按版本倒序），仅展示最新一个
+  const latest: VersionEntry | null =
+    data?.versions && data.versions.length > 0 ? data.versions[0] : null;
 
   return createPortal(
     <div
@@ -125,9 +152,9 @@ export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: 520,
+          width: 560,
           maxWidth: "calc(100vw - 40px)",
-          maxHeight: "min(560px, calc(100vh - 40px))",
+          maxHeight: "min(640px, calc(100vh - 40px))",
           boxSizing: "border-box",
           display: "flex",
           flexDirection: "column",
@@ -197,24 +224,105 @@ export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
             </ul>
           </section>
 
-          {/* 通告 */}
+          {/* 版本说明（仅最新一个版本） */}
           <section>
             <div style={sectionTitleStyle}>{t("pl.announce.noticeTitle")}</div>
-            <div
-              style={{
-                fontSize: 12.5,
-                lineHeight: 1.7,
-                color: TONE.muted,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-                background: TONE.row,
-                border: `1px solid ${TONE.border}`,
-                borderRadius: 7,
-                padding: "9px 11px",
-              }}
-            >
-              {noticeText}
-            </div>
+            {!latest ? (
+              <div
+                style={{
+                  fontSize: 12.5,
+                  lineHeight: 1.7,
+                  color: TONE.quiet,
+                  background: TONE.row,
+                  border: `1px solid ${TONE.border}`,
+                  borderRadius: 7,
+                  padding: "9px 11px",
+                  fontStyle: "italic",
+                }}
+              >
+                {t("pl.announce.noNotice")}
+              </div>
+            ) : (
+              <div
+                style={{
+                  background: TONE.row,
+                  border: `1px solid ${TONE.border}`,
+                  borderRadius: 8,
+                  padding: "10px 12px",
+                }}
+              >
+                {/* 版本号 + 标题 + 日期行 */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "baseline",
+                    gap: 8,
+                    flexWrap: "wrap",
+                    marginBottom: 8,
+                  }}
+                >
+                  <span
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      padding: "2px 8px",
+                      borderRadius: 999,
+                      background: "rgba(142, 197, 255, 0.14)",
+                      color: TONE.accent,
+                      border: `1px solid ${TONE.border}`,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      lineHeight: 1.5,
+                      letterSpacing: 0.2,
+                    }}
+                  >
+                    v{latest.version}
+                  </span>
+                  <strong style={{ fontSize: 13, fontWeight: 600, color: TONE.text, flex: "1 1 auto" }}>
+                    {latest.title}
+                  </strong>
+                  {latest.date && (
+                    <span
+                      style={{
+                        fontSize: 11.5,
+                        color: TONE.quiet,
+                        fontWeight: 500,
+                      }}
+                    >
+                      {latest.date}
+                    </span>
+                  )}
+                </div>
+                {/* 版本要点列表 */}
+                <ul
+                  style={{
+                    margin: 0,
+                    padding: 0,
+                    listStyle: "none",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 6,
+                  }}
+                >
+                  {latest.items.map((item, i) => (
+                    <li
+                      key={i}
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: 8,
+                        fontSize: 12,
+                        lineHeight: 1.65,
+                        color: TONE.muted,
+                      }}
+                    >
+                      <BulletIcon />
+                      <span style={{ flex: 1 }}>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </section>
         </div>
 

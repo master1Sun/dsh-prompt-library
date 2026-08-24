@@ -170,6 +170,7 @@ function NumberRow({
   step,
   defaultValue,
   onChange,
+  disabled,
 }: {
   label: string;
   value: number;
@@ -178,6 +179,7 @@ function NumberRow({
   step: number;
   defaultValue?: number;
   onChange: (v: number) => void;
+  disabled?: boolean;
 }): ReactNode {
   // 把数值限制回 [min, max] 区间
   const clamp = (v: number): number => {
@@ -187,6 +189,7 @@ function NumberRow({
     return v;
   };
 
+  const dim = disabled ? 0.45 : 1;
   return (
     <label
       style={{
@@ -195,6 +198,8 @@ function NumberRow({
         alignItems: "center",
         gap: 12,
         padding: "8px 0",
+        cursor: disabled ? "not-allowed" : "default",
+        opacity: dim,
       }}
     >
       <span style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
@@ -207,7 +212,9 @@ function NumberRow({
         min={min}
         max={max}
         step={step}
+        disabled={disabled}
         onChange={(e) => {
+          if (disabled) return;
           const raw = e.target.value;
           if (raw === "") {
             // 清空时回退到默认值/最小值，避免输入框留空
@@ -219,7 +226,9 @@ function NumberRow({
           // 超过上限立即修正；低于下限留待失焦时修正（避免打断输入）
           onChange(num > max ? max : num);
         }}
-        onBlur={() => onChange(clamp(value))}
+        onBlur={() => {
+          if (!disabled) onChange(clamp(value));
+        }}
         style={{
           width: 80,
           padding: "4px 6px",
@@ -231,6 +240,7 @@ function NumberRow({
           fontSize: 12,
           textAlign: "center",
           outline: "none",
+          cursor: disabled ? "not-allowed" : "text",
         }}
       />
     </label>
@@ -244,21 +254,25 @@ function TextRow({
   placeholder,
   desc,
   onChange,
+  disabled,
 }: {
   label: string;
   value: string;
   placeholder?: string;
   desc?: string;
   onChange: (v: string) => void;
+  disabled?: boolean;
 }): ReactNode {
+  const dim = disabled ? 0.45 : 1;
   return (
-    <div style={{ padding: "8px 0" }}>
+    <div style={{ padding: "8px 0", opacity: dim }}>
       <label
         style={{
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
           gap: 12,
+          cursor: disabled ? "not-allowed" : "default",
         }}
       >
         <span style={{ fontSize: 13 }}>{label}</span>
@@ -266,7 +280,10 @@ function TextRow({
           type="text"
           value={value}
           placeholder={placeholder}
-          onChange={(e) => onChange(e.target.value)}
+          disabled={disabled}
+          onChange={(e) => {
+            if (!disabled) onChange(e.target.value);
+          }}
           style={{
             width: 120,
             padding: "4px 6px",
@@ -277,6 +294,7 @@ function TextRow({
             fontFamily: MONO,
             fontSize: 12,
             outline: "none",
+            cursor: disabled ? "not-allowed" : "text",
           }}
         />
       </label>
@@ -296,27 +314,34 @@ function SelectRow({
   options,
   onChange,
   desc,
+  disabled,
 }: {
   label: string;
   value: string;
   options: { value: string; label: string }[];
   onChange: (v: string) => void;
   desc?: string;
+  disabled?: boolean;
 }): ReactNode {
+  const dim = disabled ? 0.45 : 1;
   return (
-    <div style={{ padding: "8px 0" }}>
+    <div style={{ padding: "8px 0", opacity: dim }}>
       <label
         style={{
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
           gap: 12,
+          cursor: disabled ? "not-allowed" : "default",
         }}
       >
         <span style={{ fontSize: 13 }}>{label}</span>
         <select
           value={value}
-          onChange={(e) => onChange(e.target.value)}
+          disabled={disabled}
+          onChange={(e) => {
+            if (!disabled) onChange(e.target.value);
+          }}
           style={{
             width: 180,
             padding: "4px 6px",
@@ -327,6 +352,7 @@ function SelectRow({
             fontFamily: MONO,
             fontSize: 12,
             outline: "none",
+            cursor: disabled ? "not-allowed" : "pointer",
           }}
         >
           {options.map((opt) => (
@@ -498,61 +524,76 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           onChange={(v) => updateAndSave({ autoLearnEnabled: v })}
         />
 
-        {/* 手动确认开关（仅在自动学习开启时可用） */}
-        {draft.autoLearnEnabled && (
+        {/* 自动学习子项：保持缩进呈现父子层级；父开关关闭时只置灰，不改动真实保存值 */}
+        <div
+          style={{
+            marginLeft: 22,
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          {/* 手动确认开关 */}
           <ToggleRow
             label={T("pl.set.manualConfirm")}
             desc={T("pl.set.manualConfirmDesc")}
             checked={draft.autoLearnManualConfirm}
+            disabled={!draft.autoLearnEnabled}
             onChange={(v) => updateAndSave({ autoLearnManualConfirm: v })}
           />
-        )}
 
-        {/* 自动学习标签 */}
-        {draft.autoLearnEnabled && (
-          <div style={{ paddingLeft: 20 }}>
-            <TextRow
-              label={T("pl.set.autoLearnTag")}
-              value={draft.autoLearnTag}
-              placeholder="auto-learned"
-              onChange={(v) => updateAndSave({ autoLearnTag: v })}
-            />
-            <NumberRow
-              label={T("pl.set.minLength")}
-              value={draft.autoLearnMinLength}
-              min={20}
-              max={500}
-              step={10}
-              onChange={(v) => updateAndSave({ autoLearnMinLength: v })}
-            />
+          {/* 自动学习标签 + 最小长度 */}
+          <TextRow
+            label={T("pl.set.autoLearnTag")}
+            value={draft.autoLearnTag}
+            placeholder="auto-learned"
+            disabled={!draft.autoLearnEnabled}
+            onChange={(v) => updateAndSave({ autoLearnTag: v })}
+          />
+          <NumberRow
+            label={T("pl.set.minLength")}
+            value={draft.autoLearnMinLength}
+            min={20}
+            max={500}
+            step={10}
+            disabled={!draft.autoLearnEnabled}
+            onChange={(v) => updateAndSave({ autoLearnMinLength: v })}
+          />
 
-            {/* AI 智能完善开关（仅在自动学习开启时可用） */}
-            <ToggleRow
-              label={T("pl.set.aiEnrich")}
-              desc={T("pl.set.aiEnrichDesc")}
-              checked={draft.aiEnrichEnabled}
-              onChange={(v) => updateAndSave({ aiEnrichEnabled: v })}
+          {/* AI 智能完善（自动学习的二级父开关） */}
+          <ToggleRow
+            label={T("pl.set.aiEnrich")}
+            desc={T("pl.set.aiEnrichDesc")}
+            checked={draft.aiEnrichEnabled}
+            disabled={!draft.autoLearnEnabled}
+            onChange={(v) => updateAndSave({ aiEnrichEnabled: v })}
+          />
+
+          {/* AI 智能完善子项（Provider / Model）：AI 关闭或自动学习关闭都会置灰 */}
+          <div
+            style={{
+              marginLeft: 22,
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <SelectRow
+              label={T("pl.set.aiProvider")}
+              value={draft.aiProvider}
+              options={providerOptions}
+              desc={T("pl.set.aiProviderDesc")}
+              disabled={!draft.autoLearnEnabled || !draft.aiEnrichEnabled}
+              onChange={(v) => updateAndSave({ aiProvider: v })}
             />
-            {draft.aiEnrichEnabled && (
-              <div style={{ paddingLeft: 20 }}>
-                <SelectRow
-                  label={T("pl.set.aiProvider")}
-                  value={draft.aiProvider}
-                  options={providerOptions}
-                  desc={T("pl.set.aiProviderDesc")}
-                  onChange={(v) => updateAndSave({ aiProvider: v })}
-                />
-                <SelectRow
-                  label={T("pl.set.aiModel")}
-                  value={draft.aiModel}
-                  options={modelOptions}
-                  desc={T("pl.set.aiModelDesc")}
-                  onChange={(v) => updateAndSave({ aiModel: v })}
-                />
-              </div>
-            )}
+            <SelectRow
+              label={T("pl.set.aiModel")}
+              value={draft.aiModel}
+              options={modelOptions}
+              desc={T("pl.set.aiModelDesc")}
+              disabled={!draft.autoLearnEnabled || !draft.aiEnrichEnabled}
+              onChange={(v) => updateAndSave({ aiModel: v })}
+            />
           </div>
-        )}
+        </div>
       </ModuleCard>
 
       {/* 分类模块二：面板显示 */}
@@ -614,22 +655,38 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
         open={openDisplay}
         onToggle={() => setOpenDisplay((v) => !v)}
       >
-        {/* 词库助手显隐（主开关；关闭时右侧面板随之关闭且不可选） */}
+        {/* 词库助手显隐（主开关；关闭时子项仅灰显，不改动用户保存的值，重新打开时恢复） */}
         <ToggleRow
           label={T("pl.set.assistant")}
           desc={T("pl.set.assistantDesc")}
           checked={draft.assistantEnabled}
-          onChange={(v) =>
-            updateAndSave({ assistantEnabled: v, ...(v ? {} : { rightPanelEnabled: false }) })
-          }
+          onChange={(v) => updateAndSave({ assistantEnabled: v })}
         />
-        <ToggleRow
-          label={T("pl.set.rightPanel")}
-          desc={T("pl.set.rightPanelDesc")}
-          checked={draft.rightPanelEnabled}
-          disabled={!draft.assistantEnabled}
-          onChange={(v) => updateAndSave({ rightPanelEnabled: v })}
-        />
+        {/* 词库助手子项：通过缩进呈现父子层级，不额外绘制连接线 */}
+        <div
+          style={{
+            marginLeft: 22,
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          {/* 公告控制：仅当词库助手显示时可开关，默认开启；关闭后双击词库助手不再弹出公告 */}
+          <ToggleRow
+            label={T("pl.set.announcement")}
+            desc={T("pl.set.announcementDesc")}
+            checked={draft.announcementEnabled}
+            disabled={!draft.assistantEnabled}
+            onChange={(v) => updateAndSave({ announcementEnabled: v })}
+          />
+          {/* 工具面板：仅当词库助手显示时可开关；关闭词库助手仅灰显，不改动真实保存值 */}
+          <ToggleRow
+            label={T("pl.set.rightPanel")}
+            desc={T("pl.set.rightPanelDesc")}
+            checked={draft.rightPanelEnabled}
+            disabled={!draft.assistantEnabled}
+            onChange={(v) => updateAndSave({ rightPanelEnabled: v })}
+          />
+        </div>
         <ToggleRow
           label={T("pl.set.showComposerBtn")}
           desc={T("pl.set.showComposerBtnDesc")}
@@ -721,25 +778,61 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
                 )}
               </div>
               {updateInfo.hasUpdate && (
-                <div>
-                  <button
-                    type="button"
-                    onClick={handleApplyUpdate}
-                    disabled={updating}
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div>
+                    <button
+                      type="button"
+                      onClick={handleApplyUpdate}
+                      disabled={updating}
+                      style={{
+                        padding: "5px 12px",
+                        fontSize: 12,
+                        fontWeight: 600,
+                        color: "#fff",
+                        background: "var(--dsw-alias-brand-primary, #8ec5ff)",
+                        border: "none",
+                        borderRadius: 5,
+                        opacity: updating ? 0.65 : 1,
+                        cursor: updating ? "default" : "pointer",
+                      }}
+                    >
+                      {updating ? T("pl.set.updating") : T("pl.set.updateNow")}
+                    </button>
+                  </div>
+                  {/* 更新前置提醒：更新安装后必须重启 dsh web 才会加载新版本 */}
+                  <div
+                    role="note"
                     style={{
-                      padding: "5px 12px",
-                      fontSize: 12,
-                      fontWeight: 600,
-                      color: "#fff",
-                      background: "var(--dsw-alias-brand-primary, #8ec5ff)",
-                      border: "none",
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: 6,
+                      padding: "6px 9px",
                       borderRadius: 5,
-                      opacity: updating ? 0.65 : 1,
-                      cursor: updating ? "default" : "pointer",
+                      background: "rgba(245, 158, 11, 0.1)",
+                      border: `1px solid ${TONE.border}`,
+                      color: TONE.muted,
+                      fontSize: 11,
+                      lineHeight: 1.55,
                     }}
                   >
-                    {updating ? T("pl.set.updating") : T("pl.set.updateNow")}
-                  </button>
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 16 16"
+                      style={{ flexShrink: 0, marginTop: 1, color: "var(--dsw-alias-state-warning-primary, #f59e0b)" }}
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M8 2L1.5 13h13L8 2zM8 7v3M8 12.5v.5"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                    <span>{T("pl.set.updateRequireRestartHint")}</span>
+                  </div>
                 </div>
               )}
             </div>
@@ -750,21 +843,29 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             <div
               style={{
                 display: "flex",
-                alignItems: "center",
-                gap: 6,
-                fontSize: 12,
-                fontWeight: 500,
-                color: updateMsg.ok ? TONE.success : TONE.red,
-                lineHeight: 1.5,
+                flexDirection: "column",
+                gap: 8,
+                alignItems: "flex-start",
               }}
             >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 16 16"
-                style={{ flexShrink: 0 }}
-                aria-hidden="true"
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontSize: 12,
+                  fontWeight: 500,
+                  color: updateMsg.ok ? TONE.success : TONE.red,
+                  lineHeight: 1.5,
+                }}
               >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 16 16"
+                  style={{ flexShrink: 0 }}
+                  aria-hidden="true"
+                >
                 {updateMsg.ok ? (
                   <path
                     d="M3 8.5l3.2 3.2L13 4.8"
@@ -785,6 +886,52 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
                 )}
               </svg>
               <span>{updateMsg.text}</span>
+              </div>
+              {/* 更新成功后显著提示：必须重启 dsh web 才会加载新版本代码 */}
+              {updateMsg.ok && (
+                <div
+                  role="alert"
+                  style={{
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: 8,
+                    padding: "10px 12px",
+                    borderRadius: 7,
+                    background:
+                      "linear-gradient(180deg, rgba(59, 130, 246, 0.08) 0%, rgba(59, 130, 246, 0.03) 100%)",
+                    border: "1px solid var(--dsw-alias-state-info-primary, rgba(59, 130, 246, 0.35))",
+                    color: TONE.text,
+                    fontSize: 12,
+                    lineHeight: 1.6,
+                  }}
+                >
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 16 16"
+                    style={{
+                      flexShrink: 0,
+                      marginTop: 1,
+                      color: "var(--dsw-alias-state-info-primary, #3b82f6)",
+                    }}
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M8 1.5A6.5 6.5 0 1 1 8 14.5 6.5 6.5 0 0 1 8 1.5zm0 2a.9.9 0 1 0 0 1.8.9.9 0 0 0 0-1.8zM6.5 7.5a.8.8 0 1 0 1.6 0V7a.8.8 0 0 0-1.6 0v.5zM7.2 6a.8.8 0 0 1 1.6 0v3.2a.8.8 0 0 1-1.6 0V6z"
+                      fill="currentColor"
+                    />
+                  </svg>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                    <strong style={{ fontSize: 12, fontWeight: 600 }}>
+                      {T("pl.set.updateSuccessRestartTitle")}
+                    </strong>
+                    <span style={{ color: TONE.muted, fontSize: 11.5 }}>
+                      {T("pl.set.updateSuccessRestartHint")}
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -854,6 +1001,47 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           </svg>
           <span>github.com/master1Sun/dsh-prompt-library</span>
         </a>
+
+        {/* 版权信息（通用格式：© 年份 作者 · All rights reserved · License MIT · 免责声明） */}
+        <div
+          aria-label="版权信息"
+          style={{
+            width: "100%",
+            marginTop: 8,
+            paddingTop: 12,
+            borderTop: `1px dashed ${TONE.border}`,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 4,
+            color: TONE.quiet,
+            fontSize: 11,
+            lineHeight: 1.55,
+            textAlign: "center",
+            fontFamily: MONO,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
+            <span>© {new Date().getFullYear()} master1Sun</span>
+            <span aria-hidden="true">·</span>
+            <span>All rights reserved</span>
+            <span aria-hidden="true">·</span>
+            <span style={{
+              display: "inline-flex",
+              alignItems: "center",
+              padding: "1px 6px",
+              borderRadius: 4,
+              background: TONE.row,
+              border: `1px solid ${TONE.border}`,
+              fontWeight: 600,
+              letterSpacing: 0.3,
+              color: TONE.muted,
+            }}>MIT</span>
+          </div>
+          <div>
+            {T("pl.footer.disclaimer")}
+          </div>
+        </div>
       </footer>
     </div>
   );

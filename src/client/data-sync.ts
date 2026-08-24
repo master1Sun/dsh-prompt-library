@@ -19,17 +19,20 @@ export function notifyDataChanged(): void {
 const SSE_URL = "/api/prompt-library/events";
 
 let subscribed = false;
+let esRef: EventSource | null = null;
 
 /**
  * 建立一次到 host 的 SSE 订阅，把 `data-changed` 事件翻译成已有的
  * `pl:data-changed` window 事件。host 侧改动（如 `/prompts` 保存）也能让
- * 所有打开的面板即时刷新。只允许在浏览器端调用一次。
+ * 所有打开的面板即时刷新。只允许在浏览器端调用一次；连接断开由 EventSource
+ * 自动重连；页面卸载或首次建立失败时释放引用，允许后续重新订阅。
  */
 export function startDataChangedSubscription(): void {
   if (subscribed || typeof window === "undefined" || typeof EventSource === "undefined") return;
   subscribed = true;
   try {
     const es = new EventSource(SSE_URL);
+    esRef = es;
     es.addEventListener("data-changed", () => notifyDataChanged());
     // host 侧 `/prompts -AI` 推送的润色正文：转发给填充监听的组件。
     es.addEventListener("fill-draft", (ev) => {
@@ -71,10 +74,25 @@ export function startDataChangedSubscription(): void {
         window.dispatchEvent(new CustomEvent(EXPORT_DOWNLOADED_EVENT, { detail: { count } }));
       }
     });
-    // 连接断开由 EventSource 自动重连；无需手动处理。
+    // 插件热重载/页面卸载前关闭连接，避免 EventSource 泄漏
+    const onUnload = () => {
+      es.close();
+      esRef = null;
+      subscribed = false;
+    };
+    window.addEventListener("beforeunload", onUnload, { once: true });
   } catch {
-    /* 忽略：个别环境不支持注入时降级为手动刷新。 */
+    // 个别环境不支持注入时降级为手动刷新；重置标志，后续有机会可重试订阅
+    subscribed = false;
+    esRef = null;
   }
+}
+
+/** 主动关闭并释放 SSE 订阅连接（页面卸载时由外部调用，防止泄漏）。 */
+export function disposeDataChangedSubscription(): void {
+  esRef?.close();
+  esRef = null;
+  subscribed = false;
 }
 
 /** 订阅数据变化事件：任一组件增删改后都会触发 reload。 */

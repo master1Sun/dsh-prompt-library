@@ -5,7 +5,7 @@
  * 让用户为每个变量输入值，确认后用填充后的正文替换占位符。
  * 由侧边栏 / 聊天面板两个插入入口共享使用。
  */
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { plBtn } from "./button-style.js";
 import { type PLT } from "./i18n.js";
@@ -52,27 +52,76 @@ export function hasVariables(body: string): boolean {
   return /\{\{\s*[^{}]+\s*\}\}/.test(body);
 }
 
-/** 高亮样式：把已填入的变量值用主题品牌色弱底标出，未填的占位符用弱色保留。 */
-const HL_STRONG = {
-  background: "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 22%, transparent)",
-  color: "var(--dsw-alias-label-primary, #f2f6fc)",
-  borderRadius: 4,
-  padding: "0 2px",
-  fontWeight: 550,
-} as const;
+/** 每个变量名分配一个独立颜色的色板（深色面板上可辨识的明亮色）。 */
+const VAR_PALETTE = [
+  "#f2a73b", // 橙
+  "#6bb7f0", // 蓝
+  "#b58eff", // 紫
+  "#5ee0a8", // 绿
+  "#ff7a8a", // 玫红
+  "#f5d76e", // 黄
+  "#8fd0ff", // 浅蓝
+  "#ff9e6f", // 浅橙
+  "#a8e063", // 黄绿
+  "#ff6fb5", // 粉
+  "#4fd8f0", // 青
+  "#ffd34d", // 亮黄
+  "#7af5a0", // 薄荷
+  "#ff8fa7", // 浅玫
+  "#58c9ff", // 天蓝
+  "#e8b0ff", // 淡紫
+  "#6bf0d0", // 青绿
+  "#ffcb6b", // 香槟
+] as const;
 
-const HL_PLACEHOLDER = {
-  background: "transparent",
-  color: TONE.accent,
-  borderRadius: 4,
-  padding: "0 2px",
-} as const;
+/** 按变量在列表中的序号取对应颜色（循环使用色板）。
+ * 变量数超过色板数量时，用黄金角在色相环上均匀取样生成新色，
+ * 保证变量再多时相邻颜色依然可辨识、不重复。 */
+function varColor(index: number): string {
+  if (index < VAR_PALETTE.length) return VAR_PALETTE[index]!;
+  // 黄金角 ≈ 137.508°：相邻取样的色相间隔最大，随序号递增稳定错开
+  const hue = (index * 137.508) % 360;
+  return `hsl(${hue.toFixed(0)}, 72%, 66%)`;
+}
+
+/** 已填入值的强高亮样式：以该变量色弱底标出，文字保持明亮可读。
+ * active 为 true（该变量输入框当前被聚焦）时底更深并加投光，突出对应文字。 */
+function hlStrong(color: string, active: boolean): CSSProperties {
+  return {
+    background: `color-mix(in srgb, ${color} ${active ? 32 : 22}%, transparent)`,
+    color: "var(--dsw-alias-label-primary, #f2f6fc)",
+    borderRadius: 4,
+    padding: "0 2px",
+    fontWeight: 550,
+    boxShadow: active ? `0 0 0 1px ${color}, 0 0 0 3px color-mix(in srgb, ${color} 30%, transparent)` : "none",
+  };
+}
+
+/** 未填入值的占位符高亮样式：用该变量色直接标出文字。
+ * active 时描边加厚、底色加深，突出该占位符。 */
+function hlPlaceholder(color: string, active: boolean): CSSProperties {
+  return {
+    background: `color-mix(in srgb, ${color} ${active ? 20 : 12}%, transparent)`,
+    color,
+    border: `1px solid color-mix(in srgb, ${color} ${active ? 78 : 45}%, transparent)`,
+    borderRadius: 4,
+    padding: "0 2px",
+    boxShadow: active ? `0 0 0 2px color-mix(in srgb, ${color} 26%, transparent)` : "none",
+  };
+}
 
 /**
- * 实时预览正文：把 `{{变量}}` 替换为已填值，并将填入内容高亮标出；
- * 未填写的变量保留原占位符（用品牌色提示）。
+ * 实时预览正文：每个变量按其序号对应一种颜色。
+ * 已填写的变量 → 填入值以该变量色弱底高亮；未填写的 → 占位符以同一变量色标出，
+ * 让用户一眼看出「这个颜色对应哪个变量」。
+ * focusName 指向当前聚焦的变量输入框：该变量在预览中的文字会更强高亮（加深+投光）。
  */
-function renderPreview(body: string, values: Record<string, string>): ReactNode[] {
+function renderPreview(
+  body: string,
+  values: Record<string, string>,
+  colorOf: (name: string) => string,
+  focusName: string | null,
+): ReactNode[] {
   const re = /\{\{\s*([^{}]+?)\s*\}\}/g;
   const nodes: ReactNode[] = [];
   let last = 0;
@@ -81,17 +130,19 @@ function renderPreview(body: string, values: Record<string, string>): ReactNode[
   while ((m = re.exec(body)) !== null) {
     if (m.index > last) nodes.push(body.slice(last, m.index));
     const name = m[1]!.trim();
+    const color = colorOf(name);
+    const active = name === focusName; // 该变量的输入框当前被聚焦 → 更强高亮
     const val = Object.prototype.hasOwnProperty.call(values, name) ? values[name] ?? "" : "";
     if (val && val.trim()) {
       nodes.push(
-        <span key={`f${key++}`} style={HL_STRONG} title={`{{${name}}}`}>
+        <span key={`f${key++}`} style={hlStrong(color, active)} title={`{{${name}}}`}>
           {val}
         </span>,
       );
     } else {
-      // 占位符原样保留，但用品牌色突显，提示此处可被替换
+      // 占位符原样保留，但用该变量对应的颜色突显，提示此处可被替换
       nodes.push(
-        <span key={`p${key++}`} style={HL_PLACEHOLDER}>
+        <span key={`p${key++}`} style={hlPlaceholder(color, active)}>
           {`{{${name}}}`}
         </span>,
       );
@@ -204,10 +255,17 @@ export function TemplateFillModal({
   t,
 }: Props): ReactNode {
   const [values, setValues] = useState<Record<string, string>>({});
+  // 当前获得焦点的变量名（用于输入框聚焦时以该变量色描边）
+  const [focusName, setFocusName] = useState<string | null>(null);
   // 每次打开时重置表单，并预填同名变量的历史记忆（变量填充记忆能力）
   useEffect(() => {
     if (open) setValues(pickVarMemory(variables));
   }, [open, variables]);
+  // 按变量在列表中的位置分配颜色：输入行标签、输入框描边、预览高亮使用同一变量色
+  const colorOf = useCallback(
+    (name: string) => varColor(Math.max(0, variables.indexOf(name))),
+    [variables],
+  );
 
   if (!open) return null;
 
@@ -269,38 +327,53 @@ export function TemplateFillModal({
             gap: 10,
           }}
         >
-          {variables.map((name) => (
-            <label
-              key={name}
-              style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted, flexShrink: 0 }}
-            >
-              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span
-                  style={{
-                    fontSize: 11,
-                    color: TONE.accent,
-                    background: "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 14%, transparent)",
-                    borderRadius: 5,
-                    padding: "0 6px",
-                    lineHeight: "18px",
-                  }}
-                >
-                  {`{{${name}}}`}
+          {variables.map((name) => {
+            const color = colorOf(name); // 每个变量只取一次颜色
+            const focused = focusName === name;
+            return (
+              <label
+                key={name}
+                style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted, flexShrink: 0 }}
+              >
+                <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      color,
+                      background: `color-mix(in srgb, ${color} 14%, transparent)`,
+                      border: `1px solid color-mix(in srgb, ${color} 40%, transparent)`,
+                      borderRadius: 5,
+                      padding: "0 6px",
+                      lineHeight: "18px",
+                    }}
+                  >
+                    {`{{${name}}}`}
+                  </span>
                 </span>
-              </span>
-              <input
-                autoFocus
-                value={values[name] ?? ""}
-                onChange={(e) => setValues((prev) => ({ ...prev, [name]: e.target.value }))}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") submit();
-                  if (e.key === "Escape") onCancel();
-                }}
-                placeholder={name}
-                style={inputStyle}
-              />
-            </label>
-          ))}
+                <input
+                  autoFocus
+                  value={values[name] ?? ""}
+                  onChange={(e) => setValues((prev) => ({ ...prev, [name]: e.target.value }))}
+                  onFocus={() => setFocusName(name)}
+                  onBlur={() => setFocusName((cur) => (cur === name ? null : cur))}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") submit();
+                    if (e.key === "Escape") onCancel();
+                  }}
+                  placeholder={name}
+                  style={{
+                    ...inputStyle,
+                    // 左侧用变量色做点缀条，聚焦时整框以该变量色描边 + 淡色投光，强化当前操作对象
+                    borderLeft: `3px solid ${color}`,
+                    borderColor: focused ? color : TONE.border,
+                    boxShadow: focused ? `0 0 0 3px color-mix(in srgb, ${color} 18%, transparent)` : "none",
+                    background: focused ? `color-mix(in srgb, ${color} 6%, ${TONE.row})` : TONE.row,
+                    transition: "border-color .18s, box-shadow .18s, background .18s",
+                  }}
+                />
+              </label>
+            );
+          })}
         </div>
         {/* 实时预览：随输入即时替换 {{变量}}，高亮已填入内容 */}
         <div
@@ -329,7 +402,7 @@ export function TemplateFillModal({
               fontFamily: MONO,
             }}
           >
-            {renderPreview(body, values)}
+            {renderPreview(body, values, colorOf, focusName)}
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingTop: 6, flexShrink: 0 }}>

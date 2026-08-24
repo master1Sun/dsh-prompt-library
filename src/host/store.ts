@@ -42,6 +42,8 @@ function getDb(): DatabaseSync {
   const path = dbPath();
   mkdirSync(dirname(path), { recursive: true });
   const next = new DatabaseSync(path);
+  // WAL 提升并发读写健壮性；busy_timeout 让短时锁等待自动重试而非立刻报错
+  next.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
   next.exec(`
     CREATE TABLE IF NOT EXISTS prompts (
       id           TEXT PRIMARY KEY,
@@ -583,8 +585,8 @@ export function createPrompt(input: {
          VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)`,
       )
       .run(prompt.id, prompt.title, prompt.body, tagsToJson(prompt.tags), now, 0, 0, now);
-    const settings = getSettingsSync();
-    void enforceMaxCount(settings.maxPromptCount);
+    // 用用户配置的真实上限做后台淘汰（getSettingsSync 只回默认值）
+    void getSettings().then((s) => enforceMaxCount(s.maxPromptCount));
     return Promise.resolve(prompt);
   } catch (e) {
     return Promise.reject(e);
@@ -746,8 +748,8 @@ export function autoLearn(body: string, tag?: string, skipEnrich?: boolean): Pro
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(prompt.id, prompt.title, prompt.body, tagsToJson(prompt.tags), prompt.aiRefined ? 1 : 0, now, 0, 0, now);
-    const settings = getSettingsSync();
-    void enforceMaxCount(settings.maxPromptCount);
+    // 用用户配置的真实上限做后台淘汰（getSettingsSync 只回默认值）
+    void getSettings().then((s) => enforceMaxCount(s.maxPromptCount));
     void continueEnrich(prompt, !!skipEnrich);
     emitDataChanged();
     return Promise.resolve(prompt);
@@ -1499,13 +1501,6 @@ async function readSettingsRaw(): Promise<PluginSettings> {
 
 export function getSettings(): Promise<PluginSettings> {
   return readSettingsRaw();
-}
-
-/** 同步读取设置（供创建/自动学习内部快速获取不阻塞）。 */
-function getSettingsSync(): PluginSettings {
-  // 同步路径下无法可靠读 yaml，这里直接返回默认值；
-  // enforceMaxCount 是后台淘汰，用默认上限足够，不影响主逻辑。
-  return { ...DEFAULT_SETTINGS };
 }
 
 /**

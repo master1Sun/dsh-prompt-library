@@ -183,14 +183,16 @@ export function genIntro(lang: "zh" | "en"): Promise<{ lines: string[] }> {
   return send<{ lines: string[] }>("POST", "/api/prompt-library/ai/intro", { lang });
 }
 
-/** 版本检查结果：当前版本、npm registry 最新版本、是否有更新。 */
+/** 版本检查结果：当前版本、npm 正式版最新、GitHub 测试版、是否有更新。 */
 export interface UpdateInfo {
   current: string;
   latest: string;
   hasUpdate: boolean;
+  betaLatest: string;
+  hasBeta: boolean;
 }
 
-/** 检查插件是否有新版本（host 侧含缓存；失败时 hasUpdate 为 false）。 */
+/** 检查插件是否有新版本（host 侧含缓存；双源都失败时 hasUpdate/hasBeta 为 false）。 */
 export function getUpdate(): Promise<UpdateInfo> {
   return send<UpdateInfo>("GET", "/api/prompt-library/update");
 }

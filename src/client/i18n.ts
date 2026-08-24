@@ -118,7 +118,7 @@ export const zh = {
   "pl.importConfirm": "导入会把备份内容合并到当前词库（同 ID 覆盖），确定继续？",
   "pl.confirm": "确定",
   "pl.imported": "导入完成：新增 {imported}、更新 {updated}、跳过 {skipped}",
-  "pl.update.detected": "发现新版本",
+  "pl.update.detected": "有新的测试版，点击更新",
   "pl.update.updating": "更新中…",
   "pl.importFail": "导入失败：{err}",
 
@@ -323,7 +323,7 @@ export const en: Record<keyof typeof zh, string> = {
   "pl.importConfirm": "Importing merges the backup into the current library (same ID is overwritten). Continue?",
   "pl.confirm": "OK",
   "pl.imported": "Import done: {imported} added, {updated} updated, {skipped} skipped",
-  "pl.update.detected": "New version available",
+  "pl.update.detected": "New beta available, click to update",
   "pl.update.updating": "Updating…",
   "pl.importFail": "Import failed: {err}",
 

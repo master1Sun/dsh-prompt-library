@@ -242,7 +242,8 @@ export function PromptAssistant(props: Props): ReactNode {
     T("pl.intro.4"),
   ]);
 
-  // 新版本检查结果；null 表示尚未查或查询失败（host 侧失败会返回 hasUpdate=false）
+  // 新版本检查结果；null 表示尚未查或查询失败（host 侧失败会返回 hasUpdate=false）。
+  // 红点仅代表「有新的测试版」（GitHub 领先 npm）；正式版更新由 host 后台静默升级。
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   // 「红点点击更新」状态：执行中红点变灰、停止动画；结果不在气泡框展示
   const [updating, setUpdating] = useState(false);
@@ -251,8 +252,8 @@ export function PromptAssistant(props: Props): ReactNode {
     setUpdating(true);
     applyUpdate()
       .then((r) => {
-        // 更新成功：最新版本已安装，红点提示失效，隐藏红点；失败则保留红点以便重试
-        if (r?.ok) setUpdate((prev) => (prev ? { ...prev, hasUpdate: false } : prev));
+        // 更新成功：测试版已安装，红点提示失效，隐藏红点；失败则保留红点以便重试
+        if (r?.ok) setUpdate((prev) => (prev ? { ...prev, hasBeta: false } : prev));
       })
       .catch(() => {
         /* 静默处理；红点仅作状态反馈，不在气泡框展示结果 */
@@ -452,8 +453,8 @@ export function PromptAssistant(props: Props): ReactNode {
     };
   }, [settings?.personTipInterval, settings?.personTipDuration]);
 
-  // 新版本提示文案（有更新时非空，文案走 i18n 国际化）
-  const updateText = update?.hasUpdate ? T("pl.update.detected") : "";
+  // 新版本提示文案（有测试版时非空，文案走 i18n 国际化）
+  const updateText = update?.hasBeta ? T("pl.update.detected") : "";
 
   return (
     <>
@@ -633,7 +634,7 @@ export function PromptAssistant(props: Props): ReactNode {
         </div>
         {/* 有新版本时：小人右上角挂一个红色呼吸徽标（「新版本」动画提示）。
             点击该红点即执行插件更新；阻断 mousedown 冒泡，避免误触小人的拖动/切面板。 */}
-        {update?.hasUpdate && (
+        {update?.hasBeta && (
           <span
             role="button"
             aria-label={updating ? T("pl.update.updating") : updateText}

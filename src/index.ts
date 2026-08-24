@@ -31,6 +31,7 @@ import {
 } from "./host/ai.js";
 import { soulSystemSync, ensureSoulFile, shouldInjectChatCharacter } from "./host/character.js";
 import { ensureHarnessFile, harnessSystemSync } from "./host/harness.js";
+import { autoUpdateDaily } from "./host/update.js";
 // 操作手册：纯文本字符串，聊天消息按纯文本渲染（markdown/HTML 都无法解析），用换行符排版
 import { manualEn, manualZh } from "./manual.js";
 
@@ -87,6 +88,185 @@ function buildUnknownFlag(lang: "zh" | "en"): string {
     return lang === "zh" ? `${flags} ${s.zh}` : `${flags} ${s.en}`;
   });
   return `${prefix}${parts.join(" / ")}`;
+}
+
+/** `/prompts` 命令实际输出文案的聚合格式函数（-s / -e / -data 等）。 */
+interface FmtCopy {
+  searchLine: (i: number, title: string, tag: string, usage: string, summary: string) => string;
+  matchCount: (n: number) => string;
+  summaryPrefix: (s: string) => string;
+  dataHeader: string;
+  dataTotal: (n: number) => string;
+  dataTotalUsage: (n: number) => string;
+  dataUsed: (used: number, unused: number, pct: number) => string;
+  dataTop: (n: number) => string;
+  dataTopItem: (title: string, count: number) => string;
+  dataNoUsage: string;
+  dataRecent: (titles: string) => string;
+  dataTagDist: (part: string) => string;
+  dataNoTags: string;
+  dataTrash: (n: number) => string;
+  dataUsageVitality: (used7: number, used30: number) => string;
+  dataSleeping: (items: Array<{ title: string; days: number }>) => string;
+  dataBodyStats: (total: number, avg: number) => string;
+  dataAiRefined: (count: number, pct: number) => string;
+  dataAddedTrend: (added7: number, added30: number) => string;
+  aiComment: string;
+  historyHeader: (date: string) => string;
+  historyRange: (from: string, to: string) => string;
+  historyAdded: (n: number) => string;
+  historyAddedTitles: (titles: string) => string;
+  historyUsage: (count: number, usedCount: number) => string;
+  historyTop: (n: number) => string;
+  historyTopItem: (title: string, count: number) => string;
+  historyAiRefined: (n: number) => string;
+  historyNone: string;
+  exportDownloaded: (n: number) => string;
+  exportTextHeader: (n: number) => string;
+}
+
+/** `/prompts` 命令的全部可译文案（元数据 + 输出格式）。 */
+export interface Copy {
+  description: string;
+  hint: string;
+  cmdExamples: string;
+  unknownFlag: string;
+  saved: string;
+  failed: string;
+  addEmpty: string;
+  tagEmpty: string;
+  searchEmpty: string;
+  searchUsage: string;
+  exportEmpty: string;
+  aiNoInput: string;
+  aiUnavailable: string;
+  aiDone: string;
+  enrichNoInput: string;
+  enrichFailed: string;
+  enrichDone: string;
+  help: string;
+  fmt: FmtCopy;
+}
+
+/**
+ * 按语言构建 `/prompts` 命令的中/英文案。
+ *
+ * 返回类型统一为 `Copy`：新增/删除任一字段时，TypeScript 会强制两分支同步修改，
+ * 避免中英文案「改漏一边」导致结构不一致。
+ */
+function buildCopy(lang: "zh" | "en"): Copy {
+  const isZh = lang === "zh";
+  return isZh
+    ? {
+        description: "保存/优化/完善提示词，并输出词库统计",
+        hint: "输入命令或要保存/处理的正文，直接输入 /prompts 可查看命令示例",
+        cmdExamples: buildCmdExamples("zh"),
+        unknownFlag: buildUnknownFlag("zh"),
+        saved: "已保存到词库",
+        failed: "操作失败",
+        addEmpty: "请在 -add 后输入要保存的正文",
+        tagEmpty: "用法：/prompts -tag <标签> <正文>",
+        searchEmpty: "未找到匹配的提示词",
+        searchUsage: "用法：/prompts -s <关键词>（检索词库，支持大小写不敏感）",
+        exportEmpty: "词库为空，无内容可导出",
+        aiNoInput: "请在 -AI 后输入要优化的正文",
+        aiUnavailable: "AI 服务不可用，无法处理",
+        aiDone: "已 AI 优化完成，请复制下方内容：",
+        enrichNoInput: "请在 -enrich 后输入要完善的正文",
+        enrichFailed: "AI 完善失败",
+        enrichDone: "已 AI 专业完善（扩写，与 -AI 相反），请复制下方内容：",
+        help: manualZh,
+        // 命令实际输出文案（-s / -e / -data 等），避免英文环境仍输出中文
+        fmt: {
+          searchLine: (i, title, tag, usage, summary) => `${i}. ${title}${tag}（使用${usage}次）${summary}`,
+          matchCount: (n) => `匹配 ${n} 条：`,
+          summaryPrefix: (s) => `\n   摘要：${s}`,
+          dataHeader: "词库数据统计：",
+          dataTotal: (n) => `- 提示词总数：${n}`,
+          dataTotalUsage: (n) => `- 累计使用次数：${n}`,
+          dataUsed: (used, unused, pct) => `- 曾使用 / 从未使用：${used} / ${unused}（使用率 ${pct}%）`,
+          dataTop: (n) => `- 最常用 Top ${n}：`,
+          dataTopItem: (title, count) => `    ${title}（${count}次）`,
+          dataNoUsage: "- 尚无使用记录",
+          dataRecent: (titles) => `- 最近使用：${titles}`,
+          dataTagDist: (part) => `- 标签分布：${part}`,
+          dataNoTags: "- 暂无标签",
+          dataTrash: (n) => `- 回收站条数：${n}`,
+          dataUsageVitality: (used7, used30) => `- 复用活力：近7天 ${used7} 条，近30天 ${used30} 条`,
+          dataSleeping: (items) => `- 沉睡提示词：${items.map((i) => `${i.title}（${i.days}天）`).join("、")}`,
+          dataBodyStats: (total, avg) => `- 正文体量：共 ${total} 字，平均每条 ${avg} 字`,
+          dataAiRefined: (count, pct) => `- AI 完善占比：${count} 条（${pct}%）`,
+          dataAddedTrend: (added7, added30) => `- 新增趋势：近7天 ${added7} 条，近30天 ${added30} 条`,
+          aiComment: "【AI 点评】",
+          // 最近一周统计历史（每7天自动统计写入 stats_history 后，-data 结尾展示）
+          historyHeader: (date) => `【最近7天统计 · ${date}】`,
+          historyRange: (from, to) => `统计周期：${from} ~ ${to}`,
+          historyAdded: (n) => `- 新增提示词：${n} 条`,
+          historyAddedTitles: (titles) => `    ${titles}`,
+          historyUsage: (count, usedCount) => `- 使用次数：${count} 次（覆盖 ${usedCount} 条）`,
+          historyTop: (n) => `- 近7天最常用 Top ${n}：`,
+          historyTopItem: (title, count) => `    ${title}（${count}次）`,
+          historyAiRefined: (n) => `- AI 完善：${n} 条`,
+          historyNone: "（暂无历史统计，7天后自动生成）",
+          exportDownloaded: (n) => `已导出 ${n} 条提示词：JSON 备份文件已下载到浏览器本地。`,
+          exportTextHeader: (n) => `词库导出（共 ${n} 条）：`,
+        },
+      }
+    : {
+        description: "Save/polish/enrich prompts and output library stats",
+        hint: "Enter a command or the body to save/process; type /prompts alone to see command examples",
+        cmdExamples: buildCmdExamples("en"),
+        unknownFlag: buildUnknownFlag("en"),
+        saved: "Saved to the prompt library",
+        failed: "Operation failed",
+        addEmpty: "Enter the body to save after -add",
+        tagEmpty: "Usage: /prompts -tag <tag> <body>",
+        searchEmpty: "No matching prompts found",
+        searchUsage: "Usage: /prompts -s <keyword> (search library, case-insensitive)",
+        exportEmpty: "The library is empty, nothing to export",
+        aiNoInput: "Enter the text to polish after -AI",
+        aiUnavailable: "AI service is unavailable, cannot process",
+        aiDone: "Polished by AI. Please copy the content below:",
+        enrichNoInput: "Enter the body to enrich after -enrich",
+        enrichFailed: "AI enrichment failed",
+        enrichDone: "Professionally enriched by AI (expands, opposite of -AI polish). Please copy the content below:",
+        help: manualEn,
+        // Command output wording for -s / -e / -data, so Chinese is not shown in English locale
+        fmt: {
+          searchLine: (i, title, tag, usage, summary) => `${i}. ${title}${tag} (used ${usage} times)${summary}`,
+          matchCount: (n) => `Matched ${n}: `,
+          summaryPrefix: (s) => `\n   Summary: ${s}`,
+          dataHeader: "Prompt Library Stats:",
+          dataTotal: (n) => `- Total prompts: ${n}`,
+          dataTotalUsage: (n) => `- Total usage: ${n}`,
+          dataUsed: (used, unused, pct) => `- Used / never used: ${used} / ${unused} (usage rate ${pct}%)`,
+          dataTop: (n) => `- Top ${n}: `,
+          dataTopItem: (title, count) => `    ${title} (${count} times)`,
+          dataNoUsage: "- No usage records",
+          dataRecent: (titles) => `- Recently used: ${titles}`,
+          dataTagDist: (part) => `- Tags: ${part}`,
+          dataNoTags: "- No tags",
+          dataTrash: (n) => `- Trash count: ${n}`,
+          dataUsageVitality: (used7, used30) => `- Reuse vitality: ${used7} in 7d, ${used30} in 30d`,
+          dataSleeping: (items) => `- Dormant prompts: ${items.map((i) => `${i.title} (${i.days}d)`).join(", ")}`,
+          dataBodyStats: (total, avg) => `- Body size: ${total} chars total, ${avg} avg`,
+          dataAiRefined: (count, pct) => `- AI-refined: ${count} (${pct}%)`,
+          dataAddedTrend: (added7, added30) => `- Added: ${added7} in 7d, ${added30} in 30d`,
+          aiComment: "[AI Review]",
+          // Recent 7-day stats history (auto-snapshotted every 7 days, shown at the end of -data)
+          historyHeader: (date) => `[Last 7 days stats · ${date}]`,
+          historyRange: (from, to) => `Period: ${from} ~ ${to}`,
+          historyAdded: (n) => `- Added: ${n}`,
+          historyAddedTitles: (titles) => `    ${titles}`,
+          historyUsage: (count, usedCount) => `- Used: ${count} times (${usedCount} prompts)`,
+          historyTop: (n) => `- Top ${n} used this week:`,
+          historyTopItem: (title, count) => `    ${title} (${count} times)`,
+          historyAiRefined: (n) => `- AI-refined: ${n}`,
+          historyNone: "(No history yet; auto-generated after 7 days)",
+          exportDownloaded: (n) => `Exported ${n} prompts: JSON backup downloaded to your browser.`,
+          exportTextHeader: (n) => `Prompt library export (${n} items):`,
+        },
+      };
 }
 
 export function apply(ctx: Context) {
@@ -176,119 +356,7 @@ export function apply(ctx: Context) {
     let dispose: () => void = () => {};
     void readGlobalLocale().then((locale) => {
       const isZh = locale.startsWith("zh") || locale === "";
-      const copy = isZh
-        ? {
-            description: "保存/优化/完善提示词，并输出词库统计",
-            hint: "输入命令或要保存/处理的正文，直接输入 /prompts 可查看命令示例",
-            cmdExamples: buildCmdExamples("zh"),
-            unknownFlag: buildUnknownFlag("zh"),
-            saved: "已保存到词库",
-            failed: "操作失败",
-            addEmpty: "请在 -add 后输入要保存的正文",
-            tagEmpty: "用法：/prompts -tag <标签> <正文>",
-            searchEmpty: "未找到匹配的提示词",
-            searchUsage: "用法：/prompts -s <关键词>（检索词库，支持大小写不敏感）",
-            exportEmpty: "词库为空，无内容可导出",
-            aiNoInput: "请在 -AI 后输入要优化的正文",
-            aiUnavailable: "AI 服务不可用，无法处理",
-            aiDone: "已 AI 优化完成，请复制下方内容：",
-            enrichNoInput: "请在 -enrich 后输入要完善的正文",
-            enrichFailed: "AI 完善失败",
-            enrichDone: "已 AI 专业完善（扩写，与 -AI 相反），请复制下方内容：",
-            help: manualZh,
-            // 命令实际输出文案（-s / -e / -data 等），避免英文环境仍输出中文
-            fmt: {
-              searchLine: (i: number, title: string, tag: string, usage: string, summary: string) => `${i}. ${title}${tag}（使用${usage}次）${summary}`,
-              matchCount: (n: number) => `匹配 ${n} 条：`,
-              summaryPrefix: (s: string) => `\n   摘要：${s}`,
-              dataHeader: "词库数据统计：",
-              dataTotal: (n: number) => `- 提示词总数：${n}`,
-              dataTotalUsage: (n: number) => `- 累计使用次数：${n}`,
-              dataUsed: (used: number, unused: number, pct: number) => `- 曾使用 / 从未使用：${used} / ${unused}（使用率 ${pct}%）`,
-              dataTop: (n: number) => `- 最常用 Top ${n}：`,
-              dataTopItem: (title: string, count: number) => `    ${title}（${count}次）`,
-              dataNoUsage: "- 尚无使用记录",
-              dataRecent: (titles: string) => `- 最近使用：${titles}`,
-              dataTagDist: (part: string) => `- 标签分布：${part}`,
-              dataNoTags: "- 暂无标签",
-              dataTrash: (n: number) => `- 回收站条数：${n}`,
-              dataUsageVitality: (used7: number, used30: number) => `- 复用活力：近7天 ${used7} 条，近30天 ${used30} 条`,
-              dataSleeping: (items: Array<{ title: string; days: number }>) =>
-                `- 沉睡提示词：${items.map((i) => `${i.title}（${i.days}天）`).join("、")}`,
-              dataBodyStats: (total: number, avg: number) => `- 正文体量：共 ${total} 字，平均每条 ${avg} 字`,
-              dataAiRefined: (count: number, pct: number) => `- AI 完善占比：${count} 条（${pct}%）`,
-              dataAddedTrend: (added7: number, added30: number) => `- 新增趋势：近7天 ${added7} 条，近30天 ${added30} 条`,
-              aiComment: "【AI 点评】",
-              // 最近一周统计历史（每7天自动统计写入 stats_history 后，-data 结尾展示）
-              historyHeader: (date: string) => `【最近7天统计 · ${date}】`,
-              historyRange: (from: string, to: string) => `统计周期：${from} ~ ${to}`,
-              historyAdded: (n: number) => `- 新增提示词：${n} 条`,
-              historyAddedTitles: (titles: string) => `    ${titles}`,
-              historyUsage: (count: number, usedCount: number) => `- 使用次数：${count} 次（覆盖 ${usedCount} 条）`,
-              historyTop: (n: number) => `- 近7天最常用 Top ${n}：`,
-              historyTopItem: (title: string, count: number) => `    ${title}（${count}次）`,
-              historyAiRefined: (n: number) => `- AI 完善：${n} 条`,
-              historyNone: "（暂无历史统计，7天后自动生成）",
-              exportDownloaded: (n: number) => `已导出 ${n} 条提示词：JSON 备份文件已下载到浏览器本地。`,
-              exportTextHeader: (n: number) => `词库导出（共 ${n} 条）：`,
-            },
-          }
-        : {
-            description: "Save/polish/enrich prompts and output library stats",
-            hint: "Enter a command or the body to save/process; type /prompts alone to see command examples",
-            cmdExamples: buildCmdExamples("en"),
-            unknownFlag: buildUnknownFlag("en"),
-            saved: "Saved to the prompt library",
-            failed: "Operation failed",
-            addEmpty: "Enter the body to save after -add",
-            tagEmpty: "Usage: /prompts -tag <tag> <body>",
-            searchEmpty: "No matching prompts found",
-            searchUsage: "Usage: /prompts -s <keyword> (search library, case-insensitive)",
-            exportEmpty: "The library is empty, nothing to export",
-            aiNoInput: "Enter the text to polish after -AI",
-            aiUnavailable: "AI service is unavailable, cannot process",
-            aiDone: "Polished by AI. Please copy the content below:",
-            enrichNoInput: "Enter the body to enrich after -enrich",
-            enrichFailed: "AI enrichment failed",
-            enrichDone: "Professionally enriched by AI (expands, opposite of -AI polish). Please copy the content below:",
-            help: manualEn,
-            // Command output wording for -s / -e / -data, so Chinese is not shown in English locale
-            fmt: {
-              searchLine: (i: number, title: string, tag: string, usage: string, summary: string) => `${i}. ${title}${tag} (used ${usage} times)${summary}`,
-              matchCount: (n: number) => `Matched ${n}: `,
-              summaryPrefix: (s: string) => `\n   Summary: ${s}`,
-              dataHeader: "Prompt Library Stats:",
-              dataTotal: (n: number) => `- Total prompts: ${n}`,
-              dataTotalUsage: (n: number) => `- Total usage: ${n}`,
-              dataUsed: (used: number, unused: number, pct: number) => `- Used / never used: ${used} / ${unused} (usage rate ${pct}%)`,
-              dataTop: (n: number) => `- Top ${n}: `,
-              dataTopItem: (title: string, count: number) => `    ${title} (${count} times)`,
-              dataNoUsage: "- No usage records",
-              dataRecent: (titles: string) => `- Recently used: ${titles}`,
-              dataTagDist: (part: string) => `- Tags: ${part}`,
-              dataNoTags: "- No tags",
-              dataTrash: (n: number) => `- Trash count: ${n}`,
-              dataUsageVitality: (used7: number, used30: number) => `- Reuse vitality: ${used7} in 7d, ${used30} in 30d`,
-              dataSleeping: (items: Array<{ title: string; days: number }>) =>
-                `- Dormant prompts: ${items.map((i) => `${i.title} (${i.days}d)`).join(", ")}`,
-              dataBodyStats: (total: number, avg: number) => `- Body size: ${total} chars total, ${avg} avg`,
-              dataAiRefined: (count: number, pct: number) => `- AI-refined: ${count} (${pct}%)`,
-              dataAddedTrend: (added7: number, added30: number) => `- Added: ${added7} in 7d, ${added30} in 30d`,
-              aiComment: "[AI Review]",
-              // Recent 7-day stats history (auto-snapshotted every 7 days, shown at the end of -data)
-              historyHeader: (date: string) => `[Last 7 days stats · ${date}]`,
-              historyRange: (from: string, to: string) => `Period: ${from} ~ ${to}`,
-              historyAdded: (n: number) => `- Added: ${n}`,
-              historyAddedTitles: (titles: string) => `    ${titles}`,
-              historyUsage: (count: number, usedCount: number) => `- Used: ${count} times (${usedCount} prompts)`,
-              historyTop: (n: number) => `- Top ${n} used this week:`,
-              historyTopItem: (title: string, count: number) => `    ${title} (${count} times)`,
-              historyAiRefined: (n: number) => `- AI-refined: ${n}`,
-              historyNone: "(No history yet; auto-generated after 7 days)",
-              exportDownloaded: (n: number) => `Exported ${n} prompts: JSON backup downloaded to your browser.`,
-              exportTextHeader: (n: number) => `Prompt library export (${n} items):`,
-            },
-          };
+      const copy = buildCopy(isZh ? "zh" : "en");
       dispose = commands.register({
         name: "prompts",
         description: copy.description,
@@ -492,6 +560,14 @@ export function apply(ctx: Context) {
     return () => dispose();
   });
 
+  // —— 版本更新检查：服务启动即查一次，此后每 24 小时复查 ——
+  // 正式版（npm）有更新则后台静默升级；测试版（GitHub 领先）只提示用户手动点击更新。
+  // 定时器随 disposer 在插件卸载时清理，避免残留。
+  void autoUpdateDaily();
+  const versionTimer = setInterval(() => {
+    void autoUpdateDaily();
+  }, 24 * 60 * 60 * 1000);
+
   // —— 每周自动统计：每 7 天生成一次「近 7 天」统计快照写入 stats_history ——
   // 统计的只是近 7 天的增量数据（新增/使用/AI 完善），避免把历史累计反复重复统计；
   // 不调用 AI 点评（点评仅用于 /prompts -data 的实时全量统计）。
@@ -503,6 +579,7 @@ export function apply(ctx: Context) {
   void checkAndGenerateWeeklySnapshot();
   return () => {
     if (weeklySnapshotTimer) clearInterval(weeklySnapshotTimer);
+    if (versionTimer) clearInterval(versionTimer);
   };
 }
 

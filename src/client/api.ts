@@ -190,6 +190,8 @@ export interface UpdateInfo {
   hasUpdate: boolean;
   betaLatest: string;
   hasBeta: boolean;
+  /** 安装 latest 时用的 GitHub release tag（如 v0.9.0）；为空表示 latest 来自 npm。 */
+  gitTag: string;
   /** 红点测试版对应的 GitHub release tag（如 v0.9.0-beta1）；无测试版时为空串。 */
   betaTag: string;
 }

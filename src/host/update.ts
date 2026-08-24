@@ -44,7 +44,9 @@ export interface UpdateInfo {
   betaLatest: string;
   /** 是否有红点手动更新（体验计划：仅最新测试版；未加入：GitHub 版本领先 npm）。 */
   hasBeta: boolean;
-  /** 红点测试版对应的 GitHub release tag（如 v0.9.0-beta1）；无测试版时为空串。测试版走 git 安装需要用它作 ref。 */
+  /** 安装 latest 时用的 GitHub release tag（如 v0.9.0）。为空表示 latest 来自 npm，走 npm 命令。 */
+  gitTag: string;
+  /** 安装测试版（betaLatest）时用的 GitHub release tag（如 v0.9.0-beta1）。无测试版时为空串。 */
   betaTag: string;
 }
 
@@ -213,6 +215,8 @@ async function fetchLatestVersion(): Promise<string> {
 /** GitHub 通道的两个版本：正式版（非预发布）与测试版（预发布）各自的最高版本；无则空串。 */
 interface GithubVersions {
   official: string;
+  /** 最高正式版对应的完整 release tag（如 v0.9.0）；无正式版时为空串。 */
+  officialTag: string;
   test: string;
   /** 最高测试版对应的完整 release tag（如 v0.9.0-beta1）；无测试版时为空串。 */
   testTag: string;
@@ -228,7 +232,7 @@ async function fetchGithubVersions(): Promise<GithubVersions> {
     accept: "application/vnd.github+json",
     "user-agent": "dsh-prompt-library-updater",
   })) as Array<{ tag_name?: unknown; draft?: unknown; prerelease?: unknown }>;
-  const result: GithubVersions = { official: "", test: "", testTag: "" };
+  const result: GithubVersions = { official: "", officialTag: "", test: "", testTag: "" };
   if (!Array.isArray(body)) return result;
   for (const r of body) {
     if (typeof r.tag_name !== "string" || r.draft === true) continue;
@@ -242,9 +246,18 @@ async function fetchGithubVersions(): Promise<GithubVersions> {
       }
     } else if (compareVersions(v, result.official) > 0) {
       result.official = v;
+      result.officialTag = r.tag_name;
     }
   }
   return result;
+}
+
+/** 依据版本号取对应的 GitHub tag；非 git 版本或匹配不上返回空串。 */
+function gitTagFor(gh: GithubVersions | null, v: string): string {
+  if (!v || !gh) return "";
+  if (gh.test && v === gh.test) return gh.testTag;
+  if (gh.official && v === gh.official) return gh.officialTag;
+  return "";
 }
 
 /** 读取「加入体验计划」开关；读取失败按未勾选处理。 */
@@ -285,7 +298,7 @@ export async function checkUpdate(force = false): Promise<UpdateInfo> {
   // 所有源都访问不到（或均无可用版本）→ 不做任何处理
   if (!npm && !ghOfficial && !ghTest) {
     logVersion(vlog.noSource);
-    const info: UpdateInfo = { current, latest: current, hasUpdate: false, betaLatest: current, hasBeta: false, betaTag: "" };
+    const info: UpdateInfo = { current, latest: current, hasUpdate: false, betaLatest: current, hasBeta: false, gitTag: "", betaTag: "" };
     cache = { at: now, info, ttl: CACHE_MS / 2 };
     return info;
   }
@@ -309,13 +322,23 @@ export async function checkUpdate(force = false): Promise<UpdateInfo> {
       compareVersions(ghTest, current) > 0 &&
       compareVersions(ghTest, stable || current) > 0;
     const latest = hasUpdate ? stable : hasBeta ? ghTest : current;
+    // 稳定通道是否来自 GitHub 正式版（npm 缺失或 GitHub 正式版更高 → 用 git 安装）
+    const stableIsGit = !!ghOfficial && (!npm || compareVersions(ghOfficial, npm) > 0);
     const info: UpdateInfo = {
       current,
       latest,
       hasUpdate,
       betaLatest: hasBeta ? ghTest : latest,
       hasBeta,
-      // 测试版才记录 git tag（供升级时用 github: 方式安装）；正式版/无更新则留空走 npm
+      // 静默安装的目标（latest）若来自 GitHub（正式或测试版），带上其 tag 改走 git 命令；来自 npm 则留空走 npm
+      gitTag: hasUpdate
+        ? stableIsGit
+          ? gh?.officialTag || ""
+          : ""
+        : hasBeta
+          ? gh?.testTag || ""
+          : "",
+      // 红点手动更新的测试版：GitHub 预发布 → git 命令
       betaTag: hasBeta ? gh?.testTag || "" : "",
     };
     logVersion(vlog.expResult(latest, hasUpdate, hasBeta, info.betaLatest));
@@ -339,8 +362,10 @@ export async function checkUpdate(force = false): Promise<UpdateInfo> {
     hasUpdate,
     betaLatest: ghAny || latest,
     hasBeta,
-    // 未加入体验计划：保持旧的 npm 安装方式，不附带 git tag
-    betaTag: "",
+    // 未加入体验计划：静默安装版本 latest 来自 npm 则走 npm；若 npm 不可用改用 GitHub 版本则走 git。
+    // 红点手动更新的 GitHub 版本（ghAny，正式或测试）也走 git 命令。
+    gitTag: gitTagFor(gh, latest),
+    betaTag: hasBeta ? gitTagFor(gh, ghAny) : "",
   };
   logVersion(vlog.normalResult(latest, hasUpdate, hasBeta, info.betaLatest));
   cache = { at: now, info, ttl: CACHE_MS };
@@ -358,30 +383,28 @@ const UPGRADE_TIMEOUT_MS = 180_000;
  * `DSH_PLUGIN_PROFILE` 覆盖（如 desktop）。若需完全自定义整条命令，可设 env `DSH_PLUGIN_UPGRADE_CMD`。
  * 返回 { ok, output }；任何异常都不抛出，仅置 ok=false。
  */
-export async function upgradePlugin(target?: string): Promise<{ ok: boolean; output: string }> {
+export async function upgradePlugin(target?: string, gitRef = ""): Promise<{ ok: boolean; output: string }> {
   const profile = process.env.DSH_PLUGIN_PROFILE || "web";
   const pkg = "@sunjuntao/dsh-prompt-library";
   let version = target;
-  // 测试版走 git 安装时的 GitHub ref（如 v0.9.0-beta1）；为空表示走 npm 安装。
-  let gitRef = "";
+  // git 版本（GitHub 正式/测试）用 github: 方式安装时的 ref（如 v0.9.0 / v0.9.0-beta1）；为空表示走 npm。
   if (!version) {
     try {
       const info = await checkUpdate(true); // 强制刷新，确保拿到最新版本信息
-      // 体验计划下的「最新测试版」仅存在于 GitHub 预发布，npm 上没有 → 用 git 方式安装
-      if (info.hasBeta && info.betaTag && /^v\d+\.\d+\.\d+/.test(info.betaTag)) {
-        gitRef = info.betaTag;
+      // 有红点手动更新（多为 GitHub 测试版）优先装它；否则装 latest
+      if (info.hasBeta && /^\d+\.\d+\.\d+/.test(info.betaLatest)) {
         version = info.betaLatest;
-      } else if (info.hasBeta && /^\d+\.\d+\.\d+/.test(info.betaLatest)) {
-        version = info.betaLatest; // 兼容：无 tag 信息时仍按 npm 安装测试版版本号
+        gitRef = info.betaTag || "";
       } else if (/^\d+\.\d+\.\d+/.test(info.latest)) {
         version = info.latest;
+        gitRef = info.gitTag || "";
       }
     } catch {
       /* 拿不到版本就安装 latest 标签 */
     }
   }
   const targetStr = version && /^\d+\.\d+\.\d+/.test(version) ? `${pkg}@${version}` : pkg;
-  // 测试版（GitHub 预发布）用 git 安装命令；其余（npm/正式版）保持 npm 命令不变。
+  // 只要是 git 版本（带 gitTag/betaTag）就走 github: 安装命令；其余（npm）保持 npm 命令。
   // 二者都可通过 DSH_PLUGIN_UPGRADE_CMD 完全自定义整条命令（优先级最高）。
   const cmd =
     process.env.DSH_PLUGIN_UPGRADE_CMD ||
@@ -427,7 +450,7 @@ export async function autoUpdateDaily(): Promise<void> {
     const vlog = buildVersionLogCopy(await readGlobalLocale());
     if (silent && info.latest && /^\d+\.\d+\.\d+/.test(info.latest)) {
       logVersion(vlog.silentTo(info.latest));
-      await upgradePlugin(info.latest);
+      await upgradePlugin(info.latest, info.gitTag);
     } else {
       logVersion(vlog.silentSkip(info.hasUpdate, info.hasBeta, info.latest));
     }

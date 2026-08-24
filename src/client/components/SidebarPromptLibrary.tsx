@@ -139,38 +139,47 @@ function clampPos(
 }
 
 /**
- * 找到最接近面板的「会话窗口」容器：自面板向上取第一个宽高足够大（≥ 240×160）的稳定祖宗。
+ * 找到最接近面板的「会话窗口」容器：自面板向上取第一个宽高足够大（≥ 360×240）的稳定祖宗。
  *
- * 这样当 DSH 窗口被其它窗口或内部面板挤压，使实际会话区缩小时，面板能以该容器为锚点跟随
- * 收回/展开；未找到时回退到整个窗口，行为与之前一致。
+ * 阈值取「高且宽」以跳过聊天输入框这类偏矮的子容器：输入框平时高度很小，插入内容后纵使
+ * 变高也不该抢走锚点；未找到时回退到整个窗口，行为与之前一致。
  */
-function findChatWindow(panel: HTMLElement | null): { left: number; top: number; right: number; bottom: number } {
+function findChatWindow(panel: HTMLElement | null): Element | null {
   let el = panel?.parentElement ?? null;
   while (el && el !== document.body && el !== document.documentElement) {
     const r = el.getBoundingClientRect();
-    if (r.width >= 240 && r.height >= 160) {
-      return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
-    }
+    if (r.width >= 360 && r.height >= 240) return el;
     el = el.parentElement;
   }
-  return {
-    left: 0,
-    top: 0,
-    right: window.innerWidth,
-    bottom: window.innerHeight,
-  };
+  return null;
 }
 
-/** 会话窗口可用区域：返回其在视口内的矩形，随 DSH 会话容器尺寸/位置的任何变化实时更新。 */
+/** 把锚点元素矩形转为视口矩形；未找到时回退到整个视口。 */
+function anchorRect(anchor: Element | null): { left: number; top: number; right: number; bottom: number } {
+  if (!anchor) return { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight };
+  const r = anchor.getBoundingClientRect();
+  return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+}
+
+/**
+ * 会话窗口可用区域：首次挂载时锁定锚点元素，此后只重新测量同一个元素的矩形。
+ *
+ * 若每次重算都重跑 findChatWindow，插入内容使聊天输入框变高后会误认输入框为新锚点，
+ * 导致工具窗口「跟着跳到聊天框」。锁定锚点后，仅跟随该会话容器的尺寸/位置变化。
+ */
 function useChatWindow(panelRef: { current: HTMLElement | null }): {
   left: number;
   top: number;
   right: number;
   bottom: number;
 } {
-  const [rect, setRect] = useState(() => findChatWindow(panelRef.current));
+  const anchorRef = useRef<Element | null>(null);
+  const [rect, setRect] = useState(() => anchorRect(findChatWindow(panelRef.current)));
   useEffect(() => {
-    const measure = () => setRect(findChatWindow(panelRef.current));
+    // 首次锁定锚点：在挂载时聊天输入框通常较矮，可正确命中会话容器
+    anchorRef.current = findChatWindow(panelRef.current);
+    const measure = () =>
+      setRect(anchorRect(anchorRef.current ?? findChatWindow(panelRef.current)));
     measure();
     // 观察面板与 body：会话容器布局变化（含窗口被挤压、内部面板展开/收拢）都会触发重算
     const targets: (Element | null)[] = [panelRef.current, document.body];

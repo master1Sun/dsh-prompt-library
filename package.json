@@ -57,7 +57,11 @@
     "typecheck": "tsc --noEmit",
     "prepare": "node scripts/build.mjs",
     "prepublishOnly": "node scripts/build.mjs",
-    "publish": "npm publish --access public"
+    "npm-publish": "npm publish --access public",
+    "git:patch": "pnpm version patch",
+    "git:minor": "pnpm version minor",
+    "git:major": "pnpm version major",
+    "git-push": "git push && git push --tags"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1-rc.1",

@@ -3,7 +3,8 @@
  *
  * 双通道检测：
  * - npm registry（正式版通道）：@sunjuntao/dsh-prompt-library 的 latest 版本；
- * - GitHub Releases（测试版通道）：master1Sun/dsh-prompt-library 的最新 release tag。
+ * - GitHub Releases（测试版通道）：master1Sun/dsh-prompt-library 的所有 release（含预发布）
+ *   中版本号最大的那条。
  *
  * 组合策略：
  * - GitHub 测试版严格高于 npm 正式版 → 提示用户「有新的测试版，点击更新」（手动更新）；
@@ -20,8 +21,8 @@ import { exec } from "node:child_process";
 
 /** npm registry 中本包的 latest 端点（scoped 包需把 `/` 编码为 `%2f`）。 */
 const REGISTRY_URL = "https://registry.npmjs.org/@sunjuntao%2fdsh-prompt-library/latest";
-/** GitHub Releases 的 latest 端点（返回最新 release，tag 即版本号）。 */
-const GITHUB_API_URL = "https://api.github.com/repos/master1Sun/dsh-prompt-library/releases/latest";
+/** GitHub Releases 列表端点（含预发布；返回后在本模块内筛选版本号最大的一条，tag 即版本号）。 */
+const GITHUB_API_URL = "https://api.github.com/repos/master1Sun/dsh-prompt-library/releases";
 /** 版本检查结果的缓存时长。 */
 const CACHE_MS = 24 * 60 * 60 * 1000;
 /** 请求外网（npm / github）的超时。 */
@@ -109,15 +110,25 @@ async function fetchLatestVersion(): Promise<string> {
   return body.version;
 }
 
-/** 请求 GitHub Releases 的 latest，返回 tag 中的版本号；无 release 时返回空串。 */
+/** 请求 GitHub Releases 列表，筛选出版本号最大的一条（含预发布测试版）；无可用 release 返回空串。 */
 async function fetchGithubLatestVersion(): Promise<string> {
   // GitHub API 强制要求 User-Agent，否则返回 403
   const body = (await fetchJson(GITHUB_API_URL, {
     accept: "application/vnd.github+json",
     "user-agent": "dsh-prompt-library-updater",
-  })) as { tag_name?: unknown };
-  if (typeof body.tag_name !== "string" || !body.tag_name) return "";
-  return extractVersion(body.tag_name) ?? "";
+  })) as Array<{ tag_name?: unknown; draft?: unknown }>;
+  if (!Array.isArray(body)) return "";
+  const releases = body;
+  if (releases.length === 0) return "";
+  // 草稿不纳入（公开 API 通常不返回草稿，这里保险起见跳过）；其余 release 一律参与比较，
+  // 取 tag 版本号最大的那条作为 GitHub 通道版本。这样预发布测试版也能被检测到。
+  let best = "";
+  for (const r of releases) {
+    if (typeof r.tag_name !== "string" || r.draft === true) continue;
+    const v = extractVersion(r.tag_name);
+    if (v && (!best || compareVersions(v, best) > 0)) best = v;
+  }
+  return best;
 }
 
 /**

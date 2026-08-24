@@ -17,8 +17,8 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import type { PluginSettings, Prompt } from "../types.js";
-import { clampTitle, DEFAULT_SETTINGS } from "../types.js";
+import type { PluginSettings, Prompt } from "../../types.js";
+import { clampTitle, DEFAULT_SETTINGS } from "../../types.js";
 import {
   createPrompt as apiCreate,
   deletePrompt as apiDelete,
@@ -29,18 +29,18 @@ import {
   usePrompt as apiUse,
   learnPrompt as apiLearn,
   polishPrompt as apiPolish,
-} from "./api.js";
+} from "../services/api.js";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
-import { PL_BUTTON_CSS, plBtn } from "./button-style.js";
+import { PL_BUTTON_CSS, plBtn } from "../utils/button-style.js";
 import { SidebarPromptLibrary } from "./SidebarPromptLibrary.js";
 import { SelectionAddPrompt } from "./SelectionAddPrompt.js";
 import { Pagination } from "./Pagination.js";
 import { TagInput } from "./TagInput.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
-import { AUTO_LEARN_TOAST_MS, useAutoLearn } from "./auto-learn.js";
-import { isRecent, markRecent } from "./recent-created.js";
-import { notifyDataChanged, useDataChanged, useExportDownloaded, useFillDraft } from "./data-sync.js";
-import { type PLT, type PLTranslate, usePLT } from "./i18n.js";
+import { AUTO_LEARN_TOAST_MS, useAutoLearn } from "../utils/auto-learn.js";
+import { isRecent, markRecent } from "../utils/recent-created.js";
+import { notifyDataChanged, useDataChanged, useExportDownloaded, useFillDraft } from "../services/data-sync.js";
+import { type PLT, type PLTranslate, usePLT } from "../i18n/i18n.js";
 import { SearchBox } from "./SearchBox.js";
 import {
   applyVariables,

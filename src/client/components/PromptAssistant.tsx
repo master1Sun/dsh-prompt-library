@@ -14,10 +14,23 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import type { PluginSettings } from "../types.js";
-import { DEFAULT_SETTINGS } from "../types.js";
-import { genIntro, getUpdate, type UpdateInfo } from "./api.js";
-import { type PLTranslate, usePLT } from "./i18n.js";
+import { createPortal } from "react-dom";
+import type { PluginSettings } from "../../types.js";
+import { DEFAULT_SETTINGS } from "../../types.js";
+import { genIntro, getActivity, getUpdate, type ActivityPhase, type ActivitySnapshot, type UpdateInfo } from "../services/api.js";
+import { type PLTranslate, usePLT } from "../i18n/i18n.js";
+import {
+  HOVER_SEQUENCE,
+  SEQUENCES,
+  SPRITE_CELL,
+  SPRITE_COLUMNS,
+  SPRITE_ROWS,
+  TRACK_ROW,
+  getSpriteSheet,
+  sequenceFrame,
+  type SpriteSheet,
+  type SpriteTrack,
+} from "../utils/sprite.js";
 
 const TONE = {
   text: "var(--dsw-alias-label-primary, #1f2937)",
@@ -246,6 +259,100 @@ export function PromptAssistant(props: Props): ReactNode {
   // 红点现在仅代表「未加入体验计划」npm 静默升级成功后的「已更新到新版本」通知；体验计划用户不弹红点。
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
 
+  // 活动状态机：轮询 host 投影的 phase，驱动小人动作动画与阶段气泡。
+  // 会话 turn/step/工具/结束事件 → idle/waiting/thinking/tool/review/done/failed；
+  // 每个阶段驱动不同的小人动作与头顶状态气泡。
+  const [activity, setActivity] = useState<ActivitySnapshot>({ phase: "idle", sessionActive: false });
+  useEffect(() => {
+    let cancelled = false;
+    const tick = () => {
+      getActivity()
+        .then((snap) => {
+          if (!cancelled) setActivity(snap);
+        })
+        .catch(() => {
+          /* 轮询失败忽略，保持上次状态 */
+        });
+    };
+    tick();
+    const iv = window.setInterval(tick, 1200);
+    return () => {
+      cancelled = true;
+      window.clearInterval(iv);
+    };
+  }, []);
+
+  // ── 雪碧图小人：把蓝脸小人渲染成运行时生成的雪碧图，用 background-position 帧播放 ──
+  // 轨道 = 行、帧 = 列，配合每轨道时长与阶段序列实现帧播放；鼠标移入播放打招呼小动画。
+  const [sheet, setSheet] = useState<SpriteSheet | null>(null);
+  const spriteRef = useRef<HTMLDivElement | null>(null);
+  // 鼠标是否悬停在小人上：悬停时播放打招呼序列（小动画）
+  const [hovering, setHovering] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    getSpriteSheet().then((s) => {
+      if (alive) setSheet(s);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  // 帧循环：按活动阶段（或悬停打招呼）序列，在每个动画帧上切换 background-position。
+  // 生成失败（sheet 为 null）时保持 SVG 回退，不打断现有小人展示。
+  useEffect(() => {
+    if (!sheet) return;
+    const el = spriteRef.current;
+    if (!el) return;
+    const paint = (f: { track: SpriteTrack; col: number }) => {
+      const row = TRACK_ROW[f.track];
+      el.style.backgroundPosition = `${-f.col * SPRITE_CELL}px ${-row * SPRITE_CELL}px`;
+    };
+    const seqFor = (): SpriteTrack[] =>
+      hovering ? HOVER_SEQUENCE : (SEQUENCES[activity.phase] ?? SEQUENCES.idle);
+    paint(sequenceFrame(seqFor(), 0));
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+    if (reduce) return;
+    let raf = 0;
+    let last = performance.now();
+    let elapsed = 0;
+    const tick = (ts: number) => {
+      elapsed += ts - last;
+      last = ts;
+      paint(sequenceFrame(seqFor(), elapsed));
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [sheet, hovering, activity.phase]);
+
+  // 活动阶段 → i18n 键（为避免动态模板键破坏类型推导，用显式映射表）
+  type ZhKey = keyof typeof import("../i18n/i18n.js").zh;
+  const PHASE_KEY: Record<ActivityPhase, ZhKey> = {
+    idle: "pl.phase.idle",
+    waiting: "pl.phase.waiting",
+    thinking: "pl.phase.thinking",
+    tool: "pl.phase.tool",
+    review: "pl.phase.review",
+    done: "pl.phase.done",
+    failed: "pl.phase.failed",
+  };
+
+  // 活动阶段 → 小人待机/动作动画（空闲/等待保持轻缓呼吸，活跃时切换动作）
+  const personAnim = useMemo(() => {
+    switch (activity.phase) {
+      case "thinking": return "pl-person-fastbob .9s ease-in-out infinite";
+      case "tool": return "pl-person-tilt 1.6s ease-in-out infinite";
+      case "done": return "pl-person-jump .7s cubic-bezier(.3,1.4,.4,1) 2";
+      case "failed": return "pl-person-shake .5s ease-in-out 2";
+      case "waiting": return "pl-person-bob 2s ease-in-out infinite";
+      default: return "pl-person-bob 2.6s ease-in-out infinite";
+    }
+  }, [activity.phase]);
+
+  // 是否展示阶段气泡：会话进行中（思考/调工具/回话/完成/失败）才展示；空闲不打扰
+  const phaseActive = activity.sessionActive && activity.phase !== "idle";
+  const phasePulsing = activity.phase === "thinking" || activity.phase === "tool";
+
   // 拖动小人：仅移动小人独立坐标；松手时若未明显移动视为「点击 → 通知父级」
   const personDragRef = useRef<{ startX: number; startY: number; ox: number; oy: number; moved: boolean } | null>(null);
   const startPersonDrag = (e: ReactMouseEvent<HTMLElement>) => {
@@ -459,13 +566,23 @@ export function PromptAssistant(props: Props): ReactNode {
 .pl-grab:active { cursor: grabbing; }
 .pl-person-arm { transform-origin: 6px 8px; animation: pl-person-wave 2.4s ease-in-out infinite; }
 @keyframes pl-person-wave { 0%,60%,100% { transform: rotate(0deg); } 70% { transform: rotate(-14deg); } 80% { transform: rotate(0deg); } }
+@keyframes pl-person-fastbob { 0%,100% { transform: translateY(0) scale(1,1); } 50% { transform: translateY(-7px) scale(1.05,.95); } }
+@keyframes pl-person-tilt { 0%,100% { transform: rotate(0deg); } 25% { transform: rotate(-6deg); } 75% { transform: rotate(6deg); } }
+@keyframes pl-person-jump { 0% { transform: translateY(0); } 30% { transform: translateY(-14px); } 50% { transform: translateY(0); } 70% { transform: translateY(-7px); } 100% { transform: translateY(0); } }
+@keyframes pl-person-shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
+.pl-phase-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
+.pl-phase-pulse { animation: pl-fade-pulse 1s ease-in-out infinite; }
+@keyframes pl-fade-pulse { 0%,100% { opacity: .4; } 50% { opacity: 1; } }
 `}</style>
       {/* 小人：始终显示，可独立拖动，悬停显示气泡；点击回调由父级决定是否联动面板 */}
+      {/* 用 React Portal 渲染到 document.body：既突破祖先层叠/transform 容器显示在最上层，
+          又因元素仍在 React 组件树中而保留全部合成事件（拖动、点击）。 */}
+      {createPortal(
       <div
         aria-label={T("pl.title")}
         onMouseDown={startPersonDrag}
-        onMouseEnter={() => { hoverRef.current = true; setBubble(true); }}
-        onMouseLeave={() => { hoverRef.current = false; setBubble(false); }}
+        onMouseEnter={() => { hoverRef.current = true; setHovering(true); setBubble(true); }}
+        onMouseLeave={() => { hoverRef.current = false; setHovering(false); setBubble(false); }}
         style={{
           position: "fixed",
           left: view.px,
@@ -576,19 +693,34 @@ export function PromptAssistant(props: Props): ReactNode {
             />
           </div>
         )}
-        {/* 小人本体：SVG 角色 + 待机动画 */}
+        {/* 小人本体：雪碧图就绪时用 background-position 帧播放；生成失败回退到 SVG 角色 */}
         <div style={{ position: "relative", width: "100%", height: "100%", pointerEvents: "none" }}>
-          <svg width={PERSON_SIZE} height={PERSON_SIZE} viewBox="0 0 72 72" fill="none" style={{ position: "absolute", inset: 0, animation: "pl-person-bob 2.6s ease-in-out infinite", pointerEvents: "none", filter: "drop-shadow(0 2px 7px color-mix(in srgb, var(--dsw-alias-brand-primary, #2563eb) 45%, transparent))" }}>
+          {sheet ? (
+          <div
+            ref={spriteRef}
+            style={{
+              position: "absolute",
+              inset: 0,
+              width: PERSON_SIZE,
+              height: PERSON_SIZE,
+              backgroundImage: `url(${sheet.url})`,
+              backgroundSize: `${SPRITE_CELL * SPRITE_COLUMNS}px ${SPRITE_CELL * SPRITE_ROWS}px`,
+              backgroundRepeat: "no-repeat",
+              filter: "drop-shadow(0 2px 7px color-mix(in srgb, var(--dsw-alias-label-primary, #1f2937) 45%, transparent))",
+            }}
+          />
+          ) : (
+          <svg width={PERSON_SIZE} height={PERSON_SIZE} viewBox="0 0 72 72" fill="none" style={{ position: "absolute", inset: 0, animation: personAnim, pointerEvents: "none", filter: "drop-shadow(0 2px 7px color-mix(in srgb, var(--dsw-alias-label-primary, #1f2937) 45%, transparent))" }}>
             <title>{T("pl.title")}</title>
             {/* 身体 */}
-            <path d="M22 47 C18 47 14 42 13 34 C12 26 18 21 25 20 C22 15 26 11 33 12 C40 11 44 15 41 20 C48 21 54 26 53 34 C52 42 48 47 44 47 Z" fill="var(--dsw-alias-brand-primary, #2563eb)" opacity=".16" />
+            <path d="M22 47 C18 47 14 42 13 34 C12 26 18 21 25 20 C22 15 26 11 33 12 C40 11 44 15 41 20 C48 21 54 26 53 34 C52 42 48 47 44 47 Z" fill="var(--dsw-alias-label-primary, #1f2937)" opacity=".16" />
             {/* 小手 */}
             <g className="pl-person-arm">
-              <ellipse cx="36" cy="52" rx="12" ry="9" fill="var(--dsw-alias-brand-primary, #2563eb)" opacity="0.85" />
+              <ellipse cx="36" cy="52" rx="12" ry="9" fill="var(--dsw-alias-label-primary, #1f2937)" opacity="0.85" />
               <ellipse cx="26" cy="50" rx="5" ry="4" fill="var(--dsw-alias-interactive-bg-hover, rgba(100,116,139,.4))" />
             </g>
             {/* 脸 */}
-            <circle cx="36" cy="34" r="15" fill="var(--dsw-alias-brand-primary, #2563eb)" />
+            <circle cx="36" cy="34" r="15" fill="var(--dsw-alias-label-primary, #1f2937)" />
             {/* 腮红 */}
             <circle cx="29" cy="37" r="2.4" fill="#fff" opacity=".55" />
             <circle cx="43" cy="37" r="2.4" fill="#fff" opacity=".55" />
@@ -602,6 +734,7 @@ export function PromptAssistant(props: Props): ReactNode {
             {/* 微笑 */}
             <path d="M30 39.5 Q36 43.5 42 39.5" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" />
           </svg>
+          )}
           {/* 地面影子 */}
           <div
             style={{
@@ -642,7 +775,40 @@ export function PromptAssistant(props: Props): ReactNode {
             }}
           />
         )}
-        </div>
+        {/* 活动阶段气泡：会话进行中（思考/调工具/回话/完成/失败）在头顶展示状态；空闲不打扰 */}
+        {phaseActive && (
+          <div
+            key={activity.phase}
+            style={{
+              position: "absolute",
+              left: "50%",
+              bottom: "100%",
+              transform: "translateX(-50%)",
+              marginBottom: 6,
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+              maxWidth: 200,
+              padding: "3px 9px",
+              background: TONE.panel,
+              color: TONE.text,
+              border: `1px solid ${TONE.border}`,
+              borderRadius: 999,
+              fontSize: 10,
+              lineHeight: 1.4,
+              whiteSpace: "nowrap",
+              boxShadow: "0 2px 8px rgba(17, 24, 39, .08)",
+              animation: "pl-bubble-in .2s cubic-bezier(.22,1,.36,1)",
+              pointerEvents: "none",
+            }}
+          >
+            <span className={phasePulsing ? "pl-phase-dot pl-phase-pulse" : "pl-phase-dot"} />
+            <span>{T(PHASE_KEY[activity.phase])}</span>
+          </div>
+        )}
+        </div>,
+        document.body,
+      )}
     </>
   );
 }

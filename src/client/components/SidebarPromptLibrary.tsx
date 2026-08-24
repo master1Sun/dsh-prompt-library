@@ -22,8 +22,8 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import type { PluginSettings, Prompt } from "../types.js";
-import { clampTitle, DEFAULT_SETTINGS } from "../types.js";
+import type { PluginSettings, Prompt } from "../../types.js";
+import { clampTitle, DEFAULT_SETTINGS } from "../../types.js";
 import {
   createPrompt as apiCreate,
   deletePrompt as apiDelete,
@@ -33,14 +33,14 @@ import {
   updatePrompt as apiUpdate,
   usePrompt as apiUse,
   polishPrompt,
-} from "./api.js";
-import { isRecent, markRecent } from "./recent-created.js";
+} from "../services/api.js";
+import { isRecent, markRecent } from "../utils/recent-created.js";
 import { useHoverDetail } from "./HoverDetail.js";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
-import { notifyDataChanged, useDataChanged } from "./data-sync.js";
-import { PL_BUTTON_CSS, plBtn } from "./button-style.js";
+import { notifyDataChanged, useDataChanged } from "../services/data-sync.js";
+import { PL_BUTTON_CSS, plBtn } from "../utils/button-style.js";
 import { PromptAssistant } from "./PromptAssistant.js";
-import { type PLTranslate, usePLT } from "./i18n.js";
+import { type PLTranslate, usePLT } from "../i18n/i18n.js";
 import { Highlight, SearchBox, TagFilterBar } from "./SearchBox.js";
 import { TagInput } from "./TagInput.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
@@ -124,14 +124,70 @@ function loadFloatState(): FloatState {
   return def;
 }
 
-/** 把位置 clamp 到视口内（含最小边距 / 顶部留白）。 */
-function clampPos(x: number, y: number, width: number, height: number): { x: number; y: number } {
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
+/** 把位置 clamp 到会话窗口矩形内（含四周最小边距）。坐标均为视口坐标。 */
+function clampPos(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  r: { left: number; top: number; right: number; bottom: number },
+): { x: number; y: number } {
   return {
-    x: Math.min(Math.max(FLOAT_MARGIN, x), Math.max(FLOAT_MARGIN, vw - width - FLOAT_MARGIN)),
-    y: Math.min(Math.max(FLOAT_MARGIN, y), Math.max(FLOAT_MARGIN, vh - height - FLOAT_MARGIN)),
+    x: Math.min(Math.max(r.left + FLOAT_MARGIN, x), Math.max(r.left + FLOAT_MARGIN, r.right - width - FLOAT_MARGIN)),
+    y: Math.min(Math.max(r.top + FLOAT_MARGIN, y), Math.max(r.top + FLOAT_MARGIN, r.bottom - height - FLOAT_MARGIN)),
   };
+}
+
+/**
+ * 找到最接近面板的「会话窗口」容器：自面板向上取第一个宽高足够大（≥ 240×160）的稳定祖宗。
+ *
+ * 这样当 DSH 窗口被其它窗口或内部面板挤压，使实际会话区缩小时，面板能以该容器为锚点跟随
+ * 收回/展开；未找到时回退到整个窗口，行为与之前一致。
+ */
+function findChatWindow(panel: HTMLElement | null): { left: number; top: number; right: number; bottom: number } {
+  let el = panel?.parentElement ?? null;
+  while (el && el !== document.body && el !== document.documentElement) {
+    const r = el.getBoundingClientRect();
+    if (r.width >= 240 && r.height >= 160) {
+      return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+    }
+    el = el.parentElement;
+  }
+  return {
+    left: 0,
+    top: 0,
+    right: window.innerWidth,
+    bottom: window.innerHeight,
+  };
+}
+
+/** 会话窗口可用区域：返回其在视口内的矩形，随 DSH 会话容器尺寸/位置的任何变化实时更新。 */
+function useChatWindow(panelRef: { current: HTMLElement | null }): {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+} {
+  const [rect, setRect] = useState(() => findChatWindow(panelRef.current));
+  useEffect(() => {
+    const measure = () => setRect(findChatWindow(panelRef.current));
+    measure();
+    // 观察面板与 body：会话容器布局变化（含窗口被挤压、内部面板展开/收拢）都会触发重算
+    const targets: (Element | null)[] = [panelRef.current, document.body];
+    const ro = new ResizeObserver(measure);
+    for (const t of targets) if (t) ro.observe(t);
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", measure, true);
+    // 部分内部拖拽分隔布局不发 resize/ResizeObserver，做低频轮询兜底
+    const iv = window.setInterval(measure, 400);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure, true);
+      window.clearInterval(iv);
+    };
+  }, []);
+  return rect;
 }
 
 function useSettings(): PluginSettings {
@@ -254,19 +310,21 @@ export function SidebarPromptLibrary(props?: {
   const bodyRef = useRef<HTMLTextAreaElement>(null);
 
   // ── 浮动面板：拖拽定位 / 缩放尺寸 / 折叠小人 ────────────────────────────
-  // 视口变化标记：浏览器缩放时只触发渲染层重新夹取位置，不改写 home 位置（float.x/y），
-  // 这样缩小窗口会把面板夹回可视区，而拉大窗口又能回到原来的位置
-  const [viewTick, setViewTick] = useState(0);
-  useEffect(() => {
-    const onViewport = () => setViewTick((t) => t + 1);
-    window.addEventListener("resize", onViewport);
-    return () => window.removeEventListener("resize", onViewport);
-  }, []);
-  // 展示位置：把 home（float.x/y）按当前视口夹取得到实际渲染坐标；home 保持不变
-  const view = useMemo(
-    () => clampPos(float.x, float.y, float.width, float.height),
-    [float.x, float.y, float.width, float.height, viewTick],
-  );
+  // 以「会话窗口」为锚点：会话容器被其它窗口/内部面板挤压、或缩小返回原大小时，
+  // 计算 chat 矩形并重算 view，面板跟随会话窗口收回与展开。world 位置（float.x/y）不变，
+  // 大到会话窗口扩大后又能回到原本的位置与尺寸。
+  const chat = useChatWindow(panelRef);
+  // 展示用的位置与尺寸：把 home（float.x/y/width/height）按会话窗口矩形夹取得到实际渲染
+  // 坐标与宽高；home 保持不变。聊天窗口被挤压变小时，面板也随之收回（宽高夹回会话窗口内），
+  // 拉大窗口后又回到原来的位置与尺寸（展开）。
+  const view = useMemo(() => {
+    const availW = Math.max(0, chat.right - chat.left - FLOAT_MARGIN * 2);
+    const availH = Math.max(0, chat.bottom - chat.top - FLOAT_MARGIN * 2);
+    const width = Math.min(float.width, availW);
+    const height = Math.min(float.height, availH);
+    const pos = clampPos(float.x, float.y, width, height, chat);
+    return { ...pos, width, height };
+  }, [float.x, float.y, float.width, float.height, chat]);
 
   // 拖动面板（头部作为拖拽手柄；避开头部的交互按钮）
   const dragRef = useRef<{ startX: number; startY: number; ox: number; oy: number } | null>(null);
@@ -279,7 +337,7 @@ export function SidebarPromptLibrary(props?: {
       const d = dragRef.current;
       if (!d) return;
       updateFloat({
-        ...clampPos(d.ox + (ev.clientX - d.startX), d.oy + (ev.clientY - d.startY), float.width, float.height),
+        ...clampPos(d.ox + (ev.clientX - d.startX), d.oy + (ev.clientY - d.startY), float.width, float.height, chat),
       });
     };
     const onUp = () => {
@@ -300,10 +358,8 @@ export function SidebarPromptLibrary(props?: {
     const onMove = (ev: MouseEvent) => {
       const r = resizeRef.current;
       if (!r) return;
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
-      const width = Math.min(Math.max(r.ow + (ev.clientX - r.startX), FLOAT_MIN_W), vw - view.x - FLOAT_MARGIN);
-      const height = Math.min(Math.max(r.oh + (ev.clientY - r.startY), FLOAT_MIN_H), vh - view.y - FLOAT_MARGIN);
+      const width = Math.min(Math.max(r.ow + (ev.clientX - r.startX), FLOAT_MIN_W), chat.right - view.x - FLOAT_MARGIN);
+      const height = Math.min(Math.max(r.oh + (ev.clientY - r.startY), FLOAT_MIN_H), chat.bottom - view.y - FLOAT_MARGIN);
       updateFloat({ width, height });
     };
     const onUp = () => {
@@ -677,12 +733,15 @@ export function SidebarPromptLibrary(props?: {
 .pl-grab:active { cursor: grabbing; }
 }`}</style>
       <style>{PL_BUTTON_CSS}</style>
-      {/* 词库助手（小人+气泡）：独立组件，自管理位置/冒泡/简介；点击小人通知面板切换开合 */}
-      <PromptAssistant
-        t={T}
-        settings={settings}
-        onTogglePanel={() => updateFloat({ collapsed: !float.collapsed })}
-      />
+      {/* 词库助手（小人+气泡）：独立组件，自管理位置/冒泡/简介；点击小人通知面板切换开合。
+          受「显示词库助手」设置控制，关闭后整屏隐藏。 */}
+      {settings.assistantEnabled && (
+        <PromptAssistant
+          t={T}
+          settings={settings}
+          onTogglePanel={() => updateFloat({ collapsed: !float.collapsed })}
+        />
+      )}
         <section
           ref={panelRef}
           role="dialog"
@@ -692,9 +751,9 @@ export function SidebarPromptLibrary(props?: {
             left: view.x,
             top: view.y,
             zIndex: 2147483646,
-            width: float.width,
-            height: float.height,
-            display: !settings.rightPanelEnabled || collapsed ? "none" : "flex",
+            width: view.width,
+            height: view.height,
+            display: !settings.assistantEnabled || !settings.rightPanelEnabled || collapsed ? "none" : "flex",
             flexDirection: "column",
             animation: collapsed ? "none" : "pl-pop-in .24s cubic-bezier(.22,1,.36,1)",
             overflow: "hidden",

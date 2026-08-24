@@ -15,18 +15,18 @@
  *（@deepseek-ai/dsh-client-runtime/client 等）和 react——它们不会被打包。
  */
 import type { ReactNode } from "react";
-import { PromptLibraryButton } from "./PromptLibraryButton.js";
-import { AIPolishButton } from "./AIPolishButton.js";
-import { SettingsSection } from "./SettingsSection.js";
-import { SettingsDataSection } from "./SettingsDataSection.js";
-import { en, NS, zh } from "./i18n.js";
-import { startDataChangedSubscription } from "./data-sync.js";
+import { PromptLibraryButton } from "./components/PromptLibraryButton.js";
+import { AIPolishButton } from "./components/AIPolishButton.js";
+import { SettingsSection } from "./components/SettingsSection.js";
+import { SettingsDataSection } from "./components/SettingsDataSection.js";
+import { en, NS, zh } from "./i18n/i18n.js";
+import { startDataChangedSubscription } from "./services/data-sync.js";
 import {
   registerSettingsNavIcon,
   SETTINGS_NAV_CSS,
   SETTINGS_NAV_MARKER_DATA,
   SETTINGS_NAV_MARKER_PROMPT,
-} from "./settings-nav-icon.js";
+} from "./utils/settings-nav-icon.js";
 
 /** 此插件的 apply 依赖的客户端服务。 */
 export const inject = ["slots", "locale"];
@@ -150,7 +150,7 @@ export function apply(ctx: ClientCtx): void {
       {
         name: "settings.section",
         id: "prompt-library-data",
-        order: 110,
+        order: 101,
         locale: NS,
         label: () => t("pl.set.dataSection"),
       },

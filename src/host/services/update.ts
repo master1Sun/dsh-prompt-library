@@ -21,7 +21,7 @@ import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { exec } from "node:child_process";
 import { dirname, join } from "node:path";
 import { getSettings, readGlobalLocale } from "./store.js";
-import { logDir } from "./paths.js";
+import { logDir } from "../utils/paths.js";
 
 /** npm registry 中本包的 latest 端点（scoped 包需把 `/` 编码为 `%2f`）。 */
 const REGISTRY_URL = "https://registry.npmjs.org/@sunjuntao%2fdsh-prompt-library/latest";

@@ -6,8 +6,9 @@
  *（无头 profile 得到一个空操作插件——那里没有 UI 来驱动）。
  */
 import type { Context } from "@deepseek-ai/cordis";
-import { makePromptRoutes } from "./host/routes.js";
-import { dataChangedRoute, emitExportDownload } from "./host/events.js";
+import { makePromptRoutes } from "./host/routes/routes.js";
+import { registerActivity } from "./host/services/activity.js";
+import { dataChangedRoute, emitExportDownload } from "./host/services/events.js";
 import {
   autoLearn,
   computeLibraryStats,
@@ -20,7 +21,7 @@ import {
   readGlobalLocale,
   saveStatsSnapshot,
   welcomePromptOnce,
-} from "./host/store.js";
+} from "./host/services/store.js";
 import {
   commentOnStats,
   enrichPromptProfessional,
@@ -28,10 +29,10 @@ import {
   logAiInjected,
   polishPromptBody,
   registerLlm,
-} from "./host/ai.js";
-import { soulSystemSync, ensureSoulFile, shouldInjectChatCharacter } from "./host/character.js";
-import { ensureHarnessFile, harnessSystemSync } from "./host/harness.js";
-import { autoUpdateDaily } from "./host/update.js";
+} from "./host/services/ai.js";
+import { soulSystemSync, ensureSoulFile, shouldInjectChatCharacter } from "./host/services/character.js";
+import { ensureHarnessFile, harnessSystemSync } from "./host/services/harness.js";
+import { autoUpdateDaily } from "./host/services/update.js";
 // 操作手册：纯文本字符串，聊天消息按纯文本渲染（markdown/HTML 都无法解析），用换行符排版
 import { manualEn, manualZh } from "./manual.js";
 
@@ -271,6 +272,8 @@ function buildCopy(lang: "zh" | "en"): Copy {
 
 export function apply(ctx: Context) {
   const routes = makePromptRoutes();
+  // 注册词库助手活动状态机：监听官方会话事件，投影为驱动小人动画的 phase。
+  const disposeActivity = registerActivity(ctx);
 
   // 数据库懒初始化：首次访问数据时自动创建 prompts.db 表，
   // 并在 db 无数据时一次性迁移旧 prompts.json 到 SQLite（导入后删除旧文件）。
@@ -578,6 +581,7 @@ export function apply(ctx: Context) {
   }, 24 * 60 * 60 * 1000);
   void checkAndGenerateWeeklySnapshot();
   return () => {
+    disposeActivity?.();
     if (weeklySnapshotTimer) clearInterval(weeklySnapshotTimer);
     if (versionTimer) clearInterval(versionTimer);
   };

@@ -4,7 +4,7 @@
  * host 路由的薄封装层；每个函数在成功时返回 `data` 字段，
  * 在非 ok 信封或传输失败时抛出异常。
  */
-import type { PluginSettings, Prompt, PromptInput, PromptPatch, TrashItem } from "../types.js";
+import type { PluginSettings, Prompt, PromptInput, PromptPatch, TrashItem } from "../../types.js";
 
 const BASE = "/api/prompt-library/prompts";
 
@@ -216,4 +216,27 @@ export function getSettings(): Promise<PluginSettings> {
 /** 更新插件设置（部分更新）。 */
 export function updateSettings(patch: Partial<PluginSettings>): Promise<PluginSettings> {
   return send<PluginSettings>("PUT", SETTINGS_BASE, patch);
+}
+
+// ── 词库助手活动状态 ────────────────────────────────────────────────────
+
+/** 词库助手活动阶段（与 host activity.ts 保持一致）。 */
+export type ActivityPhase =
+  | "idle"
+  | "waiting"
+  | "thinking"
+  | "tool"
+  | "review"
+  | "done"
+  | "failed";
+
+/** 词库助手活动快照。 */
+export interface ActivitySnapshot {
+  phase: ActivityPhase;
+  sessionActive: boolean;
+}
+
+/** 读取词库助手当前活动阶段（host 状态机投影官方会话事件，驱动小人动画）。 */
+export function getActivity(): Promise<ActivitySnapshot> {
+  return send<ActivitySnapshot>("GET", "/api/prompt-library/activity");
 }

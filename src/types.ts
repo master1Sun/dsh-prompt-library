@@ -93,7 +93,9 @@ export interface PluginSettings {
   panelWidth: number;
   /** 面板高度（px）。 */
   panelHeight: number;
-  /** 是否启用右侧侧边栏展开/折叠。 */
+  /** 词库助手显隐（主开关）：关闭后右侧面板也无法启用。 */
+  assistantEnabled: boolean;
+  /** 是否启用右侧侧边栏展开/折叠（需先勾选词库助手才可选）。 */
   rightPanelEnabled: boolean;
   /** 是否在聊天框工具栏显示词库按钮。 */
   showComposerButton: boolean;
@@ -131,6 +133,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   autoLearnManualConfirm: false,
   panelWidth: 360,
   panelHeight: 500,
+  assistantEnabled: true,
   rightPanelEnabled: true,
   showComposerButton: true,
   showAIPolishButton: true,

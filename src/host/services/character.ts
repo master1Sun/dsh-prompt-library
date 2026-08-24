@@ -14,8 +14,8 @@
 import { readFileSync, statSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { soulPath } from "./paths.js";
-import { stripBom } from "./text.js";
+import { soulPath } from "../utils/paths.js";
+import { stripBom } from "../utils/text.js";
 
 /** SOUL.md 默认模板：提供一套通用助手人格，用户可直接编辑，AI 据此遵守。 */
 const DEFAULT_SOUL = `# SOUL · 人格

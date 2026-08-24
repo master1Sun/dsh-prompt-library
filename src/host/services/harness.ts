@@ -14,8 +14,8 @@
 import { readFileSync, statSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { harnessPath } from "./paths.js";
-import { stripBom } from "./text.js";
+import { harnessPath } from "../utils/paths.js";
+import { stripBom } from "../utils/text.js";
 
 /** 默认模板：能力清单 + 使用规则（模型视角，非用户手册；用户可直接编辑）。 */
 const DEFAULT_HARNESS = `# HARNESS · 会话上下文

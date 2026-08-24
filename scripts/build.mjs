@@ -31,6 +31,7 @@ await mkdir(libDir, { recursive: true });
 const external = [
   "react",
   "react/jsx-runtime",
+  "react-dom",
   "@deepseek-ai/cordis",
   "@deepseek-ai/dsh-host-webserver",
   "@deepseek-ai/dsh-llm",

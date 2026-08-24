@@ -13,10 +13,10 @@
  * 修改后立即生效，无需保存按钮。
  */
 import { type CSSProperties, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import type { PluginSettings } from "../types.js";
-import { DEFAULT_SETTINGS } from "../types.js";
-import { getAiSelectables, getSettings, updateSettings as apiUpdateSettings, type ClientAiSelectable } from "./api.js";
-import { type PLTranslate, usePLT } from "./i18n.js";
+import type { PluginSettings } from "../../types.js";
+import { DEFAULT_SETTINGS } from "../../types.js";
+import { getAiSelectables, getSettings, updateSettings as apiUpdateSettings, type ClientAiSelectable } from "../services/api.js";
+import { type PLTranslate, usePLT } from "../i18n/i18n.js";
 
 const MONO =
   '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "SimHei", "黑体", sans-serif';
@@ -119,12 +119,15 @@ function ToggleRow({
   desc,
   checked,
   onChange,
+  disabled,
 }: {
   label: string;
   desc: string;
   checked: boolean;
   onChange: (v: boolean) => void;
+  disabled?: boolean;
 }): ReactNode {
+  const dim = disabled ? 0.45 : 1;
   return (
     <label
       style={{
@@ -132,19 +135,26 @@ function ToggleRow({
         justifyContent: "space-between",
         alignItems: "center",
         gap: 12,
-        cursor: "pointer",
+        cursor: disabled ? "not-allowed" : "pointer",
         padding: "8px 0",
       }}
     >
-      <span style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1 }}>
+      <span style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1, opacity: dim }}>
         <span style={{ fontSize: 13 }}>{label}</span>
         <span style={{ fontSize: 11, color: TONE.quiet }}>{desc}</span>
       </span>
       <input
         type="checkbox"
         checked={checked}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
-        style={{ width: 16, height: 16, cursor: "pointer", accentColor: TONE.accent }}
+        style={{
+          width: 16,
+          height: 16,
+          cursor: disabled ? "not-allowed" : "pointer",
+          opacity: dim,
+          accentColor: TONE.accent,
+        }}
       />
     </label>
   );
@@ -557,10 +567,20 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
         open={openDisplay}
         onToggle={() => setOpenDisplay((v) => !v)}
       >
+        {/* 词库助手显隐（主开关；关闭时右侧面板随之关闭且不可选） */}
+        <ToggleRow
+          label={T("pl.set.assistant")}
+          desc={T("pl.set.assistantDesc")}
+          checked={draft.assistantEnabled}
+          onChange={(v) =>
+            updateAndSave({ assistantEnabled: v, ...(v ? {} : { rightPanelEnabled: false }) })
+          }
+        />
         <ToggleRow
           label={T("pl.set.rightPanel")}
           desc={T("pl.set.rightPanelDesc")}
           checked={draft.rightPanelEnabled}
+          disabled={!draft.assistantEnabled}
           onChange={(v) => updateAndSave({ rightPanelEnabled: v })}
         />
         <ToggleRow

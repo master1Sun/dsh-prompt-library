@@ -10,12 +10,12 @@
  */
 import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
-import { PL_BUTTON_CSS, plBtn } from "./button-style.js";
-import { getSettings as apiGetSettings, polishPrompt } from "./api.js";
-import type { PluginSettings } from "../types.js";
-import { DEFAULT_SETTINGS } from "../types.js";
-import { type PLTranslate, usePLT } from "./i18n.js";
-import { useFillDraft } from "./data-sync.js";
+import { PL_BUTTON_CSS, plBtn } from "../utils/button-style.js";
+import { getSettings as apiGetSettings, polishPrompt } from "../services/api.js";
+import type { PluginSettings } from "../../types.js";
+import { DEFAULT_SETTINGS } from "../../types.js";
+import { type PLTranslate, usePLT } from "../i18n/i18n.js";
+import { useFillDraft } from "../services/data-sync.js";
 
 /**
  * `conversation.input.left` 的最小属性合约（与 PromptLibraryButton 一致）。

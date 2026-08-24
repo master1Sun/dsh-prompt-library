@@ -119,6 +119,15 @@ export const zh = {
   "pl.confirm": "确定",
   "pl.imported": "导入完成：新增 {imported}、更新 {updated}、跳过 {skipped}",
   "pl.update.updated": "当前版本: v{version}",
+
+  // 词库助手活动阶段气泡
+  "pl.phase.idle": "待命中",
+  "pl.phase.waiting": "在等你说呢…",
+  "pl.phase.thinking": "正在思考…",
+  "pl.phase.tool": "正在调用工具…",
+  "pl.phase.review": "正在整理…",
+  "pl.phase.done": "完成啦！",
+  "pl.phase.failed": "刚才没成功…",
   "pl.importFail": "导入失败：{err}",
 
   // 标签集中管理
@@ -187,8 +196,10 @@ export const zh = {
   "pl.set.maxCount": "提示词最大存储数量(条)",
   "pl.set.personTipInterval": "词库助手提示频率(秒)",
   "pl.set.personTipDuration": "词库助手显示时长(秒)",
+  "pl.set.assistant": "显示词库助手",
+  "pl.set.assistantDesc": "控制词库助手（小助手形象）的显隐；关闭后无法启用词库工具面板",
   "pl.set.rightPanel": "显示词库工具面板",
-  "pl.set.rightPanelDesc": "控制词库工具面板显示，开启后点击词库助手可以展开工具面板",
+  "pl.set.rightPanelDesc": "控制词库工具面板显示，需先开启「显示词库助手」才能启用，开启后点击词库助手即可展开工具面板",
   "pl.set.showComposerBtn": "聊天框显示词库按钮",
   "pl.set.showComposerBtnDesc": "在输入框工具栏显示词库按钮",
   "pl.set.showPolishBtn": "聊天框显示 AI 优化按钮",
@@ -325,6 +336,15 @@ export const en: Record<keyof typeof zh, string> = {
   "pl.confirm": "OK",
   "pl.imported": "Import done: {imported} added, {updated} updated, {skipped} skipped",
   "pl.update.updated": "Current version: v{version}",
+
+  // Library assistant activity phase bubble
+  "pl.phase.idle": "On standby",
+  "pl.phase.waiting": "Waiting for you…",
+  "pl.phase.thinking": "Thinking…",
+  "pl.phase.tool": "Using a tool…",
+  "pl.phase.review": "Composing…",
+  "pl.phase.done": "Done!",
+  "pl.phase.failed": "That didn't work…",
   "pl.importFail": "Import failed: {err}",
 
   // Tag management
@@ -393,8 +413,10 @@ export const en: Record<keyof typeof zh, string> = {
   "pl.set.maxCount": "Max stored prompts (items)",
   "pl.set.personTipInterval": "Library assistant hint interval (s)",
   "pl.set.personTipDuration": "Library assistant hint duration (s)",
+  "pl.set.assistant": "Show library assistant",
+  "pl.set.assistantDesc": "Control whether the library assistant is shown; when off, the library panel cannot be enabled",
   "pl.set.rightPanel": "Show prompt library panel",
-  "pl.set.rightPanelDesc": "Controls the prompt library panel. When on, click the assistant to expand the panel",
+  "pl.set.rightPanelDesc": "Controls the prompt library panel. Requires opening the assistant first, then click the assistant to expand the panel",
   "pl.set.showComposerBtn": "Show library button in chat",
   "pl.set.showComposerBtnDesc": "Show the prompt library button in the input toolbar",
   "pl.set.showPolishBtn": "Show AI polish button in chat",

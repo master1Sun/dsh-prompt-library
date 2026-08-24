@@ -16,8 +16,8 @@ import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { load, dump } from "js-yaml";
-import type { PluginSettings, Prompt, TrashItem } from "../types.js";
-import { clampTitle, DEFAULT_SETTINGS, TITLE_MAX_LEN } from "../types.js";
+import type { PluginSettings, Prompt, TrashItem } from "../../types.js";
+import { clampTitle, DEFAULT_SETTINGS, TITLE_MAX_LEN } from "../../types.js";
 import { enrichLearnedPrompt, isAiAvailable } from "./ai.js";
 import { emitDataChanged } from "./events.js";
 import { syncCharacterChatInto } from "./character.js";
@@ -26,8 +26,8 @@ import {
   SETTINGS_NAMESPACE,
   storePath,
   systemSettingsPath,
-} from "./paths.js";
-import { stripBom } from "./text.js";
+} from "../utils/paths.js";
+import { stripBom } from "../utils/text.js";
 
 // ── SQLite 连接与初始化 ────────────────────────────────────────────────────
 

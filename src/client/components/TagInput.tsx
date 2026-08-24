@@ -6,7 +6,7 @@
  * - 未选择时显示「（无标签）」占位；选择一个标签后即为当前值。
  */
 import { type CSSProperties, type ReactNode } from "react";
-import { type PLTranslate, usePLT } from "./i18n.js";
+import { type PLTranslate, usePLT } from "../i18n/i18n.js";
 
 interface Props {
   /** 单个标签（受控，可能包含 # 分隔的旧数据，取首个）。 */
@@ -58,3 +58,4 @@ export function TagInput({ value, onChange, suggestions, inputStyle, t }: Props)
     </div>
   );
 }
+

@@ -12,9 +12,9 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { WebRoute } from "@deepseek-ai/dsh-host-webserver";
-import type { ApiResponse, PluginSettings, Prompt, PromptInput, PromptPatch } from "../types.js";
-import { generateIntro, listAiSelectables, polishPromptBody } from "./ai.js";
-import { generateSkillsFromPrompts } from "./skills.js";
+import type { ApiResponse, PluginSettings, Prompt, PromptInput, PromptPatch } from "../../types.js";
+import { generateIntro, listAiSelectables, polishPromptBody } from "../services/ai.js";
+import { generateSkillsFromPrompts } from "../services/skills.js";
 import {
   autoLearn,
   createPrompt,
@@ -34,8 +34,9 @@ import {
   restorePrompts,
   updatePrompt,
   updateSettings,
-} from "./store.js";
-import { checkUpdate, upgradePlugin } from "./update.js";
+} from "../services/store.js";
+import { checkUpdate, upgradePlugin } from "../services/update.js";
+import { getActivity } from "../services/activity.js";
 
 const PREFIX = "/api/prompt-library";
 
@@ -335,6 +336,12 @@ export function makePromptRoutes(): WebRoute[] {
         }
         const settings = await updateSettings(raw as Partial<PluginSettings>);
         return json(res, 200, { ok: true, data: settings });
+      }
+
+      // GET /activity — 词库助手活动状态机快照（idle/waiting/thinking/tool/review/done/failed），驱动小人动画
+      if (method === "GET" && tail === "/activity") {
+        const data = getActivity();
+        return json(res, 200, { ok: true, data });
       }
 
       return json(res, 404, { ok: false, error: `no route ${method} ${tail}` });

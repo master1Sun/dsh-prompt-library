@@ -8,8 +8,8 @@
  * 与 UI 解耦，方便复用与单独测试算法逻辑。
  */
 import { useEffect, useRef } from "react";
-import type { PluginSettings, Prompt } from "../types.js";
-import { learnPrompt as apiLearn } from "./api.js";
+import type { PluginSettings, Prompt } from "../../types.js";
+import { learnPrompt as apiLearn } from "../services/api.js";
 import { markRecent } from "./recent-created.js";
 
 /** 自动学习的防抖延迟（毫秒）：停止输入多久后触发保存。 */

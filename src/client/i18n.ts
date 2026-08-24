@@ -118,9 +118,7 @@ export const zh = {
   "pl.importConfirm": "导入会把备份内容合并到当前词库（同 ID 覆盖），确定继续？",
   "pl.confirm": "确定",
   "pl.imported": "导入完成：新增 {imported}、更新 {updated}、跳过 {skipped}",
-  "pl.update.detected": "有新的版本，点击更新",
-  "pl.update.detectedBeta": "有新的测试版本，点击更新",
-  "pl.update.updating": "更新中…",
+  "pl.update.updated": "当前版本: v{version}",
   "pl.importFail": "导入失败：{err}",
 
   // 标签集中管理
@@ -326,9 +324,7 @@ export const en: Record<keyof typeof zh, string> = {
   "pl.importConfirm": "Importing merges the backup into the current library (same ID is overwritten). Continue?",
   "pl.confirm": "OK",
   "pl.imported": "Import done: {imported} added, {updated} updated, {skipped} skipped",
-  "pl.update.detected": "A new version is available, click to update",
-  "pl.update.detectedBeta": "A new test version is available, click to update",
-  "pl.update.updating": "Updating…",
+  "pl.update.updated": "Current version: v{version}",
   "pl.importFail": "Import failed: {err}",
 
   // Tag management

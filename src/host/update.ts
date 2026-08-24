@@ -3,13 +3,14 @@
  *
  * 三通道检测：
  * - npm registry（正式版通道）：@sunjuntao/dsh-prompt-library 的 latest 版本；
- * - GitHub Releases 正式版（非预发布）；
- * - GitHub Releases 测试版（预发布）。
+ * - GitHub 主分支测试版（正式通道的补充）：直接读主分支(master) `package.json` 的 version，
+ *   不打 tag、不走 Release；安装走 `github:<repo>#master` 拉主分支最新打包源码。
  *
  * 组合策略：
- * - 加入体验计划（默认勾选）：优先 npm → GitHub 正式版 → 测试版；npm 与 GitHub 正式版有更新即后台静默，
- *   仅「最新测试版」以红点提示手动点击更新；
- * - 未加入体验计划：保持之前逻辑——npm 正式版更新静默；GitHub 任一版本领先 npm 即红点手动更新；
+ * - 加入体验计划（默认勾选）：npm 与 GitHub 主分支任一有更新都后台静默更新，不弹红点；
+ *   但 GitHub 主分支更新优先使用 git 安装最新打包版本，npm 仅作兜底静默通道；
+ * - 未加入体验计划：有 npm 更新即后台静默安装，装完后以红点提示「已更新到新版本 v{版本号}」，
+ *   红点随后台缓存持续到下一次后台检查（原定一天一次或重启客户端）；
  * - 两个源都访问不到 → 不做任何处理。
  *
  * 结果在内存缓存 24 小时；任何失败都静默降级，不影响插件其它功能。
@@ -24,29 +25,31 @@ import { logDir } from "./paths.js";
 
 /** npm registry 中本包的 latest 端点（scoped 包需把 `/` 编码为 `%2f`）。 */
 const REGISTRY_URL = "https://registry.npmjs.org/@sunjuntao%2fdsh-prompt-library/latest";
-/** GitHub Releases 列表端点（含预发布；返回后在本模块内筛选版本号最大的一条，tag 即版本号）。 */
-const GITHUB_API_URL = "https://api.github.com/repos/master1Sun/dsh-prompt-library/releases";
-/** GitHub 仓库（owner/repo），用于测试版走 git 安装命令时的 `github:` 引用。 */
+/** GitHub 仓库（owner/repo），用于读主分支代码版本号及 git 安装命令的 `github:` 引用。 */
 const GITHUB_REPO = "master1Sun/dsh-prompt-library";
+/** 主分支代码的 package.json 地址（GitHub 主分支通道：直接读代码里的版本号）。
+ * 用 contents 接口而非 raw 地址，避免 raw.githubusercontent.com 被墙导致读不到版本号。
+ */
+const MASTER_PACKAGE_URL = `https://api.github.com/repos/${GITHUB_REPO}/contents/package.json?ref=master`;
 /** 版本检查结果的缓存时长。 */
 const CACHE_MS = 24 * 60 * 60 * 1000;
 /** 请求外网（npm / github）的超时。 */
 const REQUEST_TIMEOUT_MS = 8000;
 
-/** 版本检查结果：当前版本、待更新版本、是否静默更新、GitHub 测试版、是否有红点更新。 */
+/** 版本检查结果：当前版本、待更新版本、是否静默更新、红点「已更新」版本及其标记。 */
 export interface UpdateInfo {
   current: string;
-  /** 待静默更新的版本（体验计划：npm / GitHub 正式版中更高者；未加入：npm 或 GitHub 更高者）。 */
+  /** 待静默更新的版本（体验计划：GitHub 主分支或 npm 中更高者；未加入：npm latest）。 */
   latest: string;
-  /** 是否有正式版更新（latest > current，触发后台静默自动更新）。 */
+  /** 是否要后台静默更新（latest > current）。 */
   hasUpdate: boolean;
-  /** 红点可手动更新的测试版/领先版本号（无则与 latest 一致）。 */
+  /** 红点展示的版本号：未加入体验计划时，npm 静默装完提示「已更新到新版本 v{版本号}」。 */
   betaLatest: string;
-  /** 是否有红点手动更新（体验计划：仅最新测试版；未加入：GitHub 版本领先 npm）。 */
+  /** 是否展示红点：仅未加入体验计划的「已更新到新版本」通知为 true，体验计划始终 false。 */
   hasBeta: boolean;
-  /** 安装 latest 时用的 GitHub release tag（如 v0.9.0）。为空表示 latest 来自 npm，走 npm 命令。 */
+  /** 安装 latest 时用的 GitHub ref（如 master）。为空表示 latest 来自 npm，走 npm 命令。 */
   gitTag: string;
-  /** 安装测试版（betaLatest）时用的 GitHub release tag（如 v0.9.0-beta1）。无测试版时为空串。 */
+  /** 预留：安装 betaLatest 时的 GitHub ref；当前场景红点为通知型，恒为空串。 */
   betaTag: string;
 }
 
@@ -68,13 +71,13 @@ function localTime(): string {
 /** 版本日志的文案模板（按语言返回格式化函数），zh / en 双语同步维护。 */
 interface VersionLogCopy {
   /** 版本比对原始信息。 */
-  check: (cur: string, npm: string, ghO: string, ghT: string, exp: boolean) => string;
+  check: (cur: string, npm: string, git: string, exp: boolean) => string;
   /** 无可用更新源。 */
   noSource: string;
   /** 体验计划勾选结果。 */
-  expResult: (latest: string, hasUpdate: boolean, hasBeta: boolean, beta: string) => string;
+  expResult: (latest: string) => string;
   /** 未加入体验计划（普通）结果。 */
-  normalResult: (latest: string, hasUpdate: boolean, hasBeta: boolean, beta: string) => string;
+  normalResult: (latest: string) => string;
   /** 开始升级。 */
   upgradeStart: (target: string, cmd: string) => string;
   /** 升级失败。 */
@@ -101,13 +104,11 @@ function buildVersionLogCopy(lang: string): VersionLogCopy {
 
   if (zh) {
     return {
-      check: (cur, npm, ghO, ghT, exp) =>
-        `版本检查 当前=${cur} npm=${npm} git正式=${ghO} git测试=${ghT} 体验计划=${exp ? on : off}`,
+      check: (cur, npm, git, exp) =>
+        `版本检查 当前=${cur} npm=${npm} git=${git} 体验计划=${exp ? on : off}`,
       noSource: "版本检查 无可用更新源，跳过",
-      expResult: (latest, hasUpdate, hasBeta, beta) =>
-        `版本检查 体验计划结果 latest=${latest} hasUpdate=${bool(hasUpdate)} hasBeta=${bool(hasBeta)} betaLatest=${beta}`,
-      normalResult: (latest, hasUpdate, hasBeta, beta) =>
-        `版本检查 普通结果 latest=${latest} hasUpdate=${bool(hasUpdate)} hasBeta=${bool(hasBeta)} betaLatest=${beta}`,
+      expResult: (latest) => `版本检查 体验计划结果 latest=${latest}`,
+      normalResult: (latest) => `版本检查 普通结果 latest=${latest}`,
       upgradeStart: (target, cmd) => `开始升级 目标=${target} 命令=${cmd}`,
       upgradeFail: (out) => `升级失败 ${out}`,
       upgradeOk: "升级成功，已清除版本检查缓存",
@@ -118,13 +119,11 @@ function buildVersionLogCopy(lang: string): VersionLogCopy {
     };
   }
   return {
-    check: (cur, npm, ghO, ghT, exp) =>
-      `Version check current=${cur} npm=${npm} git-official=${ghO} git-test=${ghT} experience=${exp ? on : off}`,
+    check: (cur, npm, git, exp) =>
+      `Version check current=${cur} npm=${npm} git=${git} experience=${exp ? on : off}`,
     noSource: "Version check no available update source, skipped",
-    expResult: (latest, hasUpdate, hasBeta, beta) =>
-      `Version check experience result latest=${latest} hasUpdate=${bool(hasUpdate)} hasBeta=${bool(hasBeta)} betaLatest=${beta}`,
-    normalResult: (latest, hasUpdate, hasBeta, beta) =>
-      `Version check normal result latest=${latest} hasUpdate=${bool(hasUpdate)} hasBeta=${bool(hasBeta)} betaLatest=${beta}`,
+    expResult: (latest) => `Version check experience result latest=${latest}`,
+    normalResult: (latest) => `Version check normal result latest=${latest}`,
     upgradeStart: (target, cmd) => `Upgrade starting target=${target} command=${cmd}`,
     upgradeFail: (out) => `Upgrade failed ${out}`,
     upgradeOk: "Upgrade succeeded, update cache cleared",
@@ -169,12 +168,6 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-/** 从「release tag」字符串提取主版本号 `x.y.z`；无法识别返回 null。 */
-function extractVersion(raw: string): string | null {
-  const m = raw.match(/(\d+)\.(\d+)\.(\d+)/);
-  return m ? `${m[1]}.${m[2]}.${m[3]}` : null;
-}
-
 /** 通用 GET JSON 请求：发起请求、校验 2xx、解析 JSON。 */
 function fetchJson(url: string, headers: Record<string, string> = {}): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -201,6 +194,26 @@ function fetchJson(url: string, headers: Record<string, string> = {}): Promise<u
   });
 }
 
+/** 请求外网 URL，返回原始文本（用于读 GitHub raw 文件，如主分支 package.json）。 */
+function fetchRawText(url: string, headers: Record<string, string> = {}): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const req = httpsGet(url, { headers }, (res: IncomingMessage) => {
+      const code = res.statusCode ?? 0;
+      if (code < 200 || code >= 300) {
+        res.resume();
+        reject(new Error(`responded ${code}`));
+        return;
+      }
+      const chunks: Buffer[] = [];
+      res.on("data", (c: Buffer) => chunks.push(c));
+      res.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+      res.on("error", reject);
+    });
+    req.setTimeout(REQUEST_TIMEOUT_MS, () => req.destroy(new Error("timeout")));
+    req.on("error", reject);
+  });
+}
+
 /** 请求 npm registry 的 latest 元数据，返回最新正式版版本号。 */
 async function fetchLatestVersion(): Promise<string> {
   const body = (await fetchJson(REGISTRY_URL, { accept: "application/json" })) as {
@@ -212,52 +225,31 @@ async function fetchLatestVersion(): Promise<string> {
   return body.version;
 }
 
-/** GitHub 通道的两个版本：正式版（非预发布）与测试版（预发布）各自的最高版本；无则空串。 */
+/** GitHub 主分支通道的版本信息：只有「测试版」= 主分支代码 package.json 的 version。 */
 interface GithubVersions {
-  official: string;
-  /** 最高正式版对应的完整 release tag（如 v0.9.0）；无正式版时为空串。 */
-  officialTag: string;
   test: string;
-  /** 最高测试版对应的完整 release tag（如 v0.9.0-beta1）；无测试版时为空串。 */
+  /** 测试版安装用的 git ref（恒为主分支名 `master`）；测试版安装拉主分支最新打包源码。 */
   testTag: string;
 }
 
 /**
- * 请求 GitHub Releases 列表，分别取最高正式版与最高测试版；无可用 release 返回空串。
- * 草稿不纳入（公开 API 通常不返回草稿，这里保险起见跳过）。
+ * 读主分支(master) `package.json` 的 version 作为 GitHub 主分支版本号（不打 tag、不走 Release）。
+ * 走 contents 接口并请求原文（accept: raw），避免 raw.githubusercontent.com 被墙；读取失败返回空字符串。
  */
 async function fetchGithubVersions(): Promise<GithubVersions> {
-  // GitHub API 强制要求 User-Agent，否则返回 403
-  const body = (await fetchJson(GITHUB_API_URL, {
-    accept: "application/vnd.github+json",
-    "user-agent": "dsh-prompt-library-updater",
-  })) as Array<{ tag_name?: unknown; draft?: unknown; prerelease?: unknown }>;
-  const result: GithubVersions = { official: "", officialTag: "", test: "", testTag: "" };
-  if (!Array.isArray(body)) return result;
-  for (const r of body) {
-    if (typeof r.tag_name !== "string" || r.draft === true) continue;
-    const v = extractVersion(r.tag_name);
-    if (!v) continue;
-    // 预发布视为测试版；其余视为正式版（两通道各自取版本号最大的一条）
-    if (r.prerelease === true) {
-      if (compareVersions(v, result.test) > 0) {
-        result.test = v;
-        result.testTag = r.tag_name;
-      }
-    } else if (compareVersions(v, result.official) > 0) {
-      result.official = v;
-      result.officialTag = r.tag_name;
+  try {
+    const raw = await fetchRawText(MASTER_PACKAGE_URL, {
+      "user-agent": "dsh",
+      accept: "application/vnd.github.raw",
+    });
+    const pkg = JSON.parse(raw) as { version?: unknown };
+    if (typeof pkg.version === "string" && pkg.version) {
+      return { test: pkg.version, testTag: "master" };
     }
+  } catch {
+    // 主分支 package.json 读取失败 → 版本通道置空
   }
-  return result;
-}
-
-/** 依据版本号取对应的 GitHub tag；非 git 版本或匹配不上返回空串。 */
-function gitTagFor(gh: GithubVersions | null, v: string): string {
-  if (!v || !gh) return "";
-  if (gh.test && v === gh.test) return gh.testTag;
-  if (gh.official && v === gh.official) return gh.officialTag;
-  return "";
+  return { test: "", testTag: "master" };
 }
 
 /** 读取「加入体验计划」开关；读取失败按未勾选处理。 */
@@ -271,15 +263,20 @@ async function isExperienceProgramEnabled(): Promise<boolean> {
 }
 
 /**
- * 检查插件是否有新版本（npm 正式版 + GitHub 测试版双通道）。
+ * 检查插件是否有新版本（npm 正式版 + GitHub 主分支测试版双通道）。
  * @param force 是否忽略缓存强制重新请求（默认 false）。
+ *
+ * 组合规则：
+ * - 未加入体验计划：npm 有更新 → 返回 hasUpdate=true + hasBeta=true（装完后红点提示「已更新到新版本 v{版本号}」）；
+ * - 加入体验计划：npm 或 GitHub 主分支任一有更新 → 返回 hasUpdate=true、hasBeta=false（静默不红点）；
+ *   其中 GitHub 主分支更新优先，gitTag 非空表示用 git 装主分支最新打包版本。
  */
 export async function checkUpdate(force = false): Promise<UpdateInfo> {
   const now = Date.now();
   const current = currentVersion();
   if (!force && cache && now - cache.at < cache.ttl) return cache.info;
 
-  // 是否加入体验计划：决定「GitHub 正式版 / 测试版」如何被对待
+  // 是否加入体验计划：决定 npm 与「GitHub 主分支」更新如何被对待
   const betaEnabled = await isExperienceProgramEnabled();
   const vlog = buildVersionLogCopy(await readGlobalLocale());
 
@@ -288,86 +285,42 @@ export async function checkUpdate(force = false): Promise<UpdateInfo> {
     fetchGithubVersions(),
   ]);
   const npm = npmRes.status === "fulfilled" ? npmRes.value : null;
-  const gh = ghRes.status === "fulfilled" ? ghRes.value : null;
-  const ghOfficial = gh?.official || "";
-  const ghTest = gh?.test || "";
+  const ghTest = ghRes.status === "fulfilled" ? ghRes.value?.test || "" : "";
+  const ghTag = ghRes.status === "fulfilled" ? ghRes.value?.testTag || "" : "";
 
   // 记录本次版本比对原始信息（系统时区时间戳）
-  logVersion(vlog.check(current, npm || "-", ghOfficial || "-", ghTest || "-", betaEnabled));
+  logVersion(vlog.check(current, npm || "-", ghTest || "-", betaEnabled));
 
-  // 所有源都访问不到（或均无可用版本）→ 不做任何处理
-  if (!npm && !ghOfficial && !ghTest) {
+  // 所有源都访问不到 → 不做任何处理
+  if (!npm && !ghTest) {
     logVersion(vlog.noSource);
     const info: UpdateInfo = { current, latest: current, hasUpdate: false, betaLatest: current, hasBeta: false, gitTag: "", betaTag: "" };
     cache = { at: now, info, ttl: CACHE_MS / 2 };
     return info;
   }
 
+  const npmUpdate = !!npm && compareVersions(npm, current) > 0;
+  const gitUpdate = !!ghTest && compareVersions(ghTest, current) > 0;
+
+  // 加入体验计划：静默自动更新，不弹红点。
+  // GitHub 主分支更新优先走 git 装最新打包版本；npm 仅作兜底静默通道。
   if (betaEnabled) {
-    // —— 已加入体验计划：优先 npm → GitHub 正式版 → 测试版 ——
-    // npm 与 GitHub 正式版都走静默自动更新；只有预发布「最新测试版」才以红点提示手动点击更新。
-    // 稳定通道版本 = npm 与 GitHub 正式版中更高者。
-    const stable = (() => {
-      const a = npm || "";
-      const b = ghOfficial;
-      if (a && b) return compareVersions(a, b) >= 0 ? a : b;
-      return a || b || "";
-    })();
-    // 正式版更新（静默）：稳定通道高于当前版本。
-    const hasUpdate = !!stable && compareVersions(stable, current) > 0;
-    // 测试版（红点手动）：仅当预发布「最新测试版」既高于当前版本、又高于全部稳定通道时才提示，
-    // 以免与已静默覆盖的正式版重复打扰。
-    const hasBeta =
-      !!ghTest &&
-      compareVersions(ghTest, current) > 0 &&
-      compareVersions(ghTest, stable || current) > 0;
-    const latest = hasUpdate ? stable : hasBeta ? ghTest : current;
-    // 稳定通道是否来自 GitHub 正式版（npm 缺失或 GitHub 正式版更高 → 用 git 安装）
-    const stableIsGit = !!ghOfficial && (!npm || compareVersions(ghOfficial, npm) > 0);
-    const info: UpdateInfo = {
-      current,
-      latest,
-      hasUpdate,
-      betaLatest: hasBeta ? ghTest : latest,
-      hasBeta,
-      // 静默安装的目标（latest）若来自 GitHub（正式或测试版），带上其 tag 改走 git 命令；来自 npm 则留空走 npm
-      gitTag: hasUpdate
-        ? stableIsGit
-          ? gh?.officialTag || ""
-          : ""
-        : hasBeta
-          ? gh?.testTag || ""
-          : "",
-      // 红点手动更新的测试版：GitHub 预发布 → git 命令
-      betaTag: hasBeta ? gh?.testTag || "" : "",
-    };
-    logVersion(vlog.expResult(latest, hasUpdate, hasBeta, info.betaLatest));
+    const info: UpdateInfo =
+      gitUpdate
+        ? { current, latest: ghTest, hasUpdate: true, betaLatest: current, hasBeta: false, gitTag: ghTag, betaTag: "" }
+        : npmUpdate
+          ? { current, latest: npm as string, hasUpdate: true, betaLatest: current, hasBeta: false, gitTag: "", betaTag: "" }
+          : { current, latest: current, hasUpdate: false, betaLatest: current, hasBeta: false, gitTag: "", betaTag: "" };
+    logVersion(vlog.expResult(info.latest));
     cache = { at: now, info, ttl: CACHE_MS };
     return info;
   }
 
-  // —— 未加入体验计划：保持之前逻辑不变 ——
-  // GitHub 通道版本取正式版 / 测试版中更高者；npm 正式版更新静默，GitHub 任一版本领先 npm 时红点手动更新。
-  const ghAny = compareVersions(ghOfficial, ghTest) >= 0 ? ghOfficial : ghTest;
-  const hasBeta =
-    npm && ghAny
-      ? compareVersions(ghAny, npm) > 0 && compareVersions(ghAny, current) > 0
-      : !!ghAny && compareVersions(ghAny, current) > 0;
-  const latest = npm ?? (ghAny || current);
-  const hasUpdate = compareVersions(latest, current) > 0;
-
-  const info: UpdateInfo = {
-    current,
-    latest,
-    hasUpdate,
-    betaLatest: ghAny || latest,
-    hasBeta,
-    // 未加入体验计划：静默安装版本 latest 来自 npm 则走 npm；若 npm 不可用改用 GitHub 版本则走 git。
-    // 红点手动更新的 GitHub 版本（ghAny，正式或测试）也走 git 命令。
-    gitTag: gitTagFor(gh, latest),
-    betaTag: hasBeta ? gitTagFor(gh, ghAny) : "",
-  };
-  logVersion(vlog.normalResult(latest, hasUpdate, hasBeta, info.betaLatest));
+  // 未加入体验计划：npm 有更新即静默安装；hasBeta 表示装完后要展示「已更新到新版本」红点。
+  const info: UpdateInfo = npmUpdate
+    ? { current, latest: npm as string, hasUpdate: true, betaLatest: npm as string, hasBeta: true, gitTag: "", betaTag: "" }
+    : { current, latest: current, hasUpdate: false, betaLatest: current, hasBeta: false, gitTag: "", betaTag: "" };
+  logVersion(vlog.normalResult(info.latest));
   cache = { at: now, info, ttl: CACHE_MS };
   return info;
 }
@@ -434,8 +387,10 @@ let autoUpdating = false;
 
 /**
  * 每日（含服务启动）的静默版本检查与自动更新。
- * - 已加入体验计划：正式版（npm / GitHub 正式版）有更新即后台静默升级；测试版留给红点手动更新。
- * - 未加入体验计划：保持之前逻辑——正式版有更新且无测试版提示 → 后台静默；存在测试版 → 按红点手动。
+ * - 已加入体验计划：npm 或 GitHub 主分支有更新即后台静默升级，不弹红点；
+ * - 未加入体验计划：npm 有更新即后台静默升级；成功后以缓存记录「已更新到新版本 v{版本号}」红点，
+ *   红点随缓存持续到下一次后台检查（原定一天一次或重启客户端）；
+ * - 安装失败则不展示「已更新」红点，避免误报；
  * - 两个源都不可达 → 什么都不做。
  */
 export async function autoUpdateDaily(): Promise<void> {
@@ -443,16 +398,40 @@ export async function autoUpdateDaily(): Promise<void> {
   autoUpdating = true;
   try {
     const info = await checkUpdate(true);
-    // 已加入体验计划：只静默安装稳定通道（latest 已按 npm / GitHub 正式版取最高）；测试版由红点手动。
-    // 未加入体验计划：仅当正式版有更新且无测试版（hasBeta）才静默，测试版同样留给红点手动。
     const betaEnabled = await isExperienceProgramEnabled();
-    const silent = betaEnabled ? info.hasUpdate : info.hasUpdate && !info.hasBeta;
     const vlog = buildVersionLogCopy(await readGlobalLocale());
-    if (silent && info.latest && /^\d+\.\d+\.\d+/.test(info.latest)) {
-      logVersion(vlog.silentTo(info.latest));
-      await upgradePlugin(info.latest, info.gitTag);
-    } else {
+
+    if (!info.hasUpdate || !info.latest || !/^\d+\.\d+\.\d+/.test(info.latest)) {
       logVersion(vlog.silentSkip(info.hasUpdate, info.hasBeta, info.latest));
+      return;
+    }
+
+    logVersion(vlog.silentTo(info.latest));
+    const res = await upgradePlugin(info.latest, info.gitTag);
+    const at = Date.now();
+    if (res.ok) {
+      if (betaEnabled) {
+        // 已加入体验计划：静默安装不红点（upgradePlugin 已置空缓存，等下次检查重算）。
+        return;
+      }
+      // 未加入体验计划：npm 静默装完 → 用缓存记录「已更新到新版本」红点，缓存 24h。
+      // 期间客户端 getUpdate 读取到 hasBeta=true + betaLatest=已装版本；下次后台检查缓存过期后自然消失。
+      cache = {
+        at,
+        info: {
+          current: info.latest,
+          latest: info.latest,
+          hasUpdate: false,
+          betaLatest: info.latest,
+          hasBeta: true,
+          gitTag: "",
+          betaTag: "",
+        },
+        ttl: CACHE_MS,
+      };
+    } else {
+      // 安装失败：不展示「已更新」红点，避免误报；给短缓存便于尽快重试。
+      cache = { at, info: { ...info, hasUpdate: false, hasBeta: false }, ttl: CACHE_MS / 2 };
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

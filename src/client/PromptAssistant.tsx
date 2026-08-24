@@ -16,7 +16,7 @@ import {
 } from "react";
 import type { PluginSettings } from "../types.js";
 import { DEFAULT_SETTINGS } from "../types.js";
-import { applyUpdate, genIntro, getUpdate, type UpdateInfo } from "./api.js";
+import { genIntro, getUpdate, type UpdateInfo } from "./api.js";
 import { type PLTranslate, usePLT } from "./i18n.js";
 
 const TONE = {
@@ -243,23 +243,8 @@ export function PromptAssistant(props: Props): ReactNode {
   ]);
 
   // 新版本检查结果；null 表示尚未查或查询失败（host 侧失败会返回 hasUpdate=false）。
-  // 红点仅代表「有新的测试版」（GitHub 领先 npm）；正式版更新由 host 后台静默升级。
+  // 红点现在仅代表「未加入体验计划」npm 静默升级成功后的「已更新到新版本」通知；体验计划用户不弹红点。
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
-  // 「红点点击更新」状态：执行中红点变灰、停止动画；结果不在气泡框展示
-  const [updating, setUpdating] = useState(false);
-  const handleUpdate = useCallback(() => {
-    if (updating) return;
-    setUpdating(true);
-    applyUpdate()
-      .then((r) => {
-        // 更新成功：测试版已安装，红点提示失效，隐藏红点；失败则保留红点以便重试
-        if (r?.ok) setUpdate((prev) => (prev ? { ...prev, hasBeta: false } : prev));
-      })
-      .catch(() => {
-        /* 静默处理；红点仅作状态反馈，不在气泡框展示结果 */
-      })
-      .finally(() => setUpdating(false));
-  }, [updating]);
 
   // 拖动小人：仅移动小人独立坐标；松手时若未明显移动视为「点击 → 通知父级」
   const personDragRef = useRef<{ startX: number; startY: number; ox: number; oy: number; moved: boolean } | null>(null);
@@ -453,11 +438,10 @@ export function PromptAssistant(props: Props): ReactNode {
     };
   }, [settings?.personTipInterval, settings?.personTipDuration]);
 
-  // 新版本提示文案：体验计划开启 → 「测试版本」；未开启 → 「有新的版本」。文案走 i18n 国际化。
+  // 红点提示文案：hasBeta=true 表示「未加入体验计划」npm 静默升级成功后的「已更新到新版本」通知，
+  // 带上版本号；体验计划用户不弹红点，故此处仅取该通知文案。文案走 i18n 国际化。
   const updateText = update?.hasBeta
-    ? (settings?.experienceProgramEnabled ?? DEFAULT_SETTINGS.experienceProgramEnabled)
-      ? T("pl.update.detectedBeta")
-      : T("pl.update.detected")
+    ? T("pl.update.updated", { version: update.betaLatest })
     : "";
 
   return (
@@ -636,18 +620,11 @@ export function PromptAssistant(props: Props): ReactNode {
             }}
           />
         </div>
-        {/* 有新版本时：小人右上角挂一个红色呼吸徽标（「新版本」动画提示）。
-            点击该红点即执行插件更新；阻断 mousedown 冒泡，避免误触小人的拖动/切面板。 */}
+        {/* 未加入体验计划、npm 静默升级成功后的「已更新到新版本」通知红点：小人右上角红色呼吸徽标。
+            纯提示型红点：仅 title 悬停提示当前版本号，无点击动作；阻断 mousedown 冒泡，避免误触小人的拖动/切面板。 */}
         {update?.hasBeta && (
           <span
-            role="button"
-            aria-label={updating ? T("pl.update.updating") : updateText}
-            onClick={(e) => {
-              e.stopPropagation();
-              handleUpdate();
-            }}
-            onMouseDown={(e) => e.stopPropagation()}
-            title={updating ? T("pl.update.updating") : updateText}
+            title={updateText}
             style={{
               position: "absolute",
               right: 0,
@@ -657,10 +634,10 @@ export function PromptAssistant(props: Props): ReactNode {
               borderRadius: "50%",
               background: TONE.red,
               border: "2px solid var(--dsw-specific-sidebar-fill, #f5f6f7)",
-              animation: updating ? "none" : "pl-update-ring 1.4s ease-out infinite",
+              animation: "pl-update-ring 1.4s ease-out infinite",
               pointerEvents: "auto",
-              cursor: updating ? "default" : "pointer",
-              opacity: updating ? 0.6 : 1,
+              cursor: "default",
+              opacity: 1,
               transition: "opacity .24s ease",
             }}
           />

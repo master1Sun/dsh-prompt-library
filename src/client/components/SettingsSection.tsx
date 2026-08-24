@@ -15,7 +15,7 @@
 import { type CSSProperties, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { PluginSettings } from "../../types.js";
 import { DEFAULT_SETTINGS } from "../../types.js";
-import { getAiSelectables, getSettings, updateSettings as apiUpdateSettings, type ClientAiSelectable } from "../services/api.js";
+import { getAiSelectables, getSettings, updateSettings as apiUpdateSettings, getUpdate, applyUpdate, type ClientAiSelectable, type UpdateInfo } from "../services/api.js";
 import { type PLTranslate, usePLT } from "../i18n/i18n.js";
 
 const MONO =
@@ -30,6 +30,7 @@ const TONE = {
   border: "var(--dsw-alias-border-l2, rgba(196, 211, 232, 0.16))",
   accent: "var(--dsw-alias-brand-primary, #8ec5ff)",
   success: "var(--dsw-alias-state-success-primary, #78dda0)",
+  red: "var(--dsw-alias-state-error-primary, #ff6b6b)",
 } as const;
 
 /** 分类模块卡片样式（与「词库管理」保持一致）。 */
@@ -356,7 +357,13 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
   const [openLearn, setOpenLearn] = useState(false);
   const [openPanel, setOpenPanel] = useState(false);
   const [openDisplay, setOpenDisplay] = useState(false);
+  const [openUpdate, setOpenUpdate] = useState(false);
   const [openLab, setOpenLab] = useState(false);
+  // 更新提醒状态：updateInfo 为 null 表示尚未检查/检查失败
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [updateMsg, setUpdateMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -389,6 +396,46 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
       return next;
     });
   }, [saveSettings]);
+
+  // 手动检查更新（强制刷新 host 缓存）
+  const handleCheckUpdate = useCallback(async () => {
+    setChecking(true);
+    setUpdateMsg(null);
+    try {
+      const info = await getUpdate();
+      setUpdateInfo(info);
+      if (!info.hasUpdate) {
+        setUpdateMsg({ ok: true, text: T("pl.set.updateLatest") });
+      }
+    } catch {
+      setUpdateMsg({ ok: false, text: T("pl.set.updateFail") });
+    } finally {
+      setChecking(false);
+    }
+  }, [T]);
+
+  // 立即更新：执行安装命令，成功/失败均提示
+  const handleApplyUpdate = useCallback(async () => {
+    setUpdating(true);
+    setUpdateMsg(null);
+    try {
+      const res = await applyUpdate();
+      if (res.ok) {
+        setUpdateMsg({ ok: true, text: T("pl.set.updateSuccess") });
+        // 更新成功后刷新版本信息
+        try {
+          const info = await getUpdate();
+          setUpdateInfo(info);
+        } catch { /* 忽略 */ }
+      } else {
+        setUpdateMsg({ ok: false, text: T("pl.set.updateFail") });
+      }
+    } catch {
+      setUpdateMsg({ ok: false, text: T("pl.set.updateFail") });
+    } finally {
+      setUpdating(false);
+    }
+  }, [T]);
 
   if (loading) {
     return (
@@ -615,7 +662,135 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
         />
       </ModuleCard>
 
-      {/* 分类模块四：实验室 */}
+      {/* 分类模块四：更新 */}
+      <ModuleCard
+        title={T("pl.setModuleUpdate")}
+        desc={T("pl.setModuleUpdateDesc")}
+        open={openUpdate}
+        onToggle={() => setOpenUpdate((v) => !v)}
+      >
+        <ToggleRow
+          label={T("pl.set.autoUpdate")}
+          desc={T("pl.set.autoUpdateDesc")}
+          checked={draft.autoUpdateEnabled}
+          onChange={(v) => updateAndSave({ autoUpdateEnabled: v })}
+        />
+
+        {/* 更新提醒：显示当前/最新版本，提供检查更新与立即更新 */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            padding: "8px 0",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+            <span style={{ fontSize: 13 }}>{T("pl.set.updateReminder")}</span>
+            <button
+              type="button"
+              onClick={handleCheckUpdate}
+              disabled={checking || updating}
+              style={{
+                padding: "5px 12px",
+                fontSize: 12,
+                color: checking || updating ? TONE.quiet : TONE.text,
+                background: TONE.row,
+                border: `1px solid ${TONE.border}`,
+                borderRadius: 5,
+                cursor: checking || updating ? "default" : "pointer",
+              }}
+            >
+              {checking ? T("pl.set.updateChecking") : T("pl.set.checkUpdate")}
+            </button>
+          </div>
+
+          {/* 版本信息状态行 */}
+          {checking ? (
+            <div style={{ fontSize: 11, color: TONE.quiet }}>{T("pl.set.updateChecking")}</div>
+          ) : updating ? (
+            <div style={{ fontSize: 11, color: TONE.accent }}>{T("pl.set.updating")}</div>
+          ) : updateInfo ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ fontSize: 11, color: TONE.quiet }}>
+                {T("pl.set.updateCurrent", { version: updateInfo.current })}
+                {updateInfo.hasUpdate && (
+                  <span style={{ color: TONE.accent, marginLeft: 4 }}>
+                    {T("pl.set.updateAvailable", { version: updateInfo.latest })}
+                  </span>
+                )}
+              </div>
+              {updateInfo.hasUpdate && (
+                <div>
+                  <button
+                    type="button"
+                    onClick={handleApplyUpdate}
+                    disabled={updating}
+                    style={{
+                      padding: "5px 12px",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: "#fff",
+                      background: "var(--dsw-alias-brand-primary, #8ec5ff)",
+                      border: "none",
+                      borderRadius: 5,
+                      opacity: updating ? 0.65 : 1,
+                      cursor: updating ? "default" : "pointer",
+                    }}
+                  >
+                    {updating ? T("pl.set.updating") : T("pl.set.updateNow")}
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : null}
+
+          {/* 操作结果提示：持久显示，直到下次点击检查/更新 */}
+          {updateMsg && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 12,
+                fontWeight: 500,
+                color: updateMsg.ok ? TONE.success : TONE.red,
+                lineHeight: 1.5,
+              }}
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 16 16"
+                style={{ flexShrink: 0 }}
+                aria-hidden="true"
+              >
+                {updateMsg.ok ? (
+                  <path
+                    d="M3 8.5l3.2 3.2L13 4.8"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                ) : (
+                  <path
+                    d="M8 4v5M8 11.5v.5"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                  />
+                )}
+              </svg>
+              <span>{updateMsg.text}</span>
+            </div>
+          )}
+        </div>
+      </ModuleCard>
+
+      {/* 分类模块五：实验室 */}
       <ModuleCard
         title={T("pl.setModuleLab")}
         desc={T("pl.setModuleLabDesc")}
@@ -627,12 +802,6 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           desc={T("pl.set.chatCharacterDesc")}
           checked={draft.applyCharacterToChat}
           onChange={(v) => updateAndSave({ applyCharacterToChat: v })}
-        />
-        <ToggleRow
-          label={T("pl.set.experienceProgram")}
-          desc={T("pl.set.experienceProgramDesc")}
-          checked={draft.experienceProgramEnabled}
-          onChange={(v) => updateAndSave({ experienceProgramEnabled: v })}
         />
       </ModuleCard>
 

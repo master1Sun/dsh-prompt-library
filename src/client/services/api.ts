@@ -183,20 +183,18 @@ export function genIntro(lang: "zh" | "en"): Promise<{ lines: string[] }> {
   return send<{ lines: string[] }>("POST", "/api/prompt-library/ai/intro", { lang });
 }
 
-/** 版本检查结果：当前版本、npm 正式版最新、GitHub 测试版、是否有更新。 */
+/** 版本检查结果：当前版本、最新可更新版本、是否有更新及来源。 */
 export interface UpdateInfo {
   current: string;
   latest: string;
   hasUpdate: boolean;
-  betaLatest: string;
-  hasBeta: boolean;
-  /** 安装 latest 时用的 GitHub release tag（如 v0.9.0）；为空表示 latest 来自 npm。 */
+  /** 该更新来源：npm（优先，默认）或 github（npm 不可达时的兜底）。 */
+  source: "npm" | "github";
+  /** github 来源对应的 release tag（如 v0.9.0）；npm 来源为空串。 */
   gitTag: string;
-  /** 红点测试版对应的 GitHub release tag（如 v0.9.0-beta1）；无测试版时为空串。 */
-  betaTag: string;
 }
 
-/** 检查插件是否有新版本（host 侧含缓存；双源都失败时 hasUpdate/hasBeta 为 false）。 */
+/** 检查插件是否有新版本（host 侧含缓存；双源都失败时 hasUpdate 为 false）。 */
 export function getUpdate(): Promise<UpdateInfo> {
   return send<UpdateInfo>("GET", "/api/prompt-library/update");
 }
@@ -239,4 +237,18 @@ export interface ActivitySnapshot {
 /** 读取词库助手当前活动阶段（host 状态机投影官方会话事件，驱动小人动画）。 */
 export function getActivity(): Promise<ActivitySnapshot> {
   return send<ActivitySnapshot>("GET", "/api/prompt-library/activity");
+}
+
+// ── 公告通告 ────────────────────────────────────────────────────────────
+
+/** 公告通告内容。source 为 remote 时 manual/notice 来自远程；builtin 表示回退内置。 */
+export interface AnnouncementData {
+  source: "remote" | "builtin";
+  manual?: string[];
+  notice?: string;
+}
+
+/** 拉取公告通告（双击词库助手弹窗时调用；未配置/失败时 host 回退内置文案）。 */
+export function getAnnouncement(): Promise<AnnouncementData> {
+  return send<AnnouncementData>("GET", "/api/prompt-library/announcement");
 }

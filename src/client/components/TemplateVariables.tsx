@@ -5,7 +5,7 @@
  * 让用户为每个变量输入值，确认后用填充后的正文替换占位符。
  * 由侧边栏 / 聊天面板两个插入入口共享使用。
  */
-import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { plBtn } from "../utils/button-style.js";
 import { type PLT } from "../i18n/i18n.js";
@@ -135,14 +135,14 @@ function renderPreview(
     const val = Object.prototype.hasOwnProperty.call(values, name) ? values[name] ?? "" : "";
     if (val && val.trim()) {
       nodes.push(
-        <span key={`f${key++}`} style={hlStrong(color, active)} title={`{{${name}}}`}>
+        <span key={`f${key++}`} data-var={name} style={hlStrong(color, active)} title={`{{${name}}}`}>
           {val}
         </span>,
       );
     } else {
       // 占位符原样保留，但用该变量对应的颜色突显，提示此处可被替换
       nodes.push(
-        <span key={`p${key++}`} style={hlPlaceholder(color, active)}>
+        <span key={`p${key++}`} data-var={name} style={hlPlaceholder(color, active)}>
           {`{{${name}}}`}
         </span>,
       );
@@ -259,17 +259,46 @@ export function TemplateFillModal({
   const [focusName, setFocusName] = useState<string | null>(null);
   // 每次打开时重置表单，并预填同名变量的历史记忆（变量填充记忆能力）
   useEffect(() => {
-    if (open) setValues(pickVarMemory(variables));
+    if (open) {
+      setValues(pickVarMemory(variables));
+      setWarnMsg(null); // 重新打开时清除上次的未填提示
+    }
   }, [open, variables]);
   // 按变量在列表中的位置分配颜色：输入行标签、输入框描边、预览高亮使用同一变量色
   const colorOf = useCallback(
     (name: string) => varColor(Math.max(0, variables.indexOf(name))),
     [variables],
   );
+  // 预览区容器引用：聚焦某个变量时，预览区滚动到该变量的高亮片段位置
+  const previewRef = useRef<HTMLDivElement | null>(null);
+  // 聚焦变量变化时，把预览区滚到对应变量的片段（已在可视区则不滚）
+  useEffect(() => {
+    if (!focusName) return;
+    const el = previewRef.current;
+    if (!el) return;
+    const target = el.querySelector<HTMLElement>(`[data-var="${CSS.escape(focusName)}"]`);
+    target?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [focusName]);
+  // 未填变量提示：点击插入/插入并发送时若有变量未填则拦截并提示
+  const [warnMsg, setWarnMsg] = useState<string | null>(null);
+  // 变量输入区容器引用：拦截时聚焦第一个未填变量
+  const inputListRef = useRef<HTMLDivElement | null>(null);
+  // 校验是否还有未填写的变量；有则提示并聚焦首个未填项，返回 false
+  const guardFill = (): boolean => {
+    const left = variables.filter((name) => !(values[name] ?? "").trim());
+    if (left.length === 0) return true;
+    setWarnMsg(t("pl.template.unfilled", { count: left.length }));
+    const first = inputListRef.current?.querySelector<HTMLInputElement>(
+      `[data-var-input="${CSS.escape(left[0]!)}"]`,
+    );
+    first?.focus();
+    return false;
+  };
 
   if (!open) return null;
 
   const submit = () => {
+    if (!guardFill()) return;
     rememberVarValues(values); // 记住本次填充值，下次同名变量自动预填
     onConfirm(values);
   };
@@ -318,6 +347,7 @@ export function TemplateFillModal({
         </div>
         {/* 变量输入区：超出最大高度时独立滚动，按钮区固定在弹窗底部 */}
         <div
+          ref={inputListRef}
           style={{
             flex: 1,
             minHeight: 0,
@@ -352,8 +382,12 @@ export function TemplateFillModal({
                 </span>
                 <input
                   autoFocus
+                  data-var-input={name}
                   value={values[name] ?? ""}
-                  onChange={(e) => setValues((prev) => ({ ...prev, [name]: e.target.value }))}
+                  onChange={(e) => {
+                    setWarnMsg(null); // 开始填写即清除未填提示
+                    setValues((prev) => ({ ...prev, [name]: e.target.value }));
+                  }}
                   onFocus={() => setFocusName(name)}
                   onBlur={() => setFocusName((cur) => (cur === name ? null : cur))}
                   onKeyDown={(e) => {
@@ -386,6 +420,7 @@ export function TemplateFillModal({
         >
           <span style={{ fontSize: 11, color: TONE.muted }}>{t("pl.template.preview")}</span>
           <div
+            ref={previewRef}
             style={{
               maxHeight: 160,
               overflowY: "auto",
@@ -405,6 +440,33 @@ export function TemplateFillModal({
             {renderPreview(body, values, colorOf, focusName)}
           </div>
         </div>
+        {/* 未填变量提示 */}
+        {warnMsg && (
+          <div
+            role="alert"
+            style={{
+              flexShrink: 0,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 12,
+              fontWeight: 500,
+              color: "var(--dsw-alias-state-danger-primary, #ff6b6b)",
+              lineHeight: 1.5,
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" style={{ flexShrink: 0 }} aria-hidden="true">
+              <path
+                d="M8 4v5M8 11.5v.5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+            </svg>
+            <span>{warnMsg}</span>
+          </div>
+        )}
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingTop: 6, flexShrink: 0 }}>
           <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={onCancel}>
             {t("pl.cancel")}
@@ -415,6 +477,7 @@ export function TemplateFillModal({
               size="sm"
               className={plBtn(canSend ? "primary" : "ghost", "sm")}
               onClick={() => {
+                if (!guardFill()) return;
                 rememberVarValues(values);
                 onInsertAndSend(values);
               }}

@@ -90,6 +90,18 @@ export const zh = {
   "pl.intro.3": "一键点取，即成文章；变量轻填，得心应手。",
   "pl.intro.4": "小小词库，四时可思；妙句常新，如数家珍。",
 
+  // 公告 / 使用手册
+  "pl.announce.title": "公告",
+  "pl.announce.dismiss": "知道了",
+  "pl.announce.manualTitle": "使用手册",
+  "pl.announce.noticeTitle": "通告",
+  "pl.announce.noNotice": "暂无通告",
+  "pl.announce.manual.0": "输入 # 呼出词库：实时筛选、↑↓ 选择、回车插入",
+  "pl.announce.manual.1": "自动学习聊天中有价值的提示词，可随时编辑或删除",
+  "pl.announce.manual.2": "支持 AI 优化与智能完善，提升提示词质量",
+  "pl.announce.manual.3": "支持 {{变量}} 占位符，插入时弹窗逐个填写",
+  "pl.announce.manual.4": "侧边栏 / 聊天面板双入口管理词库，支持导出与备份",
+
   // 导入导出 / 备份恢复
   "pl.moduleImportExport": "导入导出",
   "pl.moduleImportExportDesc": "勾选要导出的提示词，生成备份文件；或从备份文件导入（同 ID 覆盖合并）。",
@@ -118,7 +130,6 @@ export const zh = {
   "pl.importConfirm": "导入会把备份内容合并到当前词库（同 ID 覆盖），确定继续？",
   "pl.confirm": "确定",
   "pl.imported": "导入完成：新增 {imported}、更新 {updated}、跳过 {skipped}",
-  "pl.update.updated": "当前版本: v{version}",
 
   // 词库助手活动阶段气泡
   "pl.phase.idle": "待命中",
@@ -171,6 +182,7 @@ export const zh = {
   "pl.template.title": "填充模板变量",
   "pl.template.desc": "该提示词包含变量占位符，插入前请填写实际内容；留空的变量将保留为 {{变量名}}。",
   "pl.template.preview": "实时预览（高亮为填入内容）",
+  "pl.template.unfilled": "请先填写全部变量（还有 {count} 个未填）",
 
   // 选中添加提示词
   "pl.copySelected": "复制选中文字",
@@ -214,8 +226,18 @@ export const zh = {
   "pl.set.labWarning": "以下为实验性能力，可能影响整个 AI 对话的表现。请谨慎勾选。",
   "pl.set.chatCharacter": "整个聊天应用人格",
   "pl.set.chatCharacterDesc": "勾选后人格文件约束整个对话，但只对新会话生效，不影响当前正在进行的对话",
-  "pl.set.experienceProgram": "加入体验计划",
-  "pl.set.experienceProgramDesc": "抢先体验新功能",
+  "pl.set.autoUpdate": "自动更新",
+  "pl.set.autoUpdateDesc": "开启后发现有新版本即后台自动安装，无需手动干预",
+  "pl.set.updateReminder": "更新提醒",
+  "pl.set.checkUpdate": "检查更新",
+  "pl.set.updateChecking": "正在检查更新…",
+  "pl.set.updateCurrent": "当前版本: v{version}",
+  "pl.set.updateAvailable": "发现新版本 v{version}",
+  "pl.set.updateLatest": "已是最新版本",
+  "pl.set.updateNow": "立即更新",
+  "pl.set.updating": "更新中…",
+  "pl.set.updateSuccess": "更新成功，重启 dsh 后生效",
+  "pl.set.updateFail": "更新失败，请稍后重试",
   "pl.set.dataSection": "词库管理",
   "pl.set.dataSectionDesc": "导入导出提示词备份、集中管理提示词标签与回收站。",
   "pl.setSectionTitle": "词库设置",
@@ -228,6 +250,8 @@ export const zh = {
   "pl.setModuleDisplayDesc": "控制各入口的显示方式与触发方式。",
   "pl.setModuleLab": "实验室",
   "pl.setModuleLabDesc": "实验性能力，可能影响整个 AI 对话的表现，请谨慎开启。",
+  "pl.setModuleUpdate": "更新",
+  "pl.setModuleUpdateDesc": "管理插件版本检查与自动更新。",
 } as const;
 
 /** 英文字典（键与中文完全一致）。 */
@@ -307,6 +331,18 @@ export const en: Record<keyof typeof zh, string> = {
   "pl.intro.3": "One tap summons, an essay at hand; a variable lightly filled.",
   "pl.intro.4": "A pocket library, thinkable any hour; fine lines renewed, a joy to count.",
 
+  // Announcement / manual
+  "pl.announce.title": "Announcement",
+  "pl.announce.dismiss": "Got it",
+  "pl.announce.manualTitle": "User Guide",
+  "pl.announce.noticeTitle": "Notice",
+  "pl.announce.noNotice": "No notices",
+  "pl.announce.manual.0": "Type # to open the library: live filter, up/down to select, Enter to insert",
+  "pl.announce.manual.1": "Automatically learn valuable prompts from chats; edit or delete anytime",
+  "pl.announce.manual.2": "AI polish and smart enrichment to improve prompt quality",
+  "pl.announce.manual.3": "Supports {{variable}} placeholders, filled in a popup before insert",
+  "pl.announce.manual.4": "Manage the library from the sidebar / chat panel, with export & backup",
+
   // Import / Export / Backup
   "pl.moduleImportExport": "Import / Export",
   "pl.moduleImportExportDesc": "Check the prompts to export as a backup file; or import from a backup file (merge, overwrite same ID).",
@@ -335,7 +371,6 @@ export const en: Record<keyof typeof zh, string> = {
   "pl.importConfirm": "Importing merges the backup into the current library (same ID is overwritten). Continue?",
   "pl.confirm": "OK",
   "pl.imported": "Import done: {imported} added, {updated} updated, {skipped} skipped",
-  "pl.update.updated": "Current version: v{version}",
 
   // Library assistant activity phase bubble
   "pl.phase.idle": "On standby",
@@ -388,6 +423,7 @@ export const en: Record<keyof typeof zh, string> = {
   "pl.template.title": "Fill template variables",
   "pl.template.desc": "This prompt contains variable placeholders. Fill in the actual values before inserting; empty ones stay as {{variable}}.",
   "pl.template.preview": "Live preview (highlighted = filled in)",
+  "pl.template.unfilled": "Please fill all variables ({count} left)",
 
   // Add from selection
   "pl.copySelected": "Copy selected text",
@@ -431,8 +467,18 @@ export const en: Record<keyof typeof zh, string> = {
   "pl.set.labWarning": "Experimental features below may affect all AI conversations. Enable with caution.",
   "pl.set.chatCharacter": "Apply personality to entire chat",
   "pl.set.chatCharacterDesc": "Constrain the whole chat with the personality file, but only for new sessions, not current ones",
-  "pl.set.experienceProgram": "Join experience program",
-  "pl.set.experienceProgramDesc": "Get early access to new features",
+  "pl.set.autoUpdate": "Auto-update",
+  "pl.set.autoUpdateDesc": "Automatically install new versions in the background when available",
+  "pl.set.updateReminder": "Update reminder",
+  "pl.set.checkUpdate": "Check for updates",
+  "pl.set.updateChecking": "Checking for updates…",
+  "pl.set.updateCurrent": "Current version: v{version}",
+  "pl.set.updateAvailable": "New version available v{version}",
+  "pl.set.updateLatest": "You're up to date",
+  "pl.set.updateNow": "Update",
+  "pl.set.updating": "Updating…",
+  "pl.set.updateSuccess": "Update completed. Restart dsh to apply.",
+  "pl.set.updateFail": "Update failed. Please try again later.",
   "pl.set.dataSection": "Library management",
   "pl.set.dataSectionDesc": "Export all prompts as a backup file, import from a backup file, and manage prompt tags centrally (rename / delete).",
   "pl.setSectionTitle": "Library settings",
@@ -445,6 +491,8 @@ export const en: Record<keyof typeof zh, string> = {
   "pl.setModuleDisplayDesc": "Control how each entry point is shown and triggered.",
   "pl.setModuleLab": "Lab",
   "pl.setModuleLabDesc": "Experimental capabilities that may affect the whole AI conversation. Enable with caution.",
+  "pl.setModuleUpdate": "Update",
+  "pl.setModuleUpdateDesc": "Manage plugin version checking and auto-update.",
   "pl.tagFilterAll": "All",
 };
 

@@ -17,8 +17,9 @@ import {
 import { createPortal } from "react-dom";
 import type { PluginSettings } from "../../types.js";
 import { DEFAULT_SETTINGS } from "../../types.js";
-import { genIntro, getActivity, getUpdate, type ActivityPhase, type ActivitySnapshot, type UpdateInfo } from "../services/api.js";
+import { genIntro, getActivity, type ActivityPhase, type ActivitySnapshot } from "../services/api.js";
 import { type PLTranslate, usePLT } from "../i18n/i18n.js";
+import { AnnouncementModal } from "./AnnouncementModal.js";
 import {
   HOVER_SEQUENCE,
   SEQUENCES,
@@ -255,10 +256,6 @@ export function PromptAssistant(props: Props): ReactNode {
     T("pl.intro.4"),
   ]);
 
-  // 新版本检查结果；null 表示尚未查或查询失败（host 侧失败会返回 hasUpdate=false）。
-  // 红点现在仅代表「未加入体验计划」npm 静默升级成功后的「已更新到新版本」通知；体验计划用户不弹红点。
-  const [update, setUpdate] = useState<UpdateInfo | null>(null);
-
   // 活动状态机：轮询 host 投影的 phase，驱动小人动作动画与阶段气泡。
   // 会话 turn/step/工具/结束事件 → idle/waiting/thinking/tool/review/done/failed；
   // 每个阶段驱动不同的小人动作与头顶状态气泡。
@@ -353,6 +350,12 @@ export function PromptAssistant(props: Props): ReactNode {
   const phaseActive = activity.sessionActive && activity.phase !== "idle";
   const phasePulsing = activity.phase === "thinking" || activity.phase === "tool";
 
+  // 公告弹窗：双击小人打开（使用手册 + 通告）
+  const [announceOpen, setAnnounceOpen] = useState(false);
+  // 单击/双击判定：单击延迟执行面板开合；双击取消本次单击并打开公告
+  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingClickRef = useRef(false);
+
   // 拖动小人：仅移动小人独立坐标；松手时若未明显移动视为「点击 → 通知父级」
   const personDragRef = useRef<{ startX: number; startY: number; ox: number; oy: number; moved: boolean } | null>(null);
   const startPersonDrag = (e: ReactMouseEvent<HTMLElement>) => {
@@ -378,8 +381,21 @@ export function PromptAssistant(props: Props): ReactNode {
       setDragging(false); // 恢复位移动画
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
-      // 点击小人：交给父级（右侧面板）决定是否切换开合
-      if (clicked) onTogglePanel?.();
+      if (!clicked) return;
+      // 单击延迟判定：等待可能的第二次点击（双击）。若是双击则取消本次单击，
+      // 避免面板被连续开合两次；双击最终交给 onDoubleClick 打开公告。
+      if (pendingClickRef.current) {
+        pendingClickRef.current = false;
+        if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = null;
+        return;
+      }
+      pendingClickRef.current = true;
+      clickTimerRef.current = setTimeout(() => {
+        pendingClickRef.current = false;
+        clickTimerRef.current = null;
+        onTogglePanel?.();
+      }, 240);
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -491,22 +507,6 @@ export function PromptAssistant(props: Props): ReactNode {
     };
   }, []);
 
-  // 检查是否有新版本：挂载时请求一次；host 侧带缓存，结果写入 update 状态。
-  // 失败或不可用时保持 hasUpdate=false，只静默关闭提示，不打扰用户。
-  useEffect(() => {
-    let cancelled = false;
-    getUpdate()
-      .then((info) => {
-        if (!cancelled) setUpdate(info);
-      })
-      .catch(() => {
-        /* 静默失败 */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   // 未悬停时不定时自动冒气泡展示功能简介；无论面板折叠与否都会触发（小人在场即冒泡）。
   // 悬停中或显示中则跳过本轮，间隔取自设置。
   useEffect(() => {
@@ -545,12 +545,6 @@ export function PromptAssistant(props: Props): ReactNode {
     };
   }, [settings?.personTipInterval, settings?.personTipDuration]);
 
-  // 红点提示文案：hasBeta=true 表示「未加入体验计划」npm 静默升级成功后的「已更新到新版本」通知，
-  // 带上版本号；体验计划用户不弹红点，故此处仅取该通知文案。文案走 i18n 国际化。
-  const updateText = update?.hasBeta
-    ? T("pl.update.updated", { version: update.betaLatest })
-    : "";
-
   return (
     <>
       <style>{`
@@ -560,8 +554,7 @@ export function PromptAssistant(props: Props): ReactNode {
 @keyframes pl-person-blink { 0%,88%,100% { transform: scaleY(1); } 94% { transform: scaleY(.08); } }
 @keyframes pl-bubble-in { from { opacity: 0; transform: translateY(6px) scale(.9); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes pl-bubble-intro { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes pl-update-pulse { 0%,100% { transform: scale(1); opacity: .9; } 50% { transform: scale(1.35); opacity: .45; } }
-@keyframes pl-update-ring { 0%,100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220,38,38,.5); } 70% { box-shadow: 0 0 0 4px rgba(220,38,38,0); } }
+
 .pl-grab { cursor: grab; user-select: none; }
 .pl-grab:active { cursor: grabbing; }
 .pl-person-arm { transform-origin: 6px 8px; animation: pl-person-wave 2.4s ease-in-out infinite; }
@@ -581,6 +574,13 @@ export function PromptAssistant(props: Props): ReactNode {
       <div
         aria-label={T("pl.title")}
         onMouseDown={startPersonDrag}
+        onDoubleClick={() => {
+          // 双击：取消未决的单击（避免先开合面板一次），打开公告弹窗
+          pendingClickRef.current = false;
+          if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+          clickTimerRef.current = null;
+          setAnnounceOpen(true);
+        }}
         onMouseEnter={() => { hoverRef.current = true; setHovering(true); setBubble(true); }}
         onMouseLeave={() => { hoverRef.current = false; setHovering(false); setBubble(false); }}
         style={{
@@ -753,28 +753,6 @@ export function PromptAssistant(props: Props): ReactNode {
             }}
           />
         </div>
-        {/* 未加入体验计划、npm 静默升级成功后的「已更新到新版本」通知红点：小人右上角红色呼吸徽标。
-            纯提示型红点：仅 title 悬停提示当前版本号，无点击动作；阻断 mousedown 冒泡，避免误触小人的拖动/切面板。 */}
-        {update?.hasBeta && (
-          <span
-            title={updateText}
-            style={{
-              position: "absolute",
-              right: 0,
-              top: 14,
-              width: 9,
-              height: 9,
-              borderRadius: "50%",
-              background: TONE.red,
-              border: "2px solid var(--dsw-specific-sidebar-fill, #f5f6f7)",
-              animation: "pl-update-ring 1.4s ease-out infinite",
-              pointerEvents: "auto",
-              cursor: "default",
-              opacity: 1,
-              transition: "opacity .24s ease",
-            }}
-          />
-        )}
         {/* 活动阶段气泡：会话进行中（思考/调工具/回话/完成/失败）在头顶展示状态；空闲不打扰 */}
         {phaseActive && (
           <div
@@ -809,6 +787,8 @@ export function PromptAssistant(props: Props): ReactNode {
         </div>,
         document.body,
       )}
+      {/* 公告弹窗：双击小人打开（使用手册 + 通告） */}
+      <AnnouncementModal open={announceOpen} onClose={() => setAnnounceOpen(false)} t={T} />
     </>
   );
 }

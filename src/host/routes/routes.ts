@@ -37,6 +37,7 @@ import {
 } from "../services/store.js";
 import { checkUpdate, upgradePlugin } from "../services/update.js";
 import { getActivity } from "../services/activity.js";
+import { getAnnouncement } from "../services/announcement.js";
 
 const PREFIX = "/api/prompt-library";
 
@@ -341,6 +342,12 @@ export function makePromptRoutes(): WebRoute[] {
       // GET /activity — 词库助手活动状态机快照（idle/waiting/thinking/tool/review/done/failed），驱动小人动画
       if (method === "GET" && tail === "/activity") {
         const data = getActivity();
+        return json(res, 200, { ok: true, data });
+      }
+
+      // GET /announcement — 公告通告（双击词库助手弹窗实时拉取；未配置/失败回退内置文案）
+      if (method === "GET" && tail === "/announcement") {
+        const data = await getAnnouncement();
         return json(res, 200, { ok: true, data });
       }
 

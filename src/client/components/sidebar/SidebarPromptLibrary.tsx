@@ -773,8 +773,8 @@ export function SidebarPromptLibrary(props?: {
 .pl-scroll { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--dsw-alias-label-tertiary, #9ca3af) 30%, transparent) transparent; }
 /* 提示词卡片：悬浮时轻微上浮 + 投影 + 描边高亮 */
 .pl-prompt-card {
-  background: var(--dsw-alias-input-fill, #ffffff);
-  border: 1px solid var(--dsw-alias-border-l2, rgba(17, 24, 39, 0.12));
+  background: var(--dsw-alias-bg-layer-3, #1d2735);
+  border: 1px solid var(--dsw-alias-border-l2, rgba(196, 211, 232, 0.16));
   border-radius: 10px;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
   transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;

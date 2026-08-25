@@ -119,8 +119,8 @@ function logVersion(msg: string): void {
   }
 }
 
-/** 读取本地 package.json 的当前版本号。 */
-function currentVersion(): string {
+/** 读取本地 package.json 的当前版本号（公告弹窗也用它优先匹配当前版本的更新说明）。 */
+export function currentVersion(): string {
   try {
     // lib/index.js 的上一级即包根目录，package.json 与 lib 同级。
     const pkgPath = new URL("../package.json", import.meta.url);

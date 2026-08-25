@@ -251,6 +251,15 @@ export const zh = {
   // 选中添加提示词
   "pl.copySelected": "复制选中文字",
   "pl.copiedSelected": "已复制",
+  "pl.applyTemplate": "套模板",
+  "pl.applyTemplateTitle": "选中文本直接套模板：选择含变量的模板，文本自动填入变量",
+  "pl.applyTemplateDesc": "已选中 {length} 个字符，请选择要套用的模板（含 {{变量}} 的提示词）",
+  "pl.applyTemplateEmpty": "词库中还没有含变量的模板，可先在词库中创建",
+
+  // 上下文提示词推荐
+  "pl.recommend": "推荐",
+  "pl.set.contextRecommend": "上下文提示词推荐",
+  "pl.set.contextRecommendDesc": "输入框为空时，依据最近聊天上下文在输入框上方推荐匹配的提示词，点击即插入草稿",
 
   // 设置
   "pl.set.autoLearn": "自动学习提示词",
@@ -638,6 +647,15 @@ export const en: Record<keyof typeof zh, string> = {
   // Add from selection
   "pl.copySelected": "Copy selected text",
   "pl.copiedSelected": "Copied",
+  "pl.applyTemplate": "Apply template",
+  "pl.applyTemplateTitle": "Apply selected text to a template: pick a prompt with variables",
+  "pl.applyTemplateDesc": "Selected {length} characters. Pick a template (prompt with {{variables}})",
+  "pl.applyTemplateEmpty": "No variable templates in the library yet. Create one first.",
+
+  // Context-based prompt recommendations
+  "pl.recommend": "Recommended",
+  "pl.set.contextRecommend": "Context prompt recommendations",
+  "pl.set.contextRecommendDesc": "When the input is empty, recommend matching prompts above the input based on recent chat context; click to insert into the draft",
 
   // Settings
   "pl.set.autoLearn": "Auto-learn prompts",

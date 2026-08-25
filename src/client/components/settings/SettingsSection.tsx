@@ -727,6 +727,12 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           checked={draft.selectionAddEnabled}
           onChange={(v) => updateAndSave({ selectionAddEnabled: v })}
         />
+        <ToggleRow
+          label={T("pl.set.contextRecommend")}
+          desc={T("pl.set.contextRecommendDesc")}
+          checked={draft.contextRecommendEnabled}
+          onChange={(v) => updateAndSave({ contextRecommendEnabled: v })}
+        />
       </ModuleCard>
 
       {/* 分类模块四：更新 */}

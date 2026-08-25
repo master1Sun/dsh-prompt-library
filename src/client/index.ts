@@ -19,6 +19,7 @@ import type { ReactNode } from "react";
 import "./components/common/Tooltip.js";
 import { PromptLibraryButton } from "./components/chat/PromptLibraryButton.js";
 import { AIPolishButton } from "./components/chat/AIPolishButton.js";
+import { ContextRecommendations } from "./components/chat/ContextRecommendations.js";
 import { SettingsSection } from "./components/settings/SettingsSection.js";
 import { SettingsDataSection } from "./components/settings/SettingsDataSection.js";
 import { en, NS, zh } from "./i18n/i18n.js";
@@ -99,6 +100,20 @@ export function apply(ctx: ClientCtx): void {
         locale: NS,
       },
       AIPolishButton as (props: unknown) => ReactNode,
+    ),
+  );
+
+  // 注册上下文提示词推荐：渲染在输入框上方的整行座位（conversation.input.dock），
+  // 依据最近聊天上下文推荐匹配的提示词，点击即插入草稿。
+  ctx.slots.inject("conversation.input.dock", () =>
+    ctx.slots.register(
+      {
+        name: "conversation.input.dock",
+        id: "prompt-library-recommend",
+        order: 30,
+        locale: NS,
+      },
+      ContextRecommendations as (props: unknown) => ReactNode,
     ),
   );
 

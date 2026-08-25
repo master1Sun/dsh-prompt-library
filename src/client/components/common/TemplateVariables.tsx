@@ -237,6 +237,8 @@ interface Props {
   confirmLabel?: string;
   /** 是否显示「插入并发送」按钮，默认 true。覆盖场景通常无需发送，可设为 false。 */
   showInsertAndSend?: boolean;
+  /** 预填的变量值（叠加在历史记忆之上），如「选中文本直接套模板」场景：调用方传入的引用需稳定，避免打开期间被重复重置。 */
+  initialValues?: Record<string, string>;
   /** 翻译函数。 */
   t: PLT;
 }
@@ -252,18 +254,19 @@ export function TemplateFillModal({
   draftEmpty,
   confirmLabel,
   showInsertAndSend = true,
+  initialValues,
   t,
 }: Props): ReactNode {
   const [values, setValues] = useState<Record<string, string>>({});
   // 当前获得焦点的变量名（用于输入框聚焦时以该变量色描边）
   const [focusName, setFocusName] = useState<string | null>(null);
-  // 每次打开时重置表单，并预填同名变量的历史记忆（变量填充记忆能力）
+  // 每次打开时重置表单：先按历史记忆预填同名变量，再叠加调用方传入的预填值（如选中文本）
   useEffect(() => {
     if (open) {
-      setValues(pickVarMemory(variables));
+      setValues({ ...pickVarMemory(variables), ...(initialValues ?? {}) });
       setWarnMsg(null); // 重新打开时清除上次的未填提示
     }
-  }, [open, variables]);
+  }, [open, variables, initialValues]);
   // 按变量在列表中的位置分配颜色：输入行标签、输入框描边、预览高亮使用同一变量色
   const colorOf = useCallback(
     (name: string) => varColor(Math.max(0, variables.indexOf(name))),

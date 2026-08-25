@@ -1,14 +1,22 @@
 // 聊天内容选中文字后的「添加提示词」独立入口。
 // 不依赖右侧面板：开启开关后，在聊天区高亮选中文本会浮出「+ 添加提示词」按钮，
 // 点击弹出独立居中弹窗，选中文本预填到正文，保存即入库。
-import { useEffect, useCallback, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import { createPrompt as apiCreate, listTags as apiListTags } from "../../services/api.js";
+import { useEffect, useCallback, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import type { Prompt } from "../../../types.js";
+import { clampTitle } from "../../../types.js";
+import { createPrompt as apiCreate, listPrompts as apiList, listTags as apiListTags, usePrompt as apiUse } from "../../services/api.js";
 import { markRecent } from "../../utils/recent-created.js";
 import { notifyDataChanged, useDataChanged } from "../../services/data-sync.js";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { plBtn } from "../../utils/button-style.js";
 import { TagInput } from "../common/TagInput.js";
-import { insertVariableAt } from "../common/TemplateVariables.js";
+import {
+  applyVariables,
+  extractVariables,
+  hasVariables,
+  insertVariableAt,
+  TemplateFillModal,
+} from "../common/TemplateVariables.js";
 import { type PLTranslate, usePLT } from "../../i18n/i18n.js";
 
 const MONO =
@@ -65,6 +73,24 @@ const inputStyle: CSSProperties = {
   outline: "none",
 };
 
+/** 模板标签分类筛选项（chip）：选中时用品牌色强调。 */
+function tplTagChipStyle(active: boolean): CSSProperties {
+  return {
+    padding: "3px 9px",
+    borderRadius: 11,
+    border: `1px solid ${active ? "var(--dsw-alias-brand-primary, #4f9df5)" : TONE.border}`,
+    background: active
+      ? "color-mix(in srgb, var(--dsw-alias-brand-primary, #4f9df5) 16%, transparent)"
+      : "var(--dsw-alias-bg-layer-2, #ffffff)",
+    color: active ? "var(--dsw-alias-brand-primary, #4f9df5)" : TONE.muted,
+    fontSize: 11,
+    lineHeight: 1,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+    transition: "background 0.15s, color 0.15s, border-color 0.15s",
+  };
+}
+
 /** 浮层工具栏按钮：贴合宿主主题（无阴影、状态背景色、14px 圆角）。 */
 const floatingBtnStyle: CSSProperties = {
   height: 30,
@@ -86,12 +112,26 @@ interface Props {
   t?: PLTranslate;
   /** 是否启用该功能（由设置面板开关控制）。 */
   enabled: boolean;
+  /** 聊天框输入动作：套模板结果插入到输入框。 */
+  inputActions?: { setDraft: (text: string) => void };
+  /** 当前输入框草稿：非空时套模板结果追加在草稿之后。 */
+  draft?: string;
+}
+
+/** 选中文本 → 模板变量预填：优先命中语义为「内容/正文」的变量，否则预填第一个变量。 */
+function prefillWithSelection(variables: string[], text: string): Record<string, string> {
+  if (variables.length === 0) return {};
+  const contentRe = /内容|正文|原文|材料|素材|content|text|body|article|material|input/i;
+  const hit = variables.find((v) => contentRe.test(v));
+  return { [hit ?? variables[0]!]: text };
 }
 
 /** 仅在启用时挂载选区监听与浮层。 */
 export function SelectionAddPrompt(props: Props): ReactNode {
   const T = usePLT(props?.t);
   const enabled = props.enabled;
+  const inputActions = props.inputActions;
+  const draft = props.draft ?? "";
 
   // 当前选区：{ 文本, 选区矩形 }，用于浮出按钮定位
   const [selection, setSelection] = useState<{ text: string; rect: DOMRect } | null>(null);
@@ -111,6 +151,16 @@ export function SelectionAddPrompt(props: Props): ReactNode {
   const [saving, setSaving] = useState(false);
   // 已有标签候选（下拉提示用）
   const [allTags, setAllTags] = useState<string[]>([]);
+  // 套模板：词库列表 / 模板选择弹窗 / 被选中文本 / 变量预填 / 待套用的模板
+  const [prompts, setPrompts] = useState<Prompt[]>([]);
+  const [tplPickerOpen, setTplPickerOpen] = useState(false);
+  const [tplText, setTplText] = useState("");
+  const [tplPrefill, setTplPrefill] = useState<Record<string, string>>({});
+  const [tplPick, setTplPick] = useState<Prompt | null>(null);
+  // 模板选择弹窗内的搜索词
+  const [tplQuery, setTplQuery] = useState("");
+  // 模板选择弹窗内的标签分类过滤（空 = 全部）
+  const [tplTag, setTplTag] = useState("");
 
   // 加载已有标签作为下拉候选；功能启用时拉取一次，并在词库/标签数据变化时刷新
   //（保证「设置里新增的标签」能立即出现在候选里）。
@@ -124,6 +174,70 @@ export function SelectionAddPrompt(props: Props): ReactNode {
   useEffect(() => {
     loadTags();
   }, [loadTags]);
+
+  // 加载词库列表：供「套模板」选择含 {{变量}} 的提示词（模板）。
+  const loadPrompts = useCallback(() => {
+    if (!enabled) return;
+    apiList()
+      .then(setPrompts)
+      .catch(() => {});
+  }, [enabled]);
+  useDataChanged(loadPrompts);
+  useEffect(() => {
+    loadPrompts();
+  }, [loadPrompts]);
+
+  // 套模板：打开模板选择弹窗（暂存选中文本，关闭浮层避免干扰）
+  const openTplPicker = (text: string) => {
+    setSelection(null);
+    setTplText(text);
+    setTplQuery("");
+    setTplTag("");
+    setTplPickerOpen(true);
+  };
+
+  // 套模板：选中模板后关闭选择弹窗，以选中文本预填变量并弹出填充窗口
+  const pickTemplate = (p: Prompt) => {
+    setTplPickerOpen(false);
+    setTplPrefill(prefillWithSelection(extractVariables(p.body), tplText));
+    setTplPick(p);
+  };
+
+  // 套模板：确认填充后把生成结果插入到聊天输入框（有草稿则追加）
+  const applyTpl = useCallback(
+    (values: Record<string, string>) => {
+      if (!tplPick) return;
+      const filled = applyVariables(tplPick.body, values);
+      apiUse(tplPick.id).catch(() => {});
+      inputActions?.setDraft(draft && draft.trim() ? `${draft}\n\n${filled}` : filled);
+      setTplPick(null);
+      setTplPrefill({});
+    },
+    [tplPick, draft, inputActions],
+  );
+
+  // 模板标签分类：从含 {{变量}} 的提示词中聚合标签（去重、按中文排序），供分类筛选。
+  const templateTags = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          prompts.filter((p) => hasVariables(p.body)).flatMap((p) => p.tags ?? []),
+        ),
+      ).sort((a, b) => a.localeCompare(b, "zh")),
+    [prompts],
+  );
+
+  // 模板选择弹窗候选：仅含 {{变量}} 的提示词，支持先按标签分类（tplTag）过滤，
+  // 再按标题/正文/标签实时搜索
+  const templates = prompts.filter(
+    (p) =>
+      hasVariables(p.body) &&
+      (!tplTag || p.tags?.includes(tplTag)) &&
+      (!tplQuery.trim() ||
+        `${p.title} ${p.body} ${(p.tags ?? []).join(" ")}`
+          .toLowerCase()
+          .includes(tplQuery.trim().toLowerCase())),
+  );
 
   // 监听聊天区选区：仅在功能开启时生效
   useEffect(() => {
@@ -296,6 +410,20 @@ export function SelectionAddPrompt(props: Props): ReactNode {
             </svg>
             {T("pl.addToLibrary")}
           </button>
+          {/* 选中文本直接套模板：选择含 {{变量}} 的模板，选中文本自动预填变量后插入输入框 */}
+          <button
+            type="button"
+            className="pl-selection-btn"
+            onClick={() => openTplPicker(selection.text)}
+            data-tip={T("pl.applyTemplateTitle")}
+            style={floatingBtnStyle}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M4 6h9v4H4V6Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+              <path d="M4 14h9v4H4v-4ZM17 6h3M17 12h3M17 18h3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            </svg>
+            {T("pl.applyTemplate")}
+          </button>
         </div>
       )}
 
@@ -360,7 +488,7 @@ export function SelectionAddPrompt(props: Props): ReactNode {
                     }}
                     data-tip={T("pl.insertVariableTitle")}
                   >
-                    {"{{}}"}
+                    {`{{${T("pl.insertVariableDefault")}}}`}
                   </Button>
                 </span>
                 <textarea ref={bodyRef} value={body} onChange={(e) => setBody(e.target.value)} rows={8} style={{ ...inputStyle, resize: "vertical" }} />
@@ -382,6 +510,172 @@ export function SelectionAddPrompt(props: Props): ReactNode {
           </div>
         </div>
       )}
+
+      {/* 套模板：模板选择弹窗（仅列出含 {{变量}} 的提示词，点击后弹出变量填充窗口） */}
+      {enabled && tplPickerOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={T("pl.applyTemplate")}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 2147483647,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "rgba(0,0,0,0.35)",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 480,
+              maxWidth: "calc(100vw - 40px)",
+              // 固定宽高（480 × 560）：仅当页面窗口小于固定尺寸时才自适应收缩，
+              // 内容多时列表在内部滚动，不随内容撑高
+              height: "min(560px, calc(100vh - 40px))",
+              boxSizing: "border-box",
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+              background: TONE.panel,
+              border: `1px solid ${TONE.border}`,
+              borderRadius: 12,
+              boxShadow: "none",
+              padding: "18px 20px",
+              color: TONE.text,
+              fontFamily: MONO,
+            }}
+          >
+            <strong style={{ fontSize: 15, fontWeight: 520, paddingBottom: 2, flexShrink: 0 }}>{T("pl.applyTemplate")}</strong>
+            <div style={{ fontSize: 12, color: TONE.muted, lineHeight: 1.6, flexShrink: 0 }}>
+              {T("pl.applyTemplateDesc", { length: tplText.length })}
+            </div>
+            {/* 选中内容预览：顶部展示将套用的选中文本（超出时内部滚动） */}
+            <div
+              style={{
+                boxSizing: "border-box",
+                maxHeight: 84,
+                overflow: "auto",
+                padding: "8px 10px",
+                fontSize: 12,
+                lineHeight: 1.6,
+                color: TONE.muted,
+                background: "var(--dsw-alias-bg-layer-2, #ffffff)",
+                border: `1px solid ${TONE.border}`,
+                borderRadius: 7,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                flexShrink: 0,
+              }}
+            >
+              {tplText || " "}
+            </div>
+            <input
+              autoFocus
+              value={tplQuery}
+              onChange={(e) => setTplQuery(e.target.value)}
+              placeholder={T("pl.search")}
+              style={inputStyle}
+            />
+            {/* 标签分类：搜索框下方按 tag 过滤（点击切换，选中高亮；与搜索词叠加生效） */}
+            {templateTags.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4, flexShrink: 0 }}>
+                <button type="button" onClick={() => setTplTag("")} style={tplTagChipStyle(tplTag === "")}>
+                  {T("pl.tagFilterAll")}
+                </button>
+                {templateTags.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => setTplTag(tplTag === tag ? "" : tag)}
+                    style={tplTagChipStyle(tplTag === tag)}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+            )}
+            {/* 模板列表：超出最大高度时独立滚动 */}
+            <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+              {templates.length === 0 && (
+                <div style={{ padding: "18px 12px", color: TONE.muted, fontSize: 13, textAlign: "center" }}>
+                  {T("pl.applyTemplateEmpty")}
+                </div>
+              )}
+              {templates.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => pickTemplate(p)}
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 5,
+                    alignItems: "flex-start",
+                    textAlign: "left",
+                    padding: "8px 10px",
+                    borderRadius: 8,
+                    border: `1px solid ${TONE.border}`,
+                    background: "var(--dsw-alias-bg-layer-2, #ffffff)",
+                    color: TONE.text,
+                    cursor: "pointer",
+                    transition: "background 0.15s",
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = "var(--dsw-alias-interactive-bg-hover, rgba(17,24,39,0.06))"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = "var(--dsw-alias-bg-layer-2, #ffffff)"; }}
+                >
+                  <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>
+                    {clampTitle(p.title)}
+                  </span>
+                  <span style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                    {extractVariables(p.body).slice(0, 4).map((v) => (
+                      <span
+                        key={v}
+                        style={{
+                          fontSize: 10,
+                          lineHeight: 1,
+                          padding: "3px 6px",
+                          borderRadius: 6,
+                          color: TONE.muted,
+                          border: `1px solid ${TONE.border}`,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {`{{${v}}}`}
+                      </span>
+                    ))}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingTop: 4, flexShrink: 0 }}>
+              <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => setTplPickerOpen(false)}>
+                {T("pl.cancel")}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 套模板：变量填充弹窗（选中文本已自动预填到首个/「内容」变量，其余可改或补填） */}
+      <TemplateFillModal
+        open={tplPick !== null}
+        variables={tplPick ? extractVariables(tplPick.body) : []}
+        body={tplPick ? tplPick.body : ""}
+        initialValues={tplPrefill}
+        onCancel={() => {
+          // 取消变量填充时回到套模板选择页（保留搜索词/标签分类状态）
+          setTplPick(null);
+          setTplPrefill({});
+          setTplPickerOpen(true);
+        }}
+        onConfirm={applyTpl}
+        confirmLabel={T("pl.insert")}
+        draftEmpty={!draft.trim()}
+        t={T}
+      />
     </>
   );
 }

@@ -9,6 +9,7 @@
  * 接口保持不变（/api/prompt-library/announcement），调用方传入 lang 查询参数可指定语言。
  */
 import { getAllVersionNotes, normalizeLang, type LangKey } from "./version-notes.js";
+import { currentVersion } from "./update.js";
 
 /** 单版本条目（供前端排版使用）。 */
 export interface VersionEntry {
@@ -27,6 +28,8 @@ export interface AnnouncementData {
   source: "local";
   /** 语言（归一化后），zh 或 en。 */
   lang: LangKey;
+  /** 当前运行版本（package.json version），供前端优先匹配当前版本的更新说明。 */
+  current: string;
   /** 使用手册条目（已按语言翻译）。 */
   manual: { key: string; text: string }[];
   /** 版本更新说明（按版本倒序，每版本含标题 + 要点）。 */
@@ -81,7 +84,8 @@ export function getAnnouncement(
       typeof translated === "string" && translated.length > 0 ? translated : (fb[i] ?? key);
     return { key, text };
   });
-  // 版本说明：直接读本地版本文件（已按语言返回，按版本倒序）。
+  // 版本说明：直接读本地版本文件（已按语言返回，按版本倒序）；
+  // 同时返回当前运行版本，前端据此优先展示「当前版本」对应的更新说明
   const versions = getAllVersionNotes(L);
-  return { source: "local", lang: L, manual, versions };
+  return { source: "local", lang: L, current: currentVersion(), manual, versions };
 }

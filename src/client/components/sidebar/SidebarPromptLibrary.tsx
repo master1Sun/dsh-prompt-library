@@ -1220,7 +1220,7 @@ export function SidebarPromptLibrary(props?: {
                     }}
                     data-tip={T("pl.insertVariableTitle")}
                   >
-                    {"{{}}"}
+                    {`{{${T("pl.insertVariableDefault")}}}`}
                   </Button>
                 </span>
                 <textarea

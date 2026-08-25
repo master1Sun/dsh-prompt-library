@@ -3,7 +3,8 @@
  *
  * 内容分两块：
  *  - 使用手册：插件核心能力要点（本地 i18n 文案，跟随系统语言切换）；
- *  - 版本说明：仅展示最新一个版本的标题 + 更新要点；
+ *  - 版本说明：优先展示「当前运行版本」对应的更新说明（推送与当前版本匹配），
+ *    当前版本无内置说明时回退到最新一个版本；
  *    数据来自 host/services/update/version-notes.ts（本地多语言），不再读取网络 JSON。
  * 与其它弹窗交互保持一致：只能通过右上角关闭按钮或底部「知道了」按钮关闭，
  * 禁止点击遮罩/外部区域关闭。
@@ -130,9 +131,15 @@ export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
       ? data.manual.map((m) => m.text).filter(Boolean)
       : MANUAL_KEYS.map((key) => t(key));
 
-  // 通告版本：host 返回 versions（按版本倒序），仅展示最新一个
-  const latest: VersionEntry | null =
-    data?.versions && data.versions.length > 0 ? data.versions[0] : null;
+  // 通告版本：优先匹配当前运行版本（data.current）的更新说明（版本说明推送跟当前版本对应），
+  // 匹配不到（如当前版本无内置说明）时回退到最新一个版本
+  const latest: VersionEntry | null = useMemo(() => {
+    if (!data?.versions || data.versions.length === 0) return null;
+    const byCurrent = data.current
+      ? data.versions.find((v) => v.version === data.current)
+      : undefined;
+    return byCurrent ?? data.versions[0];
+  }, [data]);
 
   return createPortal(
     <div

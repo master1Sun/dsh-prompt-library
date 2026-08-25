@@ -335,6 +335,8 @@ export interface AnnouncementData {
   source: "local";
   /** 生效语言（zh / en）。 */
   lang: "zh" | "en";
+  /** 当前运行版本（package.json version），用于优先匹配当前版本的更新说明。 */
+  current: string;
   /** 使用手册条目（key 对应 i18n 键，text 已按当前语言填充）。 */
   manual: { key: string; text: string }[];
   /** 版本更新说明（按版本倒序）。 */

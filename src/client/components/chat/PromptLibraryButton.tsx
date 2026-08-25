@@ -1029,6 +1029,14 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
         aria-label={T("pl.title")}
         aria-expanded={open}
         aria-controls={panelId}
+        // ghost 全透明样式在工具栏上文字不够清晰：补一层不透明底色 + 边框，
+        // 让按钮作为独立控件一眼可辨、文字清晰可读（色值走主题 token，随明暗主题自适应）
+        style={{
+          color: "var(--dsw-alias-label-primary, #f2f6fc)",
+          background: "var(--dsw-alias-bg-layer-2, #ffffff)",
+          border: "1px solid var(--dsw-alias-border-l2, rgba(196,211,232,0.16))",
+          opacity: 1,
+        }}
         icon={
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path
@@ -1291,7 +1299,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                         }}
                         data-tip={T("pl.insertVariableTitle")}
                       >
-                        {"{{}}"}
+                        {`{{${T("pl.insertVariableDefault")}}}`}
                       </Button>
                     </span>
                     <textarea
@@ -1512,7 +1520,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
       </>
       )}
       <SidebarPromptLibrary inputActions={inputActions} draft={draft} t={t} />
-      <SelectionAddPrompt t={t} enabled={settings.selectionAddEnabled} />
+      <SelectionAddPrompt t={t} enabled={settings.selectionAddEnabled} inputActions={inputActions} draft={draft} />
       {/* 模板变量填充弹窗：插入含 {{变量}} 的提示词前弹出 */}
       <TemplateFillModal
         open={template !== null}

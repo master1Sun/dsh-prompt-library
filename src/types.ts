@@ -109,6 +109,8 @@ export interface PluginSettings {
   hoverDetailEnabled: boolean;
   /** 是否启用聊天内容选中文字后浮动「添加提示词」入口。 */
   selectionAddEnabled: boolean;
+  /** 是否启用基于聊天上下文的提示词推荐（显示在输入框上方，输入框为空时展示）。 */
+  contextRecommendEnabled: boolean;
   /** 是否启用 AI 智能完善（调用 harness LLM 生成标题/标签/摘要并改写正文）。 */
   aiEnrichEnabled: boolean;
   /** AI 调用使用的 provider 路由（留空则自动发现）。 */
@@ -151,6 +153,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   maxPromptCount: 100,
   hoverDetailEnabled: false,
   selectionAddEnabled: false,
+  contextRecommendEnabled: true,
   aiEnrichEnabled: false,
   aiProvider: "",
   aiModel: "",

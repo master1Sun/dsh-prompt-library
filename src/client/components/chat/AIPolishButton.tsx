@@ -203,7 +203,7 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
         className={plBtn("ghost", "sm")}
         onClick={handlePolish}
         disabled={status === "polishing" || !draft.trim()}
-        title={status === "polishing" ? T("pl.polishLoadingTitle") : draft.trim() ? T("pl.polishHoverContent") : T("pl.polishEmpty")}
+        data-tip={status === "polishing" ? T("pl.polishLoadingTitle") : draft.trim() ? T("pl.polishHoverContent") : T("pl.polishEmpty")}
         aria-label={T("pl.polish")}
         icon={<SparkleIcon spinning={status === "polishing"} />}
       >

@@ -33,6 +33,28 @@ export interface VersionNote {
  */
 export const VERSION_NOTES: VersionNote[] = [
   {
+    version: "0.8.15",
+    date: "2026-08-25",
+    zh: {
+      title: "查看详情 · 全局主题提示 · 卡片列表",
+      items: [
+        "查看详情：聊天框与侧边栏新增「查看」按钮，展示完整标题、标签与正文预览；查看时点击外部不关闭面板，仅可手动关闭。",
+        "全局主题提示：所有鼠标悬停提示改为随黑夜/白天模式自适应渲染，并修复「#」浮层内提示被遮挡的问题。",
+        "卡片列表：设置面板的导入导出、标签管理、回收站列表统一改为卡片样式，信息层次更清晰。",
+        "长文本截断：侧边栏折叠标签、查看面板标签、标签过滤条过长内容统一以省略号截断并悬停显示完整内容。",
+      ],
+    },
+    en: {
+      title: "View details · Themed tooltips · Card lists",
+      items: [
+        "View action: chat and sidebar panels gain a \"View\" button showing full title, tags and body; the panel stays open on outside clicks and closes only manually.",
+        "Themed tooltips: all hover tooltips now adapt to light/dark mode, and the tooltip inside the \"#\" overlay is no longer hidden behind the popup.",
+        "Card lists: import/export, tag management and trash lists in settings are reworked into card-style rows with clearer hierarchy.",
+        "Truncation: long sidebar group tags, view-panel tags and filter-bar chips now truncate with ellipsis and show the full value on hover.",
+      ],
+    },
+  },
+  {
     version: "0.8.14",
     date: "2026-08-25",
     zh: {

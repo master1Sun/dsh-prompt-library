@@ -64,6 +64,21 @@ const inputStyle: CSSProperties = {
   outline: "none",
 };
 
+/** 标签长度上限：按显示宽度计数，中文/全角按 2、半角按 1，合计最多 16（等价于最多 8 个汉字）。 */
+const TAG_MAX_UNITS = 16;
+/** 截断标签到宽度上限（中文/全角按 2、半角按 1），避免输入时超过限制。 */
+function clampTag(s: string): string {
+  let n = 0;
+  let out = "";
+  for (const ch of s) {
+    const w = /[\u3000-\u9fff\uff00-\uffef]/.test(ch) ? 2 : 1;
+    if (n + w > TAG_MAX_UNITS) break;
+    n += w;
+    out += ch;
+  }
+  return out;
+}
+
 /** 内联模块卡片样式。 */
 const moduleStyle: CSSProperties = {
   boxSizing: "border-box",
@@ -158,7 +173,7 @@ function ModuleCard(props: {
   );
 }
 
-/** 导出勾选列表中的单条提示词行。 */
+/** 导出勾选列表中的单条提示词（卡片式）。 */
 function PromptCheckRow(props: {
   title: string;
   body: string;
@@ -168,47 +183,59 @@ function PromptCheckRow(props: {
   const { title, body, checked, onToggle } = props;
   return (
     <label
+      className="pl-data-card"
       style={{
         display: "flex",
         alignItems: "flex-start",
-        gap: 8,
-        padding: "7px 9px",
+        gap: 10,
+        padding: "10px 12px",
         background: TONE.row,
         border: `1px solid ${TONE.border}`,
-        borderRadius: 7,
+        borderRadius: 9,
         cursor: "pointer",
         userSelect: "none",
       }}
     >
-      <input type="checkbox" checked={checked} onChange={onToggle} style={{ marginTop: 2 }} />
+      <input type="checkbox" checked={checked} onChange={onToggle} style={{ marginTop: 3 }} />
       <span style={{ flex: 1, minWidth: 0 }}>
         <span
           style={{
-            display: "block",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
             fontSize: 13,
-            fontWeight: 520,
+            fontWeight: 560,
+            lineHeight: 1.4,
             minWidth: 0,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
           }}
-          title={title}
         >
-          {title}
+          <span
+            style={{
+              flex: 1,
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+            data-tip={title}
+          >
+            {title}
+          </span>
         </span>
         <span
           style={{
-            display: "block",
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical",
             fontSize: 11,
             color: TONE.quiet,
-            lineHeight: 1.4,
-            marginTop: 2,
-            maxHeight: 32,
+            lineHeight: 1.5,
+            marginTop: 3,
             overflow: "hidden",
             wordBreak: "break-word",
           }}
         >
-          {body.replace(/\s+/g, " ").trim().slice(0, 80) || " "}
+          {body.replace(/\s+/g, " ").trim() || " "}
         </span>
       </span>
     </label>
@@ -605,6 +632,8 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
 .pl-data-action{background:var(--dsw-alias-bg-layer-3, #1d2735)}
 .pl-data-action:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .pl-data-action:active{background:var(--dsw-alias-interactive-bg-active)}
+.pl-data-card{transition:border-color .24s cubic-bezier(.22,1,.36,1),background-color .24s cubic-bezier(.22,1,.36,1),transform .24s cubic-bezier(.22,1,.36,1)}
+.pl-data-card:hover{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l3, rgba(196,211,232,.31))}
 `}</style>
       {/* 面板顶部标题 + 描述 */}
       <div style={{ padding: "2px 0 4px", display: "flex", flexDirection: "column", gap: 4 }}>
@@ -694,7 +723,7 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
             size="sm"
             className={plBtn("primary", "sm")}
             onClick={exportSelectedPrompts}
-            title={T("pl.exportTitle")}
+            data-tip={T("pl.exportTitle")}
           >
             {T("pl.exportSelected")}
           </Button>
@@ -704,7 +733,7 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
             size="sm"
             className={plBtn("ghost", "sm")}
             onClick={() => importRef.current?.click()}
-            title={T("pl.importTitle")}
+            data-tip={T("pl.importTitle")}
           >
             {T("pl.import")}
           </Button>
@@ -714,7 +743,7 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
             size="sm"
             className={plBtn("ghost", "sm")}
             onClick={() => setSkillImportOpen(true)}
-            title={T("pl.skillImportBtnTitle")}
+            data-tip={T("pl.skillImportBtnTitle")}
           >
             {T("pl.skillImport")}
           </Button>
@@ -724,7 +753,7 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
             size="sm"
             className={plBtn("ghost", "sm")}
             onClick={openSkillExport}
-            title={T("pl.skillExportBtnTitle")}
+            data-tip={T("pl.skillExportBtnTitle")}
           >
             {T("pl.skillExport")}
           </Button>
@@ -764,7 +793,7 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
                           return next;
                         });
                       }}
-                      title={T("pl.exportSelectAll")}
+                      data-tip={T("pl.exportSelectAll")}
                       style={{ margin: 0 }}
                     />
                     <button
@@ -851,7 +880,7 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <input
             value={newTag}
-            onChange={(e) => setNewTag(e.target.value)}
+            onChange={(e) => setNewTag(clampTag(e.target.value))}
             onKeyDown={(e) => {
               if (e.key === "Enter") addTag();
             }}
@@ -875,14 +904,15 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
               return (
                 <div
                   key={tag.name}
+                  className="pl-data-card"
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    gap: 8,
-                    padding: "6px 8px",
+                    gap: 10,
+                    padding: "9px 12px",
                     background: TONE.row,
                     border: `1px solid ${TONE.border}`,
-                    borderRadius: 7,
+                    borderRadius: 9,
                   }}
                 >
                   {editing ? (
@@ -890,7 +920,7 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
                       <input
                         autoFocus
                         value={renamingTag!.value}
-                        onChange={(e) => setRenamingTag({ from: tag.name, value: e.target.value })}
+                        onChange={(e) => setRenamingTag({ from: tag.name, value: clampTag(e.target.value) })}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") confirmRenameTag();
                           if (e.key === "Escape") setRenamingTag(null);
@@ -907,6 +937,17 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
                     </>
                   ) : (
                     <>
+                      {/* 标签色点标识 */}
+                      <span
+                        style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: "50%",
+                          background: TONE.accent,
+                          flexShrink: 0,
+                        }}
+                        aria-hidden="true"
+                      />
                       <span
                         style={{
                           fontSize: 13,
@@ -920,7 +961,20 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
                       >
                         {tag.name}
                       </span>
-                      <span style={{ fontSize: 11, color: TONE.quiet, flexShrink: 0 }}>{tag.count}</span>
+                      <span
+                        style={{
+                          flexShrink: 0,
+                          fontSize: 11,
+                          color: TONE.muted,
+                          lineHeight: 1.4,
+                          background: "var(--dsw-alias-interactive-bg-hover, rgba(196,211,232,.12))",
+                          border: `1px solid ${TONE.border}`,
+                          borderRadius: 999,
+                          padding: "1px 8px",
+                        }}
+                      >
+                        {tag.count}
+                      </span>
                       <Button
                         type="button"
                         variant="ghost"
@@ -936,7 +990,7 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
                         size="sm"
                         className={plBtn("ghost", "sm")}
                         disabled={tag.count > 0}
-                        title={tag.count > 0 ? T("pl.deleteTagInUseTitle", { name: tag.name, count: tag.count }) : T("pl.deleteTag")}
+                        data-tip={tag.count > 0 ? T("pl.deleteTagInUseTitle", { name: tag.name, count: tag.count }) : T("pl.deleteTag")}
                         onClick={() => removeTag(tag.name)}
                         style={tag.count > 0 ? { opacity: 0.45, cursor: "not-allowed" } : undefined}
                       >
@@ -1024,36 +1078,62 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
             {trashList.map((item) => (
               <div
                 key={item.id}
+                className="pl-data-card"
                 style={{
                   display: "flex",
                   alignItems: "flex-start",
-                  gap: 8,
-                  padding: "8px 10px",
+                  gap: 10,
+                  padding: "10px 12px",
                   background: TONE.row,
                   border: `1px solid ${TONE.border}`,
-                  borderRadius: 7,
+                  borderRadius: 9,
                 }}
               >
                 <input
                   type="checkbox"
                   checked={trashSelected.has(item.id)}
                   onChange={() => toggleTrash(item.id)}
-                  style={{ marginTop: 2 }}
+                  style={{ marginTop: 3 }}
                 />
-                <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
+                <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 5 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", minWidth: 0 }}>
                     <strong
                       style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
                         fontSize: 13,
-                        fontWeight: 520,
+                        fontWeight: 560,
                         minWidth: 0,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
                       }}
-                      title={item.title}
                     >
-                      {item.title || T("pl.sidebar.uncategorized")}
+                      <svg
+                        width="13"
+                        height="13"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        style={{ flexShrink: 0, color: TONE.muted }}
+                        aria-hidden="true"
+                      >
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                        <path d="M14 2v6h6" />
+                      </svg>
+                      <span
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                        data-tip={item.title}
+                      >
+                        {item.title || T("pl.sidebar.uncategorized")}
+                      </span>
                     </strong>
                     <span style={{ fontSize: 10, color: TONE.quiet, flexShrink: 0, whiteSpace: "nowrap" }}>
                       {T("pl.trashDeletedAt", { time: formatTime(item.deletedAt) })}
@@ -1061,34 +1141,41 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
                   </div>
                   <div
                     style={{
+                      display: "-webkit-box",
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: "vertical",
                       fontSize: 11,
                       color: TONE.quiet,
                       lineHeight: 1.5,
-                      maxHeight: 40,
                       overflow: "hidden",
                       wordBreak: "break-word",
                     }}
                   >
-                    {item.body.replace(/\s+/g, " ").trim().slice(0, 120) || " "}
+                    {item.body.replace(/\s+/g, " ").trim() || " "}
                   </div>
                   <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                    <span
+                      style={{
+                        flexShrink: 0,
+                        fontSize: 10,
+                        color: daysLeft(item.deletedAt) <= 1 ? TONE.red : TONE.muted,
+                        lineHeight: 1.4,
+                        background: "var(--dsw-alias-interactive-bg-hover, rgba(196,211,232,.12))",
+                        border: `1px solid ${TONE.border}`,
+                        borderRadius: 999,
+                        padding: "2px 8px",
+                      }}
+                      data-tip={T("pl.trashCleanupNote")}
+                    >
+                      {T("pl.trashDaysLeft", { n: daysLeft(item.deletedAt) })}
+                    </span>
+                    <span style={{ flex: 1 }} />
                     <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => restoreOne(item)}>
                       {T("pl.trashRestoreOne")}
                     </Button>
                     <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => deleteOne(item)} style={{ color: TONE.red }}>
                       {T("pl.trashDeleteOne")}
                     </Button>
-                    <span
-                      style={{
-                        fontSize: 10,
-                        color: daysLeft(item.deletedAt) <= 1 ? TONE.red : TONE.quiet,
-                        marginLeft: "auto",
-                        flexShrink: 0,
-                      }}
-                      title={T("pl.trashCleanupNote")}
-                    >
-                      {T("pl.trashDaysLeft", { n: daysLeft(item.deletedAt) })}
-                    </span>
                   </div>
                 </div>
               </div>

@@ -582,7 +582,7 @@ export function BackupModule(props?: { t?: PLTranslate }): ReactNode {
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
                     }}
-                    title={b.name}
+                    data-tip={b.name}
                   >
                     {b.name}
                   </span>
@@ -616,14 +616,14 @@ export function BackupModule(props?: { t?: PLTranslate }): ReactNode {
                     size="sm"
                     className={plBtn("ghost", "sm")}
                     onClick={() => setRestoreTarget(b)}
-                    title={T("pl.set.restoreTitle", { name: b.name })}
+                    data-tip={T("pl.set.restoreTitle", { name: b.name })}
                   >
                     {T("pl.set.restore")}
                   </Button>
                   <button
                     type="button"
                     onClick={() => setDeleteTarget(b)}
-                    title={T("pl.set.backupDeleteTitle")}
+                    data-tip={T("pl.set.backupDeleteTitle")}
                     style={{
                       flexShrink: 0,
                       border: "none",

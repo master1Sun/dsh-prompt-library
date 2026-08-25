@@ -39,9 +39,9 @@ const chipStyle: CSSProperties = {
   height: 24,
   padding: "0 10px",
   boxSizing: "border-box",
-  maxWidth: "100%",
+  // 固定最大宽度：内容过长时配合内层 span 显示省略号，避免撑破/换行
+  maxWidth: 150,
   overflow: "hidden",
-  textOverflow: "ellipsis",
   border: `1px solid ${TONE.border}`,
   borderRadius: 999,
   fontWeight: 500,
@@ -55,6 +55,14 @@ const chipStyle: CSSProperties = {
   userSelect: "none",
   transition:
     "background 0.18s ease, color 0.18s ease, border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease",
+};
+
+/** 标签文本容器：在 flex 布局中可收缩，过长时以省略号截断。 */
+const chipTextStyle: CSSProperties = {
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
 };
 
 /** 标签过滤条容器的统一间距。 */
@@ -114,18 +122,18 @@ export function TagFilterBar(props: {
     <div style={barStyle}>
       <button type="button" onClick={() => onChange("")} style={chip(active === "")}>
         {active === "" && <PinIcon />}
-        {allLabel ?? "全部"}
+        <span style={chipTextStyle}>{allLabel ?? "全部"}</span>
       </button>
       {tags.map((tag) => (
         <button
           key={tag}
           type="button"
           onClick={() => onChange(active === tag ? "" : tag)}
-          title={tag}
+          data-tip={tag}
           style={chip(active === tag)}
         >
           {active === tag && <PinIcon />}
-          {tag}
+          <span style={chipTextStyle}>{tag}</span>
         </button>
       ))}
     </div>
@@ -183,7 +191,7 @@ export function SearchBox({
       {/* 左侧搜索图标（可点击触发搜索） */}
       <button
         type="button"
-        title="搜索"
+        data-tip="搜索"
         onClick={onSearch}
         aria-label="搜索"
         style={{
@@ -243,7 +251,7 @@ export function SearchBox({
       {hasText && (
         <button
           type="button"
-          title="清除"
+          data-tip="清除"
           aria-label="清除"
           onClick={onClear}
           style={{

@@ -281,6 +281,8 @@ export function SidebarPromptLibrary(props?: {
   const [template, setTemplate] = useState<{ prompt: Prompt; mode: "insert" | "overwrite" } | null>(null);
   // 待确认删除的提示词（自定义确认弹窗，替代系统 confirm）
   const [deleteConfirm, setDeleteConfirm] = useState<Prompt | null>(null);
+  // 待查看详情的提示词（查看弹层，覆盖整个面板展示完整标题/标签/正文，仅可通过关闭按钮关闭）
+  const [viewing, setViewing] = useState<Prompt | null>(null);
   // 每个分组的展开状态（持久化到 localStorage，刷新后保持）。
   // 默认全部折叠：集合中只记录「已展开」的分组，空集合即全部折叠。
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => {
@@ -823,7 +825,7 @@ export function SidebarPromptLibrary(props?: {
           {/* 右下角缩放手柄：拖动调节面板大小 */}
           <div
             onMouseDown={startResize}
-            title={T("pl.floating.resize")}
+            data-tip={T("pl.floating.resize")}
             style={{
               position: "absolute",
               right: 0,
@@ -888,7 +890,7 @@ export function SidebarPromptLibrary(props?: {
                 className={plBtn("ghost", "sm")}
                 onClick={refresh}
                 disabled={phase === "loading"}
-                title={phase === "loading" ? T("pl.refreshing") : T("pl.refreshTitle")}
+                data-tip={phase === "loading" ? T("pl.refreshing") : T("pl.refreshTitle")}
                 icon={
                   <svg
                     width="13" height="13" viewBox="0 0 24 24" fill="none"
@@ -921,7 +923,7 @@ export function SidebarPromptLibrary(props?: {
                 className={plBtn("ghost", "sm")}
                 onClick={() => setActiveView((v) => (v === "stats" ? "list" : "stats"))}
                 disabled={editing}
-                title={activeView === "stats" ? T("pl.stats.back") : T("pl.stats.view")}
+                data-tip={activeView === "stats" ? T("pl.stats.back") : T("pl.stats.view")}
                 icon={
                   <svg
                     width="13" height="13" viewBox="0 0 24 24" fill="none"
@@ -940,7 +942,7 @@ export function SidebarPromptLibrary(props?: {
                 className={plBtn("ghost", "sm")}
                 onMouseDown={(e: ReactMouseEvent<HTMLButtonElement>) => e.stopPropagation()}
                 onClick={() => setCollapsed(true)}
-                title={T("pl.sidebar.collapse")}
+                data-tip={T("pl.sidebar.collapse")}
                 icon={
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M3 8l9 9 9-9" />
@@ -1079,8 +1081,19 @@ export function SidebarPromptLibrary(props?: {
                           </svg>
                         )}
                       </span>
-                      <span>{tag}</span>
-                      <span style={{ fontSize: 10, opacity: 0.6 }}>{T("pl.sidebar.groupCount", { count: items.length })}</span>
+                      <span
+                        style={{
+                          flex: "1 1 auto",
+                          minWidth: 0,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                        data-tip={tag}
+                      >
+                        {tag}
+                      </span>
+                      <span style={{ fontSize: 10, opacity: 0.6, flexShrink: 0 }}>{T("pl.sidebar.groupCount", { count: items.length })}</span>
                     </div>
                     {!isCollapsed && (
                       <div style={{ padding: "2px 10px 8px", display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1106,11 +1119,11 @@ export function SidebarPromptLibrary(props?: {
                             whiteSpace: "nowrap",
                             overflow: "hidden",
                             textOverflow: "ellipsis",
-                          }} title={p.title}>{query.trim() ? <Highlight text={clampTitle(p.title)} query={query} /> : clampTitle(p.title)}</strong>
+                          }} data-tip={p.title}>{query.trim() ? <Highlight text={clampTitle(p.title)} query={query} /> : clampTitle(p.title)}</strong>
                           <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
                             {isRecent(p.id) && (
                               <span
-                                title={T("pl.recentNew")}
+                                data-tip={T("pl.recentNew")}
                                 style={{ width: 8, height: 8, borderRadius: "50%", background: TONE.mint, display: "inline-block", flexShrink: 0 }}
                               />
                             )}
@@ -1149,6 +1162,7 @@ export function SidebarPromptLibrary(props?: {
                           <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => copy(p)}>
                             {copiedId === p.id ? T("pl.copied") : T("pl.copy")}
                           </Button>
+                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => setViewing(p)}>{T("pl.view")}</Button>
                           <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => startEdit(p)}>{T("pl.edit")}</Button>
                           <Button
                             type="button"
@@ -1204,7 +1218,7 @@ export function SidebarPromptLibrary(props?: {
                       e.stopPropagation();
                       insertVariableAt(bodyRef.current, editor.body, (v) => setEditor({ ...editor, body: v }), t("pl.insertVariableDefault"));
                     }}
-                    title={T("pl.insertVariableTitle")}
+                    data-tip={T("pl.insertVariableTitle")}
                   >
                     {"{{}}"}
                   </Button>
@@ -1255,6 +1269,78 @@ export function SidebarPromptLibrary(props?: {
             </span>
             <span>{T("pl.sidebar.total", { count: prompts.length })}</span>
           </footer>
+          {/* 查看弹层：覆盖整个面板展示完整标题/标签/正文，仅可通过关闭按钮关闭 */}
+          {viewing && (
+            <div role="dialog" aria-label={T("pl.view")} style={{
+              position: "absolute",
+              inset: 0,
+              zIndex: 50,
+              display: "flex",
+              flexDirection: "column",
+              background: TONE.panel,
+            }}>
+              {/* 头部：标题 + 关闭按钮 */}
+              <div style={{
+                flexShrink: 0,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "10px 14px",
+                borderBottom: `1px solid ${TONE.border}`,
+              }}>
+                <strong style={{
+                  flex: "1 1 auto",
+                  minWidth: 0,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }} data-tip={viewing.title}>{clampTitle(viewing.title)}</strong>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className={plBtn("ghost", "sm")}
+                  onClick={() => setViewing(null)}
+                  data-tip={T("pl.close")}
+                  style={{ flexShrink: 0 }}
+                >
+                  ✕
+                </Button>
+              </div>
+              {/* 标签 */}
+              {viewing.tags && viewing.tags.length > 0 && (
+                <div style={{ flexShrink: 0, display: "flex", flexWrap: "wrap", gap: 5, padding: "8px 14px 0" }}>
+                  {viewing.tags.map((tag) => (
+                    <span key={tag} style={{
+                      maxWidth: 96,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      padding: "2px 8px",
+                      borderRadius: 8,
+                      fontSize: 11,
+                      color: TONE.accent,
+                      background: TONE.accentSoft,
+                    }} data-tip={tag}>{tag}</span>
+                  ))}
+                </div>
+              )}
+              {/* 正文（可滚动） */}
+              <div style={{
+                flex: 1,
+                minHeight: 0,
+                overflow: "auto",
+                padding: "10px 14px 14px",
+                color: TONE.text,
+                fontSize: 12.5,
+                lineHeight: 1.7,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+              }}>{viewing.body}</div>
+            </div>
+          )}
         </section>
         {/* 悬停详情卡片必须在面板 section 之外：面板带 transform 动画，会破坏内部 fixed 元素的定位 */}
         {hoverEnabled && hover.overlay}

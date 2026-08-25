@@ -269,7 +269,7 @@ export function SelectionAddPrompt(props: Props): ReactNode {
             type="button"
             className="pl-selection-btn"
             onClick={() => copySelected(selection.text)}
-            title={T("pl.copySelected")}
+            data-tip={T("pl.copySelected")}
             style={floatingBtnStyle}
           >
             {copied ? (
@@ -288,7 +288,7 @@ export function SelectionAddPrompt(props: Props): ReactNode {
             type="button"
             className="pl-selection-btn"
             onClick={() => openModal(selection.text)}
-            title={T("pl.addToLibrary")}
+            data-tip={T("pl.addToLibrary")}
             style={floatingBtnStyle}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -358,7 +358,7 @@ export function SelectionAddPrompt(props: Props): ReactNode {
                       e.stopPropagation();
                       insertVariableAt(bodyRef.current, body, setBody, T("pl.insertVariableDefault"));
                     }}
-                    title={T("pl.insertVariableTitle")}
+                    data-tip={T("pl.insertVariableTitle")}
                   >
                     {"{{}}"}
                   </Button>

@@ -135,7 +135,7 @@ function renderPreview(
     const val = Object.prototype.hasOwnProperty.call(values, name) ? values[name] ?? "" : "";
     if (val && val.trim()) {
       nodes.push(
-        <span key={`f${key++}`} data-var={name} style={hlStrong(color, active)} title={`{{${name}}}`}>
+        <span key={`f${key++}`} data-var={name} style={hlStrong(color, active)} data-tip={`{{${name}}}`}>
           {val}
         </span>,
       );
@@ -482,7 +482,7 @@ export function TemplateFillModal({
                 onInsertAndSend(values);
               }}
               disabled={!canSend}
-              title={canSend ? t("pl.insertSend") : t("pl.insertSendDisabled")}
+              data-tip={canSend ? t("pl.insertSend") : t("pl.insertSendDisabled")}
             >
               {t("pl.insertSend")}
             </Button>

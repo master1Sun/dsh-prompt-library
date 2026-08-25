@@ -15,6 +15,8 @@
  *（@deepseek-ai/dsh-client-runtime/client 等）和 react——它们不会被打包。
  */
 import type { ReactNode } from "react";
+// 副作用引入：注册全局 data-tip 主题自适应提示的监听（取代原生 title，适配黑夜/白天模式）
+import "./components/common/Tooltip.js";
 import { PromptLibraryButton } from "./components/chat/PromptLibraryButton.js";
 import { AIPolishButton } from "./components/chat/AIPolishButton.js";
 import { SettingsSection } from "./components/settings/SettingsSection.js";

@@ -746,7 +746,7 @@ export function SkillImportModal(props: {
             type="button"
             onClick={onClose}
             aria-label={T("pl.close")}
-            title={T("pl.close")}
+            data-tip={T("pl.close")}
             style={{
               flexShrink: 0,
               display: "inline-flex",
@@ -818,7 +818,7 @@ export function SkillImportModal(props: {
               size="sm"
               className={plBtn("ghost", "sm")}
               onClick={() => jsonRef.current?.click()}
-              title={T("pl.skillModal.uploadJsonTitle")}
+              data-tip={T("pl.skillModal.uploadJsonTitle")}
             >
               {T("pl.skillModal.uploadJson")}
             </Button>
@@ -863,7 +863,7 @@ export function SkillImportModal(props: {
                   <button
                     type="button"
                     onClick={() => toggleCollapse(entry.key)}
-                    title={collapsed[entry.key] ? T("pl.skillModal.expand") : T("pl.skillModal.collapse")}
+                    data-tip={collapsed[entry.key] ? T("pl.skillModal.expand") : T("pl.skillModal.collapse")}
                     aria-expanded={!collapsed[entry.key]}
                     style={{
                       flexShrink: 0,
@@ -913,7 +913,7 @@ export function SkillImportModal(props: {
                     type="checkbox"
                     checked={entry.checked}
                     onChange={() => toggleChecked(entry.key)}
-                    title={T("pl.skillModal.selectHint")}
+                    data-tip={T("pl.skillModal.selectHint")}
                     style={{ flexShrink: 0, accentColor: TONE.accent }}
                   />
                   <input
@@ -965,7 +965,7 @@ export function SkillImportModal(props: {
                   <button
                     type="button"
                     onClick={() => removeEntry(entry.key)}
-                    title={T("pl.skillModal.remove")}
+                    data-tip={T("pl.skillModal.remove")}
                     style={{
                       flexShrink: 0,
                       border: "none",
@@ -1056,7 +1056,7 @@ export function SkillImportModal(props: {
                         className={plBtn("ghost", "sm")}
                         onClick={() => insertVar(entry.key)}
                         disabled={!entry.checked}
-                        title={T("pl.insertVariableTitle")}
+                        data-tip={T("pl.insertVariableTitle")}
                         style={{ flexShrink: 0 }}
                       >
                         {T("pl.skillModal.insertVar")}
@@ -1156,7 +1156,7 @@ export function SkillImportModal(props: {
                       size="sm"
                       className={plBtn("primary", "sm")}
                       onClick={handleFix}
-                      title={T("pl.skillModal.fixAll")}
+                      data-tip={T("pl.skillModal.fixAll")}
                     >
                       {T("pl.skillModal.fixAll")}
                     </Button>
@@ -1293,7 +1293,7 @@ export function SkillImportModal(props: {
             disabled={
               !validation?.ok || saving || checkedCount === 0 || (mode === "export" && aiState === "running")
             }
-            title={validation?.ok ? "" : T("pl.skillModal.selectHint")}
+            data-tip={validation?.ok ? "" : T("pl.skillModal.selectHint")}
           >
             {saving
               ? T("pl.skillModal.saving")

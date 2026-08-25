@@ -458,7 +458,8 @@ function showOverlay(
     // 标题行：加粗、主色、单行省略（仅显示前 TITLE_MAX_LEN 字，避免手动改文件后超长）
     const title = document.createElement("div");
     title.textContent = clampTitle(p.title);
-    title.title = p.title;
+    // 动态创建的元素用 data-tip 而非原生 title，保证主题自适应（白天/黑夜）
+    title.dataset.tip = p.title;
     title.style.cssText = [
       "font-size: 12px",
       "font-weight: 600",
@@ -633,6 +634,13 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   const [polishConfirmUsed, setPolishConfirmUsed] = useState(false);
   // 确认卡片内的 AI 润色加载状态
   const [polishConfirmLoading, setPolishConfirmLoading] = useState(false);
+  // 查看弹层：点击列表项「查看」显示完整标题/标签/正文
+  const [viewing, setViewing] = useState<Prompt | null>(null);
+
+  // 面板关闭时清理查看弹层，避免残留
+  useEffect(() => {
+    if (!open) setViewing(null);
+  }, [open]);
 
   const [settings] = useSettings();
   const panelId = useId();
@@ -925,13 +933,13 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
       if (panel && panel.contains(t)) return;
       // 点击触发按钮 / 悬浮容器内部 → 不关闭（保留按钮自身的 toggle）
       if (t.closest("[data-prompt-library]")) return;
-      // 编辑表单或待确认卡片正在操作 → 不强关，避免误丢内容
-      if (editing || pendingConfirm !== null) return;
+      // 编辑表单、待确认卡片或查看弹层正在操作 → 不强关，避免误丢内容/打断查看
+      if (editing || pendingConfirm !== null || viewing) return;
       setOpen(false);
     };
     document.addEventListener("mousedown", onDocMouseDown, true);
     return () => document.removeEventListener("mousedown", onDocMouseDown, true);
-  }, [open, editing, pendingConfirm, panelId]);
+  }, [open, editing, pendingConfirm, viewing, panelId]);
 
   // 手动确认：保存选中正文到词库
   const confirmLearn = useCallback(async () => {
@@ -1017,7 +1025,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
         size="sm"
         className={plBtn("ghost", "sm")}
         onClick={handleButtonClick}
-        title={T("pl.title")}
+        data-tip={T("pl.title")}
         aria-label={T("pl.title")}
         aria-expanded={open}
         aria-controls={panelId}
@@ -1115,7 +1123,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
               className={plBtn("ghost", "sm")}
               onClick={polishLearnText}
               disabled={polishConfirmLoading}
-              title={polishConfirmLoading ? T("pl.polishLoadingTitle") : T("pl.polishBtnTitle")}
+              data-tip={polishConfirmLoading ? T("pl.polishLoadingTitle") : T("pl.polishBtnTitle")}
             >
               {polishConfirmLoading ? T("pl.polishing") : T("pl.polish")}
             </Button>
@@ -1173,7 +1181,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                   className={plBtn("ghost", "sm")}
                   onClick={refresh}
                   disabled={phase === "loading"}
-                  title={phase === "loading" ? T("pl.refreshing") : T("pl.refreshTitle")}
+                  data-tip={phase === "loading" ? T("pl.refreshing") : T("pl.refreshTitle")}
                   icon={
                     <svg
                       width="13" height="13" viewBox="0 0 24 24" fill="none"
@@ -1207,7 +1215,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                   className={plBtn("ghost", "sm")}
                   onClick={() => setActiveView((v) => (v === "stats" ? "list" : "stats"))}
                   disabled={editing}
-                  title={activeView === "stats" ? T("pl.stats.back") : T("pl.stats.view")}
+                  data-tip={activeView === "stats" ? T("pl.stats.back") : T("pl.stats.view")}
                   icon={
                     <svg
                       width="13" height="13" viewBox="0 0 24 24" fill="none"
@@ -1281,7 +1289,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                           e.stopPropagation();
                           insertVariableAt(bodyRef.current, editor.body, (v) => setEditor({ ...editor, body: v }), T("pl.insertVariableDefault"));
                         }}
-                        title={T("pl.insertVariableTitle")}
+                        data-tip={T("pl.insertVariableTitle")}
                       >
                         {"{{}}"}
                       </Button>
@@ -1301,9 +1309,9 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                   {error && <div style={{ color: TONE.red, fontSize: 12 }}>{error}</div>}
                 </div>
               ) : (
-                <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+                <ul style={{ listStyle: "none", margin: 0, padding: "4px 8px 8px" }}>
                   {phase === "ready" && filtered.length === 0 && (
-                    <li style={{ padding: "16px", color: TONE.muted, fontSize: 13, textAlign: "center" }}>
+                    <li style={{ padding: "18px 12px", color: TONE.muted, fontSize: 13, textAlign: "center" }}>
                       {T("pl.empty")}
                     </li>
                   )}
@@ -1311,52 +1319,93 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                     <li
                       key={p.id}
                       style={{
-                        padding: "10px 16px",
-                        borderBottom: `1px solid ${TONE.border}`,
                         display: "flex",
                         flexDirection: "column",
-                        gap: 6,
+                        gap: 3,
+                        padding: "7px 10px",
+                        marginBottom: 4,
+                        borderRadius: 8,
+                        background: TONE.row,
+                        border: `1px solid ${TONE.border}`,
+                        transition: "background-color .18s ease, border-color .18s ease",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = "var(--dsw-alias-interactive-bg-hover)";
+                        e.currentTarget.style.borderColor = TONE.borderStrong;
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = TONE.row;
+                        e.currentTarget.style.borderColor = TONE.border;
                       }}
                     >
+                      {/* 标题行：标题 + 最近标记（单行省略） */}
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", minWidth: 0 }}>
-                        <strong style={{
-                          fontSize: 13,
-                          fontWeight: 460,
-                          flex: "1 1 auto",
-                          minWidth: 0,
+                        <strong
+                          style={{
+                            fontSize: 12.5,
+                            fontWeight: 500,
+                            flex: "1 1 auto",
+                            minWidth: 0,
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                          data-tip={p.title}
+                        >
+                          {clampTitle(p.title)}
+                        </strong>
+                        {isRecent(p.id) && (
+                          <span
+                            data-tip={T("pl.recentNew")}
+                            style={{ width: 7, height: 7, borderRadius: "50%", background: TONE.mint, display: "inline-block", flexShrink: 0 }}
+                          />
+                        )}
+                      </div>
+                      {/* 正文预览：单行省略，节省垂直空间展示更多条目（完整内容用「查看」按钮打开） */}
+                      <div
+                        style={{
+                          color: TONE.muted,
+                          fontSize: 11.5,
+                          lineHeight: 1.5,
                           whiteSpace: "nowrap",
                           overflow: "hidden",
                           textOverflow: "ellipsis",
-                        }} title={p.title}>{clampTitle(p.title)}</strong>
-                        <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
-                          {isRecent(p.id) && (
-                            <span
-                              title={T("pl.recentNew")}
-                              style={{ width: 8, height: 8, borderRadius: "50%", background: TONE.mint, display: "inline-block", flexShrink: 0 }}
-                            />
-                          )}
-                        </div>
-                      </div>
-                      <pre
-                        style={{
-                          margin: 0,
-                          color: TONE.muted,
-                          fontSize: 12,
-                          whiteSpace: "pre-wrap",
-                          wordBreak: "break-word",
-                          fontFamily: MONO,
-                          maxHeight: 54,
-                          overflow: "hidden",
-                          borderRadius: 6,
                         }}
                       >
-                        {p.body}
-                      </pre>
-                      <div style={{ display: "flex", gap: 6 }}>
-                        <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={() => insert(p)}>{T("pl.insert")}</Button>
-                        <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => overwrite(p)}>{T("pl.overwrite")}</Button>
-                        <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => startEdit(p)}>{T("pl.edit")}</Button>
-                        <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => remove(p)}>{T("pl.delete")}</Button>
+                        {p.body.replace(/\s+/g, " ").trim()}
+                      </div>
+                      {/* 底行：标签胶囊（左侧，过长省略、悬停显示完整）+ 操作按钮（右侧） */}
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 0 }}>
+                        <span style={{ display: "flex", gap: 4, alignItems: "center", flex: "1 1 auto", minWidth: 0, overflow: "hidden" }}>
+                          {(p.tags ?? []).slice(0, 3).map((tag) => (
+                            <span
+                              key={tag}
+                              data-tip={tag}
+                              style={{
+                                flexShrink: 0,
+                                fontSize: 10,
+                                lineHeight: 1,
+                                padding: "2px 6px",
+                                borderRadius: 8,
+                                color: TONE.quiet,
+                                border: `1px solid ${TONE.border}`,
+                                whiteSpace: "nowrap",
+                                maxWidth: 96,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                              }}
+                            >
+                              {tag}
+                            </span>
+                          ))}
+                        </span>
+                        <span style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                          <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={() => insert(p)}>{T("pl.insert")}</Button>
+                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => overwrite(p)}>{T("pl.overwrite")}</Button>
+                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => setViewing(p)}>{T("pl.view")}</Button>
+                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => startEdit(p)}>{T("pl.edit")}</Button>
+                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => remove(p)}>{T("pl.delete")}</Button>
+                        </span>
                       </div>
                     </li>
                   ))}
@@ -1387,6 +1436,75 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
             {/* 翻页：按页展示，置于滚动区外、固定于面板底部；统计视图下隐藏 */}
             {!editing && activeView === "list" && phase === "ready" && (
               <Pagination page={page} totalPages={totalPages} onChange={setPage} />
+            )}
+            {/* 查看弹层：覆盖整个面板展示完整标题/标签/正文，仅可通过关闭按钮关闭 */}
+            {viewing && (
+              <div role="dialog" aria-label={T("pl.view")} style={{
+                position: "absolute",
+                inset: 0,
+                zIndex: 50,
+                display: "flex",
+                flexDirection: "column",
+                background: TONE.panel,
+              }}>
+                {/* 头部：标题 + 关闭按钮 */}
+                <div style={{
+                  flexShrink: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "10px 14px",
+                  borderBottom: `1px solid ${TONE.border}`,
+                }}>
+                  <strong style={{
+                    flex: "1 1 auto",
+                    minWidth: 0,
+                    fontSize: 13,
+                    fontWeight: 600,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }} data-tip={viewing.title}>{clampTitle(viewing.title)}</strong>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className={plBtn("ghost", "sm")}
+                    onClick={() => setViewing(null)}
+                    data-tip={T("pl.close")}
+                    style={{ flexShrink: 0 }}
+                  >
+                    ✕
+                  </Button>
+                </div>
+                {/* 标签 */}
+                {viewing.tags && viewing.tags.length > 0 && (
+                  <div style={{ flexShrink: 0, display: "flex", flexWrap: "wrap", gap: 5, padding: "8px 14px 0" }}>
+                    {viewing.tags.map((tag) => (
+                      <span key={tag} style={{
+                        padding: "2px 8px",
+                        borderRadius: 8,
+                        fontSize: 11,
+                        color: TONE.accent,
+                        background: TONE.accentSoft,
+                        whiteSpace: "nowrap",
+                      }}>{tag}</span>
+                    ))}
+                  </div>
+                )}
+                {/* 正文（可滚动） */}
+                <div style={{
+                  flex: 1,
+                  minHeight: 0,
+                  overflow: "auto",
+                  padding: "10px 14px 14px",
+                  color: TONE.text,
+                  fontSize: 12.5,
+                  lineHeight: 1.7,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                }}>{viewing.body}</div>
+              </div>
             )}
           </section>
         </>

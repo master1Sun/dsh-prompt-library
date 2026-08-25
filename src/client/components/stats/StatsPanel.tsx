@@ -138,7 +138,7 @@ function BarList({
           <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline", minWidth: 0 }}>
             <span
               style={{ fontSize: 12, color: TONE.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}
-              title={r.label}
+              data-tip={r.label}
             >
               {r.label}
             </span>
@@ -213,8 +213,8 @@ function TrendChart({ snapshots, T }: { snapshots: StatsSnapshot[]; T: PLT }): R
                 rx={1.5}
                 fill={TONE.accent}
                 opacity={0.85}
+                data-tip={`${T("pl.stats.trendAdded")}: ${a}`}
               >
-                <title>{`${T("pl.stats.trendAdded")}: ${a}`}</title>
               </rect>
               <rect
                 x={cx + gap / 2}
@@ -224,8 +224,8 @@ function TrendChart({ snapshots, T }: { snapshots: StatsSnapshot[]; T: PLT }): R
                 rx={1.5}
                 fill={TONE.mint}
                 opacity={0.85}
+                data-tip={`${T("pl.stats.trendUsage")}: ${u}`}
               >
-                <title>{`${T("pl.stats.trendUsage")}: ${u}`}</title>
               </rect>
               {showLabel ? (
                 <text x={cx} y={H - 6} textAnchor="middle" fontSize={9} fill={TONE.quiet}>
@@ -360,7 +360,7 @@ function StatsContent({
                   <div
                     key={t}
                     style={{ padding: "5px 10px", background: TONE.row, border: `1px solid ${TONE.border}`, borderRadius: 7, fontSize: 12, color: TONE.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
-                    title={t}
+                    data-tip={t}
                   >
                     {t}
                   </div>
@@ -409,7 +409,7 @@ function StatsContent({
                   minWidth: 0,
                 }}
               >
-                <span style={{ fontSize: 12, color: TONE.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }} title={p.title}>
+                <span style={{ fontSize: 12, color: TONE.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }} data-tip={p.title}>
                   {p.title}
                 </span>
                 <span style={{ fontSize: 11, color: TONE.muted, flexShrink: 0, whiteSpace: "nowrap" }}>
@@ -444,7 +444,7 @@ function StatsContent({
                   minWidth: 0,
                 }}
               >
-                <span style={{ fontSize: 12, color: TONE.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }} title={p.title}>
+                <span style={{ fontSize: 12, color: TONE.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }} data-tip={p.title}>
                   {p.title}
                 </span>
                 <span style={{ fontSize: 11, color: TONE.quiet, flexShrink: 0, whiteSpace: "nowrap" }}>

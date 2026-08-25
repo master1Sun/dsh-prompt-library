@@ -123,16 +123,10 @@ export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
     };
   }, [open, lang]);
 
-  if (!open) return null;
-
-  // 使用手册：优先 host 返回的 manual（已按语言翻译），缺失则用前端 i18n 回退
-  const manualItems: string[] =
-    data?.manual && data.manual.length > 0
-      ? data.manual.map((m) => m.text).filter(Boolean)
-      : MANUAL_KEYS.map((key) => t(key));
-
   // 通告版本：优先匹配当前运行版本（data.current）的更新说明（版本说明推送跟当前版本对应），
-  // 匹配不到（如当前版本无内置说明）时回退到最新一个版本
+  // 匹配不到（如当前版本无内置说明）时回退到最新一个版本。
+  // 注意：必须放在提前返回（open 为 false 时 return null）之前，保证每次渲染 hook 数量一致，
+  // 否则 open 由 false 变 true 时会触发 React 错误 #310（Rendered fewer hooks than expected）。
   const latest: VersionEntry | null = useMemo(() => {
     if (!data?.versions || data.versions.length === 0) return null;
     const byCurrent = data.current
@@ -140,6 +134,14 @@ export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
       : undefined;
     return byCurrent ?? data.versions[0];
   }, [data]);
+
+  if (!open) return null;
+
+  // 使用手册：优先 host 返回的 manual（已按语言翻译），缺失则用前端 i18n 回退
+  const manualItems: string[] =
+    data?.manual && data.manual.length > 0
+      ? data.manual.map((m) => m.text).filter(Boolean)
+      : MANUAL_KEYS.map((key) => t(key));
 
   return createPortal(
     <div

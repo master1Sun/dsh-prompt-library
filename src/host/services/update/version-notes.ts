@@ -33,6 +33,22 @@ export interface VersionNote {
  */
 export const VERSION_NOTES: VersionNote[] = [
   {
+    version: "0.8.16",
+    date: "2026-08-25",
+    zh: {
+      title: "修复公告弹窗无法打开",
+      items: [
+        "修复双击词库助手公告弹窗不显示的问题：弹窗组件违反 React hooks 规则（提前返回后仍调用 hook），导致渲染崩溃；现改为恒定调用顺序，双击小人即可正常弹出使用手册与版本通告。",
+      ],
+    },
+    en: {
+      title: "Fix announcement dialog not opening",
+      items: [
+        "Fixed double-clicking the assistant not opening the announcement dialog: the modal violated React rules of hooks (a hook was called after an early return), crashing the render; hook order is now constant, so double-clicking opens the user guide and release notes.",
+      ],
+    },
+  },
+  {
     version: "0.8.15",
     date: "2026-08-25",
     zh: {

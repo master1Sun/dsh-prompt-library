@@ -153,6 +153,50 @@ export function closeDb(): void {
 }
 
 /**
+ * 强制重新打开数据库连接：先关闭现有连接，再按当前库文件重新初始化。
+ * 供「恢复数据库备份」使用——把备份文件覆盖到 dbPath 后调用，
+ * 新连接会按新文件重建表结构并执行历史列迁移。
+ */
+export function reopenDb(): void {
+  closeDb();
+  getDb();
+}
+
+/** 把 WAL 日志合并回主库文件（TRUNCATE 会清空 WAL），供备份前产生一致、完整的库文件。 */
+export function checkpointDb(): void {
+  try {
+    getDb().exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  } catch {
+    /* 检查点失败不阻断；备份仍尝试复制主库文件 */
+  }
+}
+
+/** 读取 meta 表值（key 不存在或读取失败时返回空串）。 */
+export function getMetaValue(key: string): string {
+  try {
+    const row = getDb()
+      .prepare("SELECT value FROM meta WHERE key = ?")
+      .get(key) as { value: string } | undefined;
+    return row?.value ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** 写入 meta 表值（key 已存在则覆盖）。 */
+export function setMetaValue(key: string, value: string): void {
+  try {
+    getDb()
+      .prepare(
+        "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      )
+      .run(key, value);
+  } catch {
+    /* 写入失败不阻断调用方 */
+  }
+}
+
+/**
  * 同步读取宿主界面语言（`~/.dsh/settings.yaml` 的 `locale.preference`）。
  * 供默认播种等同步流程判断中/英文案；读取失败默认按中文处理。
  */
@@ -558,10 +602,20 @@ export function setSkillNameForPrompt(promptId: string, skillName: string): void
   ).run(promptId, skillName, Date.now());
 }
 
+/** 依据技能名反查已关联的提示词 id（逆向导入时用于去重/更新）；未关联过返回 undefined。 */
+export function getPromptIdBySkillName(skillName: string): string | undefined {
+  if (!db) return undefined;
+  const row = db
+    .prepare("SELECT promptId FROM prompt_skill_links WHERE skillName = ? LIMIT 1")
+    .get(skillName) as { promptId: string } | undefined;
+  return row?.promptId;
+}
+
 export function createPrompt(input: {
   title: string;
   body: string;
   tags?: string[];
+  summary?: string;
 }): Promise<Prompt> {
   try {
     const now = Date.now();
@@ -572,6 +626,7 @@ export function createPrompt(input: {
       title: clampTitle(input.title.trim()),
       body: input.body,
       tags,
+      summary: input.summary?.trim() || undefined,
       updatedAt: now,
       createdAt: now,
       usageCount: 0,
@@ -581,10 +636,20 @@ export function createPrompt(input: {
     cur
       .prepare(
         `INSERT INTO prompts
-           (id, title, body, tags, aiRefined, updatedAt, usageCount, lastUsedAt, createdAt)
-         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)`,
+           (id, title, body, tags, summary, aiRefined, updatedAt, usageCount, lastUsedAt, createdAt)
+         VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
       )
-      .run(prompt.id, prompt.title, prompt.body, tagsToJson(prompt.tags), now, 0, 0, now);
+      .run(
+        prompt.id,
+        prompt.title,
+        prompt.body,
+        tagsToJson(prompt.tags),
+        prompt.summary ?? null,
+        now,
+        0,
+        0,
+        now,
+      );
     // 用用户配置的真实上限做后台淘汰（getSettingsSync 只回默认值）
     void getSettings().then((s) => enforceMaxCount(s.maxPromptCount));
     return Promise.resolve(prompt);
@@ -1040,6 +1105,34 @@ export function importPrompts(
       throw e;
     }
     return Promise.resolve({ imported, updated, skipped });
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+/**
+ * 从 JSON 备份整体恢复词库：先清空现有数据（提示词/回收站/标签/使用记录/技能关联），
+ * 再按备份内容重建（合并导入逻辑见 importPrompts）。
+ * 返回重建的提示词条数；任一环节失败都会整体回滚。
+ */
+export function restoreFromJson(
+  raw: unknown,
+): Promise<{ imported: number }> {
+  try {
+    const cur = getDb();
+    cur.exec("BEGIN");
+    try {
+      cur.exec("DELETE FROM prompts");
+      cur.exec("DELETE FROM trash");
+      cur.exec("DELETE FROM tags");
+      cur.exec("DELETE FROM usage_log");
+      cur.exec("DELETE FROM prompt_skill_links");
+      cur.exec("COMMIT");
+    } catch (e) {
+      cur.exec("ROLLBACK");
+      throw e;
+    }
+    return importPrompts(raw).then((r) => ({ imported: r.imported }));
   } catch (e) {
     return Promise.reject(e);
   }

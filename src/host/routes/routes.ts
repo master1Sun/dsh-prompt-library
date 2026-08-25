@@ -13,8 +13,14 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { WebRoute } from "@deepseek-ai/dsh-host-webserver";
 import type { ApiResponse, PluginSettings, Prompt, PromptInput, PromptPatch } from "../../types.js";
-import { generateIntro, listAiSelectables, polishPromptBody } from "../services/ai/ai.js";
-import { generateSkillsFromPrompts } from "../services/ai/skills.js";
+import { generateIntro, generateSkillDescriptor, listAiSelectables, polishPromptBody } from "../services/ai/ai.js";
+import {
+  exportPromptsAsSkills,
+  importSkillEntries,
+  importSkillsFromDisk,
+  listAvailableSkills,
+  parseSkillRaw,
+} from "../services/ai/skills.js";
 import {
   autoLearn,
   computeLibraryStats,
@@ -40,6 +46,7 @@ import {
 import { checkUpdate, upgradePlugin } from "../services/update/update.js";
 import { getActivity } from "../services/assistant/activity.js";
 import { getAnnouncement } from "../services/update/announcement.js";
+import { deleteBackup, listBackups, restoreBackup, runBackup, type BackupFormat } from "../services/data/backup.js";
 
 const PREFIX = "/api/prompt-library";
 
@@ -95,6 +102,18 @@ function isInput(value: unknown): value is PromptInput {
 
 function isPatch(value: unknown): value is PromptPatch {
   return typeof value === "object" && value !== null;
+}
+
+/** 是否为可入库/可写盘的技能条目（title/body 必填，name/summary/promptId 可选）。 */
+function isSkillEntry(
+  value: unknown,
+): value is { title: string; body: string; name?: string; summary?: string; promptId?: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { title?: unknown }).title === "string" &&
+    typeof (value as { body?: unknown }).body === "string"
+  );
 }
 
 /** 从请求体中提取字符串数组（{ ids: string[] } 或直接数组）。 */
@@ -244,14 +263,90 @@ export function makePromptRoutes(): WebRoute[] {
         return json(res, 200, { ok: true, data });
       }
 
-      // POST /skills/generate — 批量把勾选提示词生成为 DSH 技能（~/.dsh/skills/<name>/SKILL.md）
-      if (method === "POST" && tail === "/skills/generate") {
+      // POST /skills/import — 逆向导入：读取 ~/.dsh/skills/<name>/SKILL.md 批量生成为提示词入库
+      if (method === "POST" && tail === "/skills/import") {
+        const result = await importSkillsFromDisk();
+        return json(res, 200, { ok: true, data: result });
+      }
+
+      // GET /skills/available — 列出 ~/.dsh/skills 下可导入的技能（解析为可编辑条目，供导入弹窗勾选）
+      if (method === "GET" && tail === "/skills/available") {
+        const data = await listAvailableSkills();
+        return json(res, 200, { ok: true, data });
+      }
+
+      // POST /skills/parse — 解析一段 md 原始文本（frontmatter + 正文）为可编辑条目（供「选择本地 md 文件」导入）
+      if (method === "POST" && tail === "/skills/parse") {
         const raw = await readJsonBody(req);
-        const ids = extractIds(raw);
-        if (ids.length === 0) {
-          return json(res, 400, { ok: false, error: "invalid body: {ids: string[]}" });
+        const text =
+          typeof raw === "object" &&
+          raw !== null &&
+          typeof (raw as { raw?: unknown }).raw === "string"
+            ? (raw as { raw: string }).raw
+            : "";
+        if (!text) return json(res, 400, { ok: false, error: "invalid body: {raw}" });
+        return json(res, 200, { ok: true, data: parseSkillRaw(text) });
+      }
+
+      // POST /skills/import/entries — 保存用户在弹窗中编辑后的技能条目（逆向导入入库）
+      if (method === "POST" && tail === "/skills/import/entries") {
+        const raw = await readJsonBody(req);
+        const list =
+          typeof raw === "object" &&
+          raw !== null &&
+          Array.isArray((raw as { entries?: unknown }).entries)
+            ? (raw as { entries: unknown[] }).entries
+            : [];
+        const entries = list.filter(isSkillEntry);
+        if (entries.length === 0) {
+          return json(res, 400, { ok: false, error: "invalid body: {entries: SkillEntry[]}" });
         }
-        const result = await generateSkillsFromPrompts(ids);
+        const result = await importSkillEntries(entries);
+        return json(res, 200, { ok: true, data: result });
+      }
+
+      // POST /skills/export/entries — 把用户在弹窗中编辑后的技能条目写盘为 DSH 技能
+      if (method === "POST" && tail === "/skills/export/entries") {
+        const raw = await readJsonBody(req);
+        const list =
+          typeof raw === "object" &&
+          raw !== null &&
+          Array.isArray((raw as { entries?: unknown }).entries)
+            ? (raw as { entries: unknown[] }).entries
+            : [];
+        const entries = list.filter(isSkillEntry);
+        if (entries.length === 0) {
+          return json(res, 400, { ok: false, error: "invalid body: {entries: SkillEntry[]}" });
+        }
+        const result = await exportPromptsAsSkills(entries);
+        return json(res, 200, { ok: true, data: result });
+      }
+
+      // POST /skills/ai-describe — AI 依据提示词内容生成技能名与描述（导出弹窗校验通过后自动调用）
+      if (method === "POST" && tail === "/skills/ai-describe") {
+        const raw = await readJsonBody(req);
+        if (typeof raw !== "object" || raw === null) {
+          return json(res, 400, { ok: false, error: "invalid body: {title, body}" });
+        }
+        const { title, body, summary, tags } = raw as {
+          title?: unknown;
+          body?: unknown;
+          summary?: unknown;
+          tags?: unknown;
+        };
+        if (typeof title !== "string" || typeof body !== "string" || !title.trim() || !body.trim()) {
+          return json(res, 400, { ok: false, error: "invalid body: {title, body}" });
+        }
+        const settings = await getSettings();
+        const result = await generateSkillDescriptor(
+          {
+            title: title.trim(),
+            body: body.trim(),
+            summary: typeof summary === "string" && summary.trim() ? summary.trim() : undefined,
+            tags: Array.isArray(tags) ? tags.filter((t): t is string => typeof t === "string") : undefined,
+          },
+          settings,
+        );
         return json(res, 200, { ok: true, data: result });
       }
 
@@ -371,6 +466,72 @@ export function makePromptRoutes(): WebRoute[] {
         ]);
         return json(res, 200, { ok: true, data: { stats, snapshots } });
       }
+
+      // GET /backups — 列出自动备份目录中的备份文件（按时间倒序）
+      if (method === "GET" && tail === "/backups") {
+        const data = await listBackups();
+        return json(res, 200, { ok: true, data });
+      }
+
+      // POST /backups/run — 立即执行一次备份（body.format 可选 db/json，按当前保留份数清理最旧的）
+      if (method === "POST" && tail === "/backups/run") {
+        const settings = await getSettings();
+        const raw = await readJsonBody(req);
+        const f =
+          typeof raw === "object" &&
+          raw !== null &&
+          ((raw as { format?: unknown }).format === "db" ||
+            (raw as { format?: unknown }).format === "json")
+            ? (raw as { format: BackupFormat }).format
+            : "db";
+        const data = await runBackup(settings.backupRetention, f);
+        return json(res, 200, { ok: true, data });
+      }
+
+      // POST /backups/restore — 从指定备份文件恢复词库（db 覆盖主库重开连接；json 清空后重建）
+      if (method === "POST" && tail === "/backups/restore") {
+        const raw = await readJsonBody(req);
+        const name =
+          typeof raw === "object" &&
+          raw !== null &&
+          typeof (raw as { name?: unknown }).name === "string"
+            ? (raw as { name: string }).name
+            : "";
+        if (!name) return json(res, 400, { ok: false, error: "invalid body: {name}" });
+        try {
+          const data = await restoreBackup(name);
+          return json(res, 200, { ok: true, data });
+        } catch (err) {
+          // 文件名非法 / 备份文件不存在 / json 解析失败等，返回具体原因供界面提示
+          return json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : "restore failed",
+          });
+        }
+      }
+
+      // POST /backups/delete — 删除指定的备份文件（删除后不可恢复）
+      if (method === "POST" && tail === "/backups/delete") {
+        const raw = await readJsonBody(req);
+        const name =
+          typeof raw === "object" &&
+          raw !== null &&
+          typeof (raw as { name?: unknown }).name === "string"
+            ? (raw as { name: string }).name
+            : "";
+        if (!name) return json(res, 400, { ok: false, error: "invalid body: {name}" });
+        try {
+          await deleteBackup(name);
+          return json(res, 200, { ok: true, data: { deleted: true } });
+        } catch (err) {
+          // 文件名非法 / 删除失败等，返回具体原因供界面提示
+          return json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : "delete failed",
+          });
+        }
+      }
+
       return json(res, 404, { ok: false, error: `no route ${method} ${tail}` });
     } catch (err) {
       // 错误详情（含本地路径/堆栈）仅记录日志，不原样返回给客户端，避免信息泄露

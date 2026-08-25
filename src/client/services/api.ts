@@ -116,17 +116,94 @@ export function createTag(name: string): Promise<{ name: string }> {
   return send<{ name: string }>("POST", "/api/prompt-library/tags", { name });
 }
 
-/** 批量生成技能的结果结构。 */
-export interface SkillGenerateResult {
-  generated: number;
+/** 逆向导入技能的结果结构。 */
+export interface SkillImportResult {
+  imported: number;
+  updated: number;
+  skipped: number;
   items: { title: string; name: string }[];
-  errors: { title: string; reason: string }[];
-  aiUnavailable: boolean;
+  errors: { name: string; reason: string }[];
 }
 
-/** 批量把勾选的提示词生成为 DSH 技能（写到 ~/.dsh/skills/<name>/SKILL.md）。 */
-export function generateSkills(ids: string[]): Promise<SkillGenerateResult> {
-  return send<SkillGenerateResult>("POST", "/api/prompt-library/skills/generate", { ids });
+/** 逆向导入：读取 ~/.dsh/skills/<name>/SKILL.md 批量生成为提示词入库。 */
+export function importSkills(): Promise<SkillImportResult> {
+  return send<SkillImportResult>("POST", "/api/prompt-library/skills/import");
+}
+
+/** 待逆向导入的单条技能条目（用户在弹窗中编辑后提交保存）。 */
+export interface SkillEntry {
+  /** 技能名（kebab-case），用于与 prompt_skill_links 关联；缺省由标题生成。 */
+  name?: string;
+  title: string;
+  body: string;
+  summary?: string;
+}
+
+/** 可供选择导入的技能来源：已解析为可编辑内容的条目 + 是否已入库。 */
+export interface SkillSource {
+  name: string;
+  title: string;
+  body: string;
+  summary: string;
+  /** 是否已入库（同名技能已关联过提示词 → 再次导入为覆盖更新）。 */
+  exists: boolean;
+}
+
+/** 列出 ~/.dsh/skills 下可导入的技能（解析为可编辑条目，供导入弹窗勾选）。 */
+export function listAvailableSkills(): Promise<SkillSource[]> {
+  return send<SkillSource[]>("GET", "/api/prompt-library/skills/available");
+}
+
+/** 解析一段 md 原始文本（frontmatter + 正文）为可编辑条目（供「选择本地 md 文件」导入）。 */
+export function parseSkillRaw(raw: string): Promise<{ title: string; body: string; summary: string }> {
+  return send<{ title: string; body: string; summary: string }>(
+    "POST",
+    "/api/prompt-library/skills/parse",
+    { raw },
+  );
+}
+
+/** 保存用户在弹窗中编辑后的技能条目入库（带「skill」标签，同名技能覆盖更新）。 */
+export function importSkillEntries(entries: SkillEntry[]): Promise<SkillImportResult> {
+  return send<SkillImportResult>("POST", "/api/prompt-library/skills/import/entries", { entries });
+}
+
+/** 批量导出技能的结果：成功条数 + 成功清单 + 失败清单。 */
+export interface SkillExportResult {
+  exported: number;
+  items: { title: string; name: string }[];
+  errors: { title: string; reason: string }[];
+}
+
+/** 把用户在弹窗中编辑后的技能条目写盘为 DSH 技能（~/.dsh/skills/<name>/SKILL.md）。 */
+export function exportSkillEntries(entries: SkillEntry[]): Promise<SkillExportResult> {
+  return send<SkillExportResult>("POST", "/api/prompt-library/skills/export/entries", { entries });
+}
+
+/** AI 依据提示词内容生成的技能描述符（导出弹窗「校验并 AI 生成」用）。 */
+export interface SkillDescriptor {
+  name: string;
+  description: string;
+  whenToUse?: string;
+}
+
+/** 技能描述符生成失败原因码（与 host 端 SkillDescribeFail 保持一致）。 */
+export type SkillDescribeFail = "no-llm" | "route" | "empty" | "parse";
+
+/** AI 生成结果：{ desc } 成功；{ fail } 失败并给出原因码。 */
+export interface SkillDescribeResult {
+  desc?: SkillDescriptor;
+  fail?: SkillDescribeFail;
+}
+
+/** 用 AI 依据提示词内容生成技能名与描述（不改写正文，保留 {{变量名}}）。 */
+export function describeSkill(payload: {
+  title: string;
+  body: string;
+  summary?: string;
+  tags?: string[];
+}): Promise<SkillDescribeResult> {
+  return send<SkillDescribeResult>("POST", "/api/prompt-library/skills/ai-describe", payload);
 }
 
 // ── 回收站管理 ────────────────────────────────────────────────────────────
@@ -345,4 +422,41 @@ export interface PromptStatsData {
 /** 获取词库统计（当前统计 + 近 12 周快照）。 */
 export function getStats(): Promise<PromptStatsData> {
   return send<PromptStatsData>("GET", "/api/prompt-library/stats");
+}
+
+// ── 自动备份 ──────────────────────────────────────────────────────────────
+
+/** 自动备份目录下的单条备份文件信息。 */
+export interface BackupEntry {
+  name: string;
+  size: number;
+  createdAt: number;
+  /** 备份文件格式：db（数据库文件）/ json（JSON 导出）。 */
+  format: "db" | "json";
+}
+
+/** 列出自动备份目录中的备份文件（按时间倒序，最新在前）。 */
+export function listBackups(): Promise<BackupEntry[]> {
+  return send<BackupEntry[]>("GET", "/api/prompt-library/backups");
+}
+
+/** 立即执行一次备份，返回生成的备份文件名与大小。format 缺省 db（复制数据库文件）；json 导出为 JSON 备份。 */
+export function runBackup(format: "db" | "json" = "db"): Promise<{ name: string; size: number }> {
+  return send<{ name: string; size: number }>("POST", "/api/prompt-library/backups/run", { format });
+}
+
+/** 从指定备份文件恢复词库（db 覆盖主库重开连接；json 清空后重建）。返回格式与恢复后条数。 */
+export function restoreBackup(
+  name: string,
+): Promise<{ format: "db" | "json"; count: number }> {
+  return send<{ format: "db" | "json"; count: number }>(
+    "POST",
+    "/api/prompt-library/backups/restore",
+    { name },
+  );
+}
+
+/** 删除指定的备份文件（删除后不可恢复）。 */
+export function deleteBackup(name: string): Promise<{ deleted: boolean }> {
+  return send<{ deleted: boolean }>("POST", "/api/prompt-library/backups/delete", { name });
 }

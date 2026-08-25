@@ -99,6 +99,8 @@ interface AiLogCopy {
   introDone: (n: number) => string;
   introLine: (i: number, l: string) => string;
   skillStart: (title: string, n: number) => string;
+  skillNoLlm: string;
+  skillRetry: (n: number) => string;
   skillParseFail: (t: string) => string;
   skillDone: (name: string, n: number) => string;
 }
@@ -141,7 +143,9 @@ function buildAiLogCopy(lang: string): AiLogCopy {
       introDone: (n) => `intro: done lines=${n}`,
       introLine: (i, l) => `intro:   [${i}] ${l}`,
       skillStart: (title, n) => `skill: start title="${title}" body length=${n}`,
-      skillParseFail: (t) => `skill: model output could not be parsed: ${t}`,
+      skillNoLlm: "skill: skipped (llm service not injected)",
+      skillRetry: (n) => `skill: transient failure, retry #${n}`,
+      skillParseFail: (t) => `skill: model output could not be parsed as JSON: ${t}`,
       skillDone: (name, n) => `skill: done name="${name}" description length=${n}`,
     };
   }
@@ -180,7 +184,9 @@ function buildAiLogCopy(lang: string): AiLogCopy {
     introDone: (n) => `intro: 完成 行数=${n}`,
     introLine: (i, l) => `intro:   [${i}] ${l}`,
     skillStart: (title, n) => `skill: 开始 title="${title}" 正文长度=${n}`,
-    skillParseFail: (t) => `skill: 模型输出无法解析：${t}`,
+    skillNoLlm: "skill: 跳过（llm 服务未注入）",
+    skillRetry: (n) => `skill: 瞬时失败，重试第 ${n} 次`,
+    skillParseFail: (t) => `skill: 模型输出无法解析为 JSON：${t}`,
     skillDone: (name, n) => `skill: 完成 name="${name}" 描述长度=${n}`,
   };
 }
@@ -751,96 +757,101 @@ export async function generateIntro(
   return lines.slice(0, 5);
 }
 
-// ── 技能（Skill）生成 ───────────────────────────────────────────────────────
-
 /** 由 AI 依据提示词内容生成的技能描述符。 */
 export interface SkillDescriptor {
-  /** 技能名：小写 kebab-case 英文（目录名 & 聊天框 /触发名）。 */
   name: string;
-  /** 技能描述（含触发场景，供模型匹配与聊天框输入 / 时展示）。 */
   description: string;
-  /** 建议使用时机（可选）。 */
   whenToUse?: string;
 }
 
-/** 容错地从模型输出中提取技能描述符 JSON 对象（可带 Markdown 代码块包裹）。 */
-function parseSkillJson(text: string): { name?: string; description?: string; whenToUse?: string } | undefined {
-  const cleaned = text.replace(/```[a-z]*\n?/gi, "").trim();
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) return undefined;
-  let parsed: unknown;
+/** 技能描述符生成失败原因码：no-llm 未连接 LLM / route 无可用模型 / empty 模型返回空 / parse 输出无法解析。 */
+export type SkillDescribeFail = "no-llm" | "route" | "empty" | "parse";
+
+/** 生成结果：{ desc } 成功；{ fail } 失败并给出原因码，供前端展示准确提示。 */
+export interface SkillDescribeResult {
+  desc?: SkillDescriptor;
+  fail?: SkillDescribeFail;
+}
+
+/** 从模型输出中容错解析技能描述符 JSON（容忍 ```json 代码块包裹 / 前后杂质）；解析失败返回 undefined。 */
+function parseSkillJson(text: string): SkillDescriptor | undefined {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fenced ? fenced[1]! : text;
+  const start = candidate.indexOf("{");
+  const end = candidate.lastIndexOf("}");
+  if (start === -1 || end <= start) return undefined;
   try {
-    parsed = JSON.parse(cleaned.slice(start, end + 1));
+    const obj = JSON.parse(candidate.slice(start, end + 1)) as Record<string, unknown>;
+    const name = typeof obj.name === "string" ? obj.name.trim() : "";
+    if (!name) return undefined;
+    return {
+      name,
+      description: typeof obj.description === "string" ? obj.description.trim() : "",
+      whenToUse: typeof obj.whenToUse === "string" ? obj.whenToUse.trim() : undefined,
+    };
   } catch {
     return undefined;
   }
-  if (typeof parsed !== "object" || parsed === null) return undefined;
-  const obj = parsed as Record<string, unknown>;
-  return {
-    name: typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : undefined,
-    description: typeof obj.description === "string" && obj.description.trim() ? obj.description.trim() : undefined,
-    whenToUse: typeof obj.whenToUse === "string" && obj.whenToUse.trim() ? obj.whenToUse.trim() : undefined,
-  };
 }
 
 /**
  * 用 AI 依据提示词内容生成技能描述符（英文 kebab-case 技能名 + 描述 + 使用时机）。
- * 并行生成时受 llm 串行锁约束，逐个调用，避免打爆模型配额。
- * 无可用 LLM / 无法解析路由 / 调用或解析失败时返回 undefined。
+ * 仅供导出 Skill 弹窗「校验并 AI 生成」使用：不改写正文，正文中的 {{变量名}} 模板变量
+ * 必须原样保留，并在描述中说明该技能需要用户提供的输入变量，便于 DSH 技能 AI 识别。
+ * 返回 { desc } 表示成功；{ fail } 表示失败并给出原因码。
+ * 模型返回空文本 / 输出无法解析多为瞬时故障，自动重试最多 3 次后再判定失败。
  */
 export async function generateSkillDescriptor(
   prompt: { title: string; body: string; summary?: string; tags?: string[] },
   settings: PluginSettings,
-): Promise<SkillDescriptor | undefined> {
+): Promise<SkillDescribeResult> {
   logAI(aiLogCopy().skillStart(prompt.title, prompt.body.length));
   if (!llm) {
-    logAI(aiLogCopy().enrichSkipNoLlm);
-    return undefined;
+    logAI(aiLogCopy().skillNoLlm);
+    return { fail: "no-llm" };
   }
   const candidates = await resolveCandidates(llm, settings);
-  if (candidates.length === 0) return undefined;
-  // 检测正文是否含 {{}} 模板变量：有则让描述注明「自动按语义补全占位符」能力
-  const hasVars = /\{\{\s*[^{}]+\s*\}\}/.test(prompt.body);
+  if (candidates.length === 0) return { fail: "route" };
+  // 检测正文已有的模板变量（{{}}），提示 AI 原样保留并在描述中说明
+  const vars = [...prompt.body.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)]
+    .map((m) => m[1]!.trim())
+    .filter(Boolean);
   const system = [
-    "你是一名 DSH 技能（Skill）作者。你会把一段提示词封装成可复用的 DSH 技能定义。",
-    "技能定义将被写入 ~/.dsh/skills/<name>/SKILL.md，frontmatter 元数据要求：",
-    "- name：技能目录名，同时是用户在聊天框输入 /<name> 触发的名字，必须是纯小写 kebab-case 英文（只能含小写字母、数字、连字符），长度不超过 40 字符；",
-    "- description：一段中长描述，说明这个技能做什么、能解决什么问题，并尽量列出触发场景（用户说什么话时会用到本技能），供模型自动匹配和聊天框输入 / 时展示；如需换行用 \\n 转义；",
-    "- whenToUse：一句话说明适合在什么场景使用（可选，没有则省略）。",
-    ...(hasVars
-      ? [
-          "- 正文包含 {{变量名}} 模板变量，使用时会按用户语义场景自动补全：请在 description 中说明这一「占位符自动补全」能力；",
-        ]
-      : []),
+    "你是一名 DSH 技能（SKILL）设计助手。用户会给你一条提示词，请把它转化为一个规范、可直接复用的技能。",
+    "",
+    "要求：",
+    "- name：英文小写 kebab-case（仅字母/数字/连字符，4-40 个字符），简洁达意，作为技能目录名与聊天框 /触发名；",
+    "- description：用一句英文描述该技能的用途与适用场景（不要 Markdown），供技能 AI 在合适时机自动触发；",
+    "- whenToUse：英文，一两句话说明什么场景下应该使用该技能；",
+    `- 正文中的 {{变量名}} 是模板变量占位符（运行时由使用者替换），必须原样保留，不得删除、改写或替换其中的变量名；${vars.length ? `该技能需要用户提供的输入变量有：${vars.join("、")}，请在描述中体现。` : "该技能没有模板变量。"}`,
     "请严格输出一个 JSON 对象，不要 Markdown 代码块，不要任何多余文字：",
-    '{ "name": "kebab-case英文名", "description": "技能描述含触发场景", "whenToUse": "使用时机" }',
+    '{ "name": "skill-name", "description": "...", "whenToUse": "..." }',
   ].join("\n");
-  const meta = [
-    `标题：${prompt.title}`,
-    prompt.summary ? `摘要：${prompt.summary}` : "",
-    prompt.tags?.length ? `标签：${prompt.tags.join("、")}` : "",
-    "正文：",
+  const content = [
+    `提示词标题：${prompt.title}`,
+    ...(prompt.summary ? [`提示词摘要：${prompt.summary}`] : []),
+    ...(prompt.tags?.length ? [`提示词标签：${prompt.tags.join("、")}`] : []),
+    "",
+    "以下是提示词正文（{{变量名}} 为模板变量，必须原样保留）：",
     prompt.body,
-  ]
-    .filter(Boolean)
-    .join("\n");
-  const text = await collectTextWithFallback(
-    llm,
-    candidates,
-    await withSoulSystem(system),
-    `以下是提示词，请据此生成技能描述符（name 为英文 kebab-case）：\n\n${meta}`,
-  );
-  if (!text) return undefined;
-  const parsed = parseSkillJson(text);
-  if (!parsed || !parsed.name || !parsed.description) {
-    logAI(aiLogCopy().skillParseFail(text.slice(0, 300)));
-    return undefined;
+  ].join("\n");
+  const sysText = await withSoulSystem(system);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const text = await collectTextWithFallback(llm, candidates, sysText, content);
+    if (!text) {
+      if (attempt < 2) logAI(aiLogCopy().skillRetry(attempt + 1));
+      else return { fail: "empty" };
+      continue;
+    }
+    const parsed = parseSkillJson(text);
+    if (!parsed) {
+      logAI(aiLogCopy().skillParseFail(text.slice(0, 300)));
+      if (attempt < 2) logAI(aiLogCopy().skillRetry(attempt + 1));
+      else return { fail: "parse" };
+      continue;
+    }
+    logAI(aiLogCopy().skillDone(parsed.name, parsed.description.length));
+    return { desc: parsed };
   }
-  logAI(aiLogCopy().skillDone(parsed.name, parsed.description.length));
-  return {
-    name: parsed.name,
-    description: parsed.description,
-    whenToUse: parsed.whenToUse,
-  };
+  return { fail: "empty" };
 }

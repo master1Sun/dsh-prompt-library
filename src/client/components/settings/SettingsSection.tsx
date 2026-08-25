@@ -15,7 +15,17 @@
 import { type CSSProperties, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { PluginSettings } from "../../../types.js";
 import { DEFAULT_SETTINGS } from "../../../types.js";
-import { getAiSelectables, getSettings, updateSettings as apiUpdateSettings, getUpdate, applyUpdate, type ClientAiSelectable, type UpdateInfo } from "../../services/api.js";
+import {
+  applyUpdate,
+  getAiSelectables,
+  getSettings,
+  getUpdate,
+  updateSettings as apiUpdateSettings,
+  type ClientAiSelectable,
+  type UpdateInfo,
+} from "../../services/api.js";
+import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
+import { plBtn } from "../../utils/button-style.js";
 import { type PLTranslate, usePLT } from "../../i18n/i18n.js";
 
 const MONO =
@@ -780,24 +790,16 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
               {updateInfo.hasUpdate && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   <div>
-                    <button
+                    <Button
                       type="button"
+                      variant="primary"
+                      size="sm"
+                      className={plBtn("primary", "sm")}
                       onClick={handleApplyUpdate}
                       disabled={updating}
-                      style={{
-                        padding: "5px 12px",
-                        fontSize: 12,
-                        fontWeight: 600,
-                        color: "#fff",
-                        background: "var(--dsw-alias-brand-primary, #8ec5ff)",
-                        border: "none",
-                        borderRadius: 5,
-                        opacity: updating ? 0.65 : 1,
-                        cursor: updating ? "default" : "pointer",
-                      }}
                     >
                       {updating ? T("pl.set.updating") : T("pl.set.updateNow")}
-                    </button>
+                    </Button>
                   </div>
                   {/* 更新前置提醒：更新安装后必须重启 dsh web 才会加载新版本 */}
                   <div

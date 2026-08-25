@@ -5,6 +5,7 @@
  * 1. 导入导出：勾选要导出的提示词生成备份文件，或从备份文件导入（合并式）
  * 2. 标签管理：新建 / 重命名 / 删除标签（表单式）
  * 3. 回收站：表单式展示已删除提示词，支持恢复 / 永久删除
+ * 4. 自动备份：备份设置 / 立即备份 / 备份列表与恢复（独立 BackupModule）
  */
 import {
   useCallback,
@@ -22,7 +23,6 @@ import {
   deleteTag as apiDeleteTag,
   deleteTrash as apiDeleteTrash,
   exportPrompts as apiExport,
-  generateSkills as apiGenerateSkills,
   importPrompts as apiImport,
   listPrompts as apiListPrompts,
   listTags as apiListTags,
@@ -34,6 +34,8 @@ import { notifyDataChanged, useDataChanged } from "../../services/data-sync.js";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { plBtn } from "../../utils/button-style.js";
 import { type PLTranslate, usePLT } from "../../i18n/i18n.js";
+import { SkillImportModal } from "./modules/SkillImportModal.js";
+import { BackupModule } from "./modules/BackupModule.js";
 
 const MONO =
   '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "SimHei", "黑体", sans-serif';
@@ -223,8 +225,13 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
   const [promptList, setPromptList] = useState<Prompt[]>([]);
   const [promptLoading, setPromptLoading] = useState(false);
   const [exportSelected, setExportSelected] = useState<Set<string>>(new Set());
-  // 是否正在批量生成技能（AI 逐条串行，可能较慢）
-  const [skillGenerating, setSkillGenerating] = useState(false);
+  // 技能导入弹窗是否打开（选择 md 文件 / 扫描 Skills 目录，编辑校验后保存）
+  const [skillImportOpen, setSkillImportOpen] = useState(false);
+  // 技能导出弹窗：是否打开 + 由勾选提示词转换的初始条目
+  const [skillExportOpen, setSkillExportOpen] = useState(false);
+  const [skillExportInitial, setSkillExportInitial] = useState<
+    Array<{ promptId: string; name?: string; title: string; body: string; summary?: string }>
+  >([]);
 
   // ── 标签管理 ─────────────────────────────────────────────────────────────
   const [tagList, setTagList] = useState<Array<{ name: string; count: number }>>([]);
@@ -350,31 +357,24 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
     );
   }, [exportSelected, showMsg, T]);
 
-  /** 把勾选的提示词批量生成为 DSH 技能（AI 生成英文技能名与描述，写入 ~/.dsh/skills）。 */
-  const generateSelectedSkills = useCallback(() => {
+  /** 打开技能导出弹窗：把勾选的提示词转成可编辑条目，编辑校验后写盘为技能。 */
+  const openSkillExport = useCallback(() => {
     const ids = Array.from(exportSelected);
     if (ids.length === 0) {
-      showMsg(T("pl.skillNeedSelect"), true);
+      showMsg(T("pl.skillExportNeedSelect"), true);
       return;
     }
-    setSkillGenerating(true);
-    apiGenerateSkills(ids).then(
-      (res) => {
-        setSkillGenerating(false);
-        if (res.aiUnavailable) {
-          showMsg(T("pl.skillAiUnavailable"), true);
-          return;
-        }
-        const errNote = res.errors.length ? T("pl.skillErrors", { n: res.errors.length }) : "";
-        const names = res.items.length ? `：${res.items.map((i) => i.name).join(", ")}` : "";
-        showMsg(`${T("pl.skillDone", { count: res.generated })}${names}${errNote}`);
-      },
-      (e: unknown) => {
-        setSkillGenerating(false);
-        showMsg(e instanceof Error ? e.message : String(e), true);
-      },
+    const selected = promptList.filter((p) => ids.includes(p.id));
+    setSkillExportInitial(
+      selected.map((p) => ({
+        promptId: p.id,
+        title: p.title,
+        body: p.body,
+        summary: p.summary ?? "",
+      })),
     );
-  }, [exportSelected, showMsg, T]);
+    setSkillExportOpen(true);
+  }, [exportSelected, promptList, showMsg, T]);
 
   /** 切换单条提示词导出选中。 */
   const toggleExport = useCallback((id: string) => {
@@ -713,21 +713,20 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
             variant="ghost"
             size="sm"
             className={plBtn("ghost", "sm")}
-            onClick={() => {
-              if (exportSelected.size === 0) {
-                showMsg(T("pl.skillNeedSelect"), true);
-                return;
-              }
-              requestConfirm(
-                T("pl.skillConfirm", { count: Array.from(exportSelected).length }),
-                false,
-                generateSelectedSkills,
-              );
-            }}
-            disabled={skillGenerating}
-            title={T("pl.skillBtnTitle")}
+            onClick={() => setSkillImportOpen(true)}
+            title={T("pl.skillImportBtnTitle")}
           >
-            {skillGenerating ? T("pl.skillGenerating") : T("pl.skillGenerate")}
+            {T("pl.skillImport")}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className={plBtn("ghost", "sm")}
+            onClick={openSkillExport}
+            title={T("pl.skillExportBtnTitle")}
+          >
+            {T("pl.skillExport")}
           </Button>
           <span style={{ fontSize: 11, color: TONE.quiet }}>
             {exportSelected.size > 0 ? `${exportSelected.size}/${promptList.length}` : T("pl.sidebar.total", { count: promptList.length })}
@@ -1098,6 +1097,9 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
         )}
       </ModuleCard>
 
+      {/* 模块四：自动备份（独立自包含模块，含备份/恢复） */}
+      <BackupModule t={t} />
+
       {/* 导入备份用的隐藏文件选择 */}
       <input
         ref={importRef}
@@ -1105,6 +1107,27 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
         accept="application/json,.json"
         style={{ display: "none" }}
         onChange={onImportFile}
+      />
+
+      {/* 技能导入弹窗：选择本地 md 文件 / 扫描 Skills 目录，编辑并校验后保存 */}
+      <SkillImportModal open={skillImportOpen} onClose={() => setSkillImportOpen(false)} t={t} />
+
+      {/* 技能导出弹窗：把勾选的提示词编辑并校验后写盘为技能 */}
+      <SkillImportModal
+        open={skillExportOpen}
+        onClose={() => setSkillExportOpen(false)}
+        t={t}
+        mode="export"
+        initialEntries={skillExportInitial}
+        onExported={(result) => {
+          const errNote = result.errors.length
+            ? T("pl.skillModal.savedExportErrors", { n: result.errors.length })
+            : "";
+          const names = result.items.length
+            ? `：${result.items.map((i) => i.name).join(", ")}`
+            : "";
+          showMsg(`${T("pl.skillModal.savedExport", { exported: result.exported })}${names}${errNote}`);
+        }}
       />
 
       {/* 自定义确认弹窗（替代系统 confirm） */}

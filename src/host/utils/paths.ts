@@ -61,6 +61,11 @@ export function logDir(): string {
   return join(dataDir(), "log");
 }
 
+/** 自动备份目录：~/.dsh/prompt-library/backup/（数据库备份文件集中存放） */
+export function backupDir(): string {
+  return join(dataDir(), "backup");
+}
+
 // ── AI 人格文件 ─────────────────────────────────────────────────────────────
 
 /** 人格目录：~/.dsh/prompt-library/character/ */

@@ -125,6 +125,14 @@ export interface PluginSettings {
   autoUpdateEnabled: boolean;
   /** 是否启用公告弹窗（双击词库助手弹出使用手册 + 版本通告）。仅当词库助手显示时可开关，默认开启。 */
   announcementEnabled: boolean;
+  /** 是否启用自动备份（启动时及按周期把数据库备份到 backup 目录）。 */
+  backupEnabled: boolean;
+  /** 自动备份保留的备份文件份数（超出时自动清理最旧的）。 */
+  backupRetention: number;
+  /** 自动备份周期：daily（每天）/ weekly（每周）/ monthly（每月）。 */
+  backupSchedule: "daily" | "weekly" | "monthly";
+  /** 自动备份文件格式：db（复制数据库文件）/ json（导出为 JSON 备份文件）。 */
+  backupFormat: "db" | "json";
 }
 
 /** 设置的默认值。 */
@@ -151,4 +159,8 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   applyCharacterToChat: false,
   autoUpdateEnabled: true, // 自动更新默认开启：发现新版本后台自动安装
   announcementEnabled: true, // 公告默认开启：双击词库助手展示使用手册与版本通告
+  backupEnabled: true, // 自动备份默认开启
+  backupRetention: 15, // 默认保留最近 5 份备份
+  backupSchedule: "weekly", // 默认每天备份一次
+  backupFormat: "json", // 默认备份为数据库文件（.json）
 };

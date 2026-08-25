@@ -33,6 +33,28 @@ export interface VersionNote {
  */
 export const VERSION_NOTES: VersionNote[] = [
   {
+    version: "0.8.14",
+    date: "2026-08-25",
+    zh: {
+      title: "导出技能 AI 生成 · 自定义 JSON 导入",
+      items: [
+        "导出技能 AI 生成：校验通过后自动逐条用 AI 生成英文技能名与描述，正文中的 {{变量名}} 原样保留并在描述中补全；技能名/摘要为空时自动补全，已有内容则保留。",
+        "AI 失败定位：AI 生成失败的条目在列表中红色高亮并显示具体失败原因（未连接 LLM / 无可用模型 / 返回空 / 解析失败）。",
+        "自定义 JSON 导入：导出技能弹窗新增「上传 JSON」按钮，支持数组或 skills/entries/prompts 列表批量添加自定义技能条目。",
+        "结构整理：备份与技能导入/导出组件拆分到独立模块目录，导出技能功能与校验/AI 操作合并为单一入口。",
+      ],
+    },
+    en: {
+      title: "Export skills with AI · Custom JSON import",
+      items: [
+        "AI-generated exports: after validation, AI produces an English skill name and description for each checked entry; {{variable}} placeholders in the body are preserved and reflected in the description; empty names/summaries are auto-filled while existing values are kept.",
+        "AI failure pinpointing: entries whose AI generation failed are highlighted in red in the list with the exact reason (no LLM / no model route / empty output / parse failure).",
+        "Custom JSON import: the export dialog gains an \"Upload JSON\" button that accepts an array or a skills/entries/prompts list to bulk-add custom skill entries.",
+        "Structure cleanup: backup and skill import/export components moved into a dedicated module folder; export now merges validation and AI generation into a single entry point.",
+      ],
+    },
+  },
+  {
     version: "0.8.13",
     date: "2026-08-25",
     zh: {

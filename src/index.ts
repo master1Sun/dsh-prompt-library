@@ -22,6 +22,7 @@ import {
   saveStatsSnapshot,
   welcomePromptOnce,
 } from "./host/services/data/store.js";
+import type { WeeklyStats } from "./host/services/data/store.js";
 import {
   commentOnStats,
   enrichPromptProfessional,
@@ -33,6 +34,7 @@ import {
 import { soulSystemSync, ensureSoulFile, shouldInjectChatCharacter } from "./host/services/assistant/character.js";
 import { ensureHarnessFile, harnessSystemSync } from "./host/services/harness/harness.js";
 import { autoUpdateDaily } from "./host/services/update/update.js";
+import { autoBackup } from "./host/services/data/backup.js";
 // 操作手册：纯文本字符串，聊天消息按纯文本渲染（markdown/HTML 都无法解析），用换行符排版
 import { manualEn, manualZh } from "./manual.js";
 
@@ -573,17 +575,28 @@ export function apply(ctx: Context) {
 
   // —— 每周自动统计：每 7 天生成一次「近 7 天」统计快照写入 stats_history ——
   // 统计的只是近 7 天的增量数据（新增/使用/AI 完善），避免把历史累计反复重复统计；
-  // 不调用 AI 点评（点评仅用于 /prompts -data 的实时全量统计）。
+  // 快照生成时若 AI 可用，会由 AI 生成一段简短的运营点评写入 comment 字段。
   // 在插件启动时立即检查一次；此后每 24 小时复查一次，距上次快照满 7 天即生成新快照。
   // 定时器随 apply 返回的 disposer 在插件卸载时清理，避免残留。
   const weeklySnapshotTimer = setInterval(() => {
     void checkAndGenerateWeeklySnapshot();
   }, 24 * 60 * 60 * 1000);
   void checkAndGenerateWeeklySnapshot();
+
+  // —— 自动备份：启动时检查一次，此后每 24 小时复查 ——
+  // 按用户设置（开启状态 / 周期 / 保留份数）判断是否到期执行；
+  // 未开启或未到期时静默跳过，超出保留份数自动清理最旧备份。失败静默降级。
+  // 定时器随 apply 返回的 disposer 在插件卸载时清理，避免残留。
+  const backupTimer = setInterval(() => {
+    void autoBackup();
+  }, 24 * 60 * 60 * 1000);
+  void autoBackup();
+
   return () => {
     disposeActivity?.();
     if (weeklySnapshotTimer) clearInterval(weeklySnapshotTimer);
     if (versionTimer) clearInterval(versionTimer);
+    if (backupTimer) clearInterval(backupTimer);
   };
 }
 
@@ -591,8 +604,40 @@ export function apply(ctx: Context) {
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
+ * 把「近 7 天」每周统计快照转成适合 AI 点评的纯文本（按宿主界面语言）。
+ */
+function formatWeeklyStatsText(stats: WeeklyStats, isZh: boolean): string {
+  const fmtDate = (t: number) =>
+    `${new Date(t).getFullYear()}-${String(new Date(t).getMonth() + 1).padStart(2, "0")}-${String(new Date(t).getDate()).padStart(2, "0")}`;
+  const lines: string[] = [];
+  if (isZh) {
+    lines.push(`【最近 7 天统计 · ${fmtDate(stats.rangeStart)} ~ ${fmtDate(stats.rangeEnd)}】`);
+    lines.push(`- 新增提示词：${stats.addedCount} 条`);
+    if (stats.addedTitles.length) lines.push(`    新增：${stats.addedTitles.join("、")}`);
+    lines.push(`- 使用次数：${stats.usageCount} 次（覆盖 ${stats.usedPromptCount} 条）`);
+    if (stats.topUsed.length) {
+      lines.push(`- 近 7 天最常用 Top ${stats.topUsed.length}：`);
+      for (const t of stats.topUsed) lines.push(`    ${t.title}（${t.count}次）`);
+    }
+    lines.push(`- AI 完善：${stats.aiRefinedCount} 条`);
+  } else {
+    lines.push(`[Last 7 days stats · ${fmtDate(stats.rangeStart)} ~ ${fmtDate(stats.rangeEnd)}]`);
+    lines.push(`- Added: ${stats.addedCount}`);
+    if (stats.addedTitles.length) lines.push(`    New: ${stats.addedTitles.join(", ")}`);
+    lines.push(`- Used: ${stats.usageCount} times (${stats.usedPromptCount} prompts)`);
+    if (stats.topUsed.length) {
+      lines.push(`- Top ${stats.topUsed.length} used this week:`);
+      for (const t of stats.topUsed) lines.push(`    ${t.title} (${t.count} times)`);
+    }
+    lines.push(`- AI-refined: ${stats.aiRefinedCount}`);
+  }
+  return lines.join("\n");
+}
+
+/**
  * 每 7 天自动统计门控：距上次快照不足 7 天时跳过；
  * 满 7 天（或尚无快照）则生成「近 7 天」统计快照写入 stats_history 表。
+ * 快照生成时若 AI 可用，由 AI 生成一段简短点评写入 comment 字段（失败或不可用则为空串）。
  * 任何失败都静默降级，不影响主流程。
  */
 async function checkAndGenerateWeeklySnapshot(): Promise<void> {
@@ -600,7 +645,14 @@ async function checkAndGenerateWeeklySnapshot(): Promise<void> {
     const lastAt = await getLastSnapshotAt().catch(() => 0);
     if (lastAt > 0 && Date.now() - lastAt < WEEK_MS) return;
     const stats = await computeWeeklyStats();
-    await saveStatsSnapshot(stats);
+    let comment = "";
+    if (isAiAvailable()) {
+      const settings = await getSettings();
+      const locale = await readGlobalLocale();
+      const isZh = locale.startsWith("zh") || locale === "";
+      comment = await commentOnStats(formatWeeklyStatsText(stats, isZh), settings).catch(() => "");
+    }
+    await saveStatsSnapshot(stats, comment);
   } catch {
     /* 快照失败静默，不影响主流程 */
   }

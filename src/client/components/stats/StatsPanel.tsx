@@ -332,6 +332,27 @@ function StatsContent({
               />
               <StatCard label={T("pl.stats.analysisAi")} value={lastSnap.stats.aiRefinedCount} />
             </div>
+            {/* 每周快照的 AI 点评（生成快照时若 AI 可用自动写入） */}
+            {lastSnap.comment ? (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 4,
+                  padding: "9px 11px",
+                  background: TONE.row,
+                  border: `1px solid ${TONE.border}`,
+                  borderRadius: 8,
+                }}
+              >
+                <span style={{ fontSize: 11, fontWeight: 560, color: TONE.accent }}>
+                  {T("pl.stats.aiComment")}
+                </span>
+                <p style={{ margin: 0, fontSize: 12, lineHeight: 1.6, color: TONE.text, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                  {lastSnap.comment}
+                </p>
+              </div>
+            ) : null}
             {lastSnap.stats.addedTitles.length > 0 && (
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 <span style={{ fontSize: 11, color: TONE.quiet }}>{T("pl.stats.analysisNewTitles")}</span>

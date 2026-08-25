@@ -91,7 +91,7 @@ export const zh = {
   "pl.intro.4": "小小词库，四时可思；妙句常新，如数家珍。",
 
   // 公告 / 使用手册
-  "pl.announce.title": "公告",
+  "pl.announce.title": "词库助手",
   "pl.announce.dismiss": "知道了",
   "pl.announce.manualTitle": "使用手册",
   "pl.announce.noticeTitle": "版本说明",
@@ -338,7 +338,7 @@ export const en: Record<keyof typeof zh, string> = {
   "pl.intro.4": "A pocket library, thinkable any hour; fine lines renewed, a joy to count.",
 
   // Announcement / manual
-  "pl.announce.title": "Announcement",
+  "pl.announce.title": "Prompt Library Assistant",
   "pl.announce.dismiss": "Got it",
   "pl.announce.manualTitle": "User Guide",
   "pl.announce.noticeTitle": "Release Notes",

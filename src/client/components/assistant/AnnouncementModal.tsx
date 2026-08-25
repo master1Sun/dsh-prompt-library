@@ -91,6 +91,7 @@ const MANUAL_KEYS = [
   "pl.announce.manual.2",
   "pl.announce.manual.3",
   "pl.announce.manual.4",
+  "pl.announce.manual.5",
 ] as const;
 
 /** 归一化语言：zh / en。 */

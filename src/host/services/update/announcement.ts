@@ -43,23 +43,27 @@ const MANUAL_KEYS: readonly string[] = [
   "pl.announce.manual.2",
   "pl.announce.manual.3",
   "pl.announce.manual.4",
+  "pl.announce.manual.5",
 ];
 
-/** 内置手动文案（当 i18n 翻译函数不可用/取不到时的兜底，zh/en 各一份）。 */
+/** 内置手动文案（当 i18n 翻译函数不可用/取不到时的兜底，zh/en 各一份）。
+ *  文案风格：前半句点明功能（一眼可知），后半句以诗意作结，兼顾雅致与直达。 */
 const MANUAL_FALLBACK: Record<LangKey, string[]> = {
   zh: [
-    "输入 # 呼出词库：实时筛选、↑↓ 选择、回车插入",
-    "自动学习聊天中有价值的提示词，可随时编辑或删除",
-    "支持 AI 优化与智能完善，提升提示词质量",
-    "支持 {{变量}} 占位符，插入时弹窗逐个填写",
-    "侧边栏 / 聊天面板双入口管理词库，支持导出与备份",
+    "轻敲 # 键，词库即现；实时筛选，↑↓ 择取，回车成文。",
+    "慧眼识珠，自动收藏聊天中宝贵提示词；随时编辑删除，常学常新。",
+    "AI 润色，如琢如磨；智能完善，句句精妙。",
+    "{{变量}} 生花，插前弹窗逐项填写；套用模板，从容落笔。",
+    "选中文本，一键剪藏入库；标签归类，按图索骥。",
+    "侧栏与聊天双入口管理；统计洞察、导入导出备份，词海拾贝，尽在掌握。",
   ],
   en: [
-    "Type # to open the library: live filter, up/down to select, Enter to insert",
-    "Automatically learn valuable prompts from chats; edit or delete anytime",
-    "AI polish and smart enrichment to improve prompt quality",
-    "Supports {{variable}} placeholders, filled in a popup before insert",
-    "Manage the library from the sidebar / chat panel, with export & backup",
+    "Press # to summon the library: live filter, ↑↓ to select, Enter to write.",
+    "A keen eye gathers gems from chat; edit or delete anytime, ever renewed.",
+    "AI polishes, stone into jade; smart enrichment, every line refined.",
+    "{{variable}} blooms, filled one by one before insert; templates make it effortless.",
+    "Select any text, clip it into the library in one click; tag & filter, find at a glance.",
+    "Manage from sidebar or chat panel — stats, export & backup: a sea of words at your fingertips.",
   ],
 };
 

@@ -22,8 +22,8 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import type { PluginSettings, Prompt } from "../../types.js";
-import { clampTitle, DEFAULT_SETTINGS } from "../../types.js";
+import type { PluginSettings, Prompt } from "../../../types.js";
+import { clampTitle, DEFAULT_SETTINGS } from "../../../types.js";
 import {
   createPrompt as apiCreate,
   deletePrompt as apiDelete,
@@ -33,24 +33,25 @@ import {
   updatePrompt as apiUpdate,
   usePrompt as apiUse,
   polishPrompt,
-} from "../services/api.js";
-import { isRecent, markRecent } from "../utils/recent-created.js";
-import { useHoverDetail } from "./HoverDetail.js";
+} from "../../services/api.js";
+import { isRecent, markRecent } from "../../utils/recent-created.js";
+import { useHoverDetail } from "../common/HoverDetail.js";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
-import { notifyDataChanged, useDataChanged } from "../services/data-sync.js";
-import { PL_BUTTON_CSS, plBtn } from "../utils/button-style.js";
-import { PromptAssistant } from "./PromptAssistant.js";
-import { type PLTranslate, usePLT } from "../i18n/i18n.js";
-import { Highlight, SearchBox, TagFilterBar } from "./SearchBox.js";
-import { TagInput } from "./TagInput.js";
-import { ConfirmDialog } from "./ConfirmDialog.js";
+import { notifyDataChanged, useDataChanged } from "../../services/data-sync.js";
+import { PL_BUTTON_CSS, plBtn } from "../../utils/button-style.js";
+import { PromptAssistant } from "../assistant/PromptAssistant.js";
+import { StatsPanel } from "../stats/StatsPanel.js";
+import { type PLTranslate, usePLT } from "../../i18n/i18n.js";
+import { Highlight, SearchBox, TagFilterBar } from "../common/SearchBox.js";
+import { TagInput } from "../common/TagInput.js";
+import { ConfirmDialog } from "../common/ConfirmDialog.js";
 import {
   applyVariables,
   extractVariables,
   hasVariables,
   insertVariableAt,
   TemplateFillModal,
-} from "./TemplateVariables.js";
+} from "../common/TemplateVariables.js";
 
 const MONO =
   'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif)';
@@ -255,6 +256,8 @@ export function SidebarPromptLibrary(props?: {
   const [tagNames, setTagNames] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [tagFilter, setTagFilter] = useState("");
+  // 面板视图：列表 / 统计
+  const [activeView, setActiveView] = useState<"list" | "stats">("list");
   // 实时搜索：输入变化立即可用于过滤
   const clearSearch = useCallback(() => setQuery(""), []);
   const [phase, setPhase] = useState<"idle" | "loading" | "ready" | "error">("idle");
@@ -466,6 +469,27 @@ export function SidebarPromptLibrary(props?: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, filtered, T]);
 
+  // ── 点选标签：只展示该标签分组并默认展开；切回「全部」时还原之前的展开状态 ──
+  // 记录点选标签前（「全部」视图下）的展开状态，便于切回后还原
+  const preTagExpanded = useRef<{ groups: Set<string>; recent: boolean } | null>(null);
+  useEffect(() => {
+    if (tagFilter) {
+      // 第一次点选标签时记录「全部」视图下的展开状态
+      if (preTagExpanded.current === null) {
+        preTagExpanded.current = { groups: new Set(expandedGroups), recent: recentCollapsed };
+      }
+      // 只展开当前标签分组、收起最近使用，其余分组不再展示
+      setExpandedGroups(new Set([tagFilter]));
+      setRecentCollapsed(true);
+    } else if (preTagExpanded.current !== null) {
+      // 切回「全部」：恢复之前记录的标签展开状态
+      setExpandedGroups(preTagExpanded.current.groups);
+      setRecentCollapsed(preTagExpanded.current.recent);
+      preTagExpanded.current = null;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tagFilter]);
+
   // 已有标签候选（去重排序）：来自所有提示词 + 词库标签表，供标签输入下拉提示
   const allTags = useMemo(() => {
     const s = new Set<string>(tagNames);
@@ -675,10 +699,11 @@ export function SidebarPromptLibrary(props?: {
       return a.localeCompare(b);
     });
     const ordered: Array<[string, Prompt[]]> = [];
-    if (recent.length > 0) ordered.push([recentKey, recent]);
+    // 点选标签时只展示该标签分组，隐藏「最近使用」；「全部」视图才展示最近使用
+    if (tagFilter === "" && recent.length > 0) ordered.push([recentKey, recent]);
     ordered.push(...rest);
     return ordered;
-  }, [filtered, T]);
+  }, [filtered, T, tagFilter]);
 
   // 词库助手常驻屏幕（不受面板开关控制）；下面的浮动面板由 rightPanelEnabled 单独控制显示
   const editing = editor.mode !== "none";
@@ -736,10 +761,30 @@ export function SidebarPromptLibrary(props?: {
   return (
     <>
       <style>{`@keyframes pl-refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-/* 浮动面板展开时的轻微浮入动画 */
-@keyframes pl-pop-in { from { opacity: 0; transform: translateY(6px) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
+/* 浮动面板展开时的浮入动画：轻微上移 + 缩放 + 淡入 */
+@keyframes pl-pop-in { from { opacity: 0; transform: translateY(10px) scale(.975); } to { opacity: 1; transform: translateY(0) scale(1); } }
 .pl-grab { cursor: grab; user-select: none; }
 .pl-grab:active { cursor: grabbing; }
+/* 内容区细滚动条 */
+.pl-scroll::-webkit-scrollbar { width: 8px; }
+.pl-scroll::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--dsw-alias-label-tertiary, #9ca3af) 30%, transparent); border-radius: 4px; }
+.pl-scroll::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--dsw-alias-label-tertiary, #9ca3af) 50%, transparent); }
+.pl-scroll::-webkit-scrollbar-track { background: transparent; }
+.pl-scroll { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--dsw-alias-label-tertiary, #9ca3af) 30%, transparent) transparent; }
+/* 提示词卡片：悬浮时轻微上浮 + 投影 + 描边高亮 */
+.pl-prompt-card {
+  background: var(--dsw-alias-input-fill, #ffffff);
+  border: 1px solid var(--dsw-alias-border-l2, rgba(17, 24, 39, 0.12));
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+}
+.pl-prompt-card:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(15, 23, 42, 0.1); border-color: var(--dsw-alias-brand-primary, #2563eb); }
+/* 分组头悬浮背景 */
+.pl-group-header { border-radius: 6px; transition: background .15s ease; }
+.pl-group-header:hover { background: color-mix(in srgb, var(--dsw-alias-label-primary, #1f2937) 6%, transparent); }
+/* 搜索输入框聚焦光圈 */
+.pl-search-input:focus { box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 16%, transparent); }
 }`}</style>
       <style>{PL_BUTTON_CSS}</style>
       {/* 词库助手（小人+气泡）：独立组件，自管理位置/冒泡/简介；点击小人通知面板切换开合。
@@ -764,13 +809,14 @@ export function SidebarPromptLibrary(props?: {
             height: view.height,
             display: !settings.assistantEnabled || !settings.rightPanelEnabled || collapsed ? "none" : "flex",
             flexDirection: "column",
-            animation: collapsed ? "none" : "pl-pop-in .24s cubic-bezier(.22,1,.36,1)",
+            animation: collapsed ? "none" : "pl-pop-in .28s cubic-bezier(.22,1,.36,1)",
             overflow: "hidden",
             color: TONE.text,
             background: TONE.panel,
             border: `1px solid ${TONE.border}`,
-            borderRadius: 10,
-            boxShadow: "0 6px 24px rgba(15, 23, 42, .12)",
+            borderRadius: 14,
+            boxShadow:
+              "0 1px 2px rgba(15, 23, 42, .04), 0 8px 24px rgba(15, 23, 42, .1), 0 24px 64px rgba(15, 23, 42, .16)",
             fontFamily: MONO,
           }}
         >
@@ -805,10 +851,10 @@ export function SidebarPromptLibrary(props?: {
               display: "flex",
               alignItems: "center",
               gap: 8,
-              padding: "0 12px",
+              padding: "0 14px",
               borderBottom: `1px solid ${TONE.border}`,
               flexShrink: 0,
-              height: 48,
+              height: 52,
             }}
           >
             <span style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0, flex: 1 }}>
@@ -867,6 +913,25 @@ export function SidebarPromptLibrary(props?: {
               >
                 {T("pl.new")}
               </Button>
+              {/* 统计视图切换：查看词库统计图表 */}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className={plBtn("ghost", "sm")}
+                onClick={() => setActiveView((v) => (v === "stats" ? "list" : "stats"))}
+                disabled={editing}
+                title={activeView === "stats" ? T("pl.stats.back") : T("pl.stats.view")}
+                icon={
+                  <svg
+                    width="13" height="13" viewBox="0 0 24 24" fill="none"
+                    stroke={activeView === "stats" ? TONE.accent : "currentColor"}
+                    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                  >
+                    <path d="M4 20V14M10 20V10M16 20V4M22 20H2" />
+                  </svg>
+                }
+              />
               {/* 最小化按钮：收进右侧操作区，采用常规的下箭头图标按钮 */}
               <Button
                 type="button"
@@ -886,9 +951,9 @@ export function SidebarPromptLibrary(props?: {
           </header>
 
           {/* 搜索框：输入即时生效（实时过滤） */}
-          {!editing && (
+          {!editing && activeView === "list" && (
             <>
-              <div style={{ padding: "0px 12px", flexShrink: 0, margin: "12px 12px 0" }}>
+              <div style={{ padding: "12px 12px 4px", flexShrink: 0 }}>
                 <SearchBox
                   inputRef={searchRef}
                   value={query}
@@ -906,7 +971,7 @@ export function SidebarPromptLibrary(props?: {
                 />
               </div>
               {/* 内容区 */}
-          <div ref={scrollRef} style={{ flex: 1, overflow: "auto", marginRight: 2 }}>
+          <div ref={scrollRef} className="pl-scroll" style={{ flex: 1, overflow: "auto", marginRight: 2, paddingRight: 4 }}>
             {phase === "loading" && (
               <div style={{ padding: "20px 12px", color: TONE.muted, fontSize: 13, textAlign: "center" }}>
                 {T("pl.loading")}
@@ -977,13 +1042,15 @@ export function SidebarPromptLibrary(props?: {
                   <div key={tag}>
                     {/* 分组头 — 可点击折叠/展开（最近使用分组同样可收起） */}
                     <div
+                      className="pl-group-header"
                       onClick={() => {
                         hover.hide();
                         if (isRecentSection) setRecentCollapsed((v) => !v);
                         else toggleGroup(tag);
                       }}
                       style={{
-                        padding: "8px 12px 4px",
+                        padding: "8px 10px 6px",
+                        margin: "6px 10px 2px",
                         fontSize: 11,
                         fontWeight: 470,
                         color: TONE.quiet,
@@ -992,7 +1059,6 @@ export function SidebarPromptLibrary(props?: {
                         display: "flex",
                         alignItems: "center",
                         gap: 6,
-                        borderBottom: `1px solid ${TONE.border}`,
                         cursor: "pointer",
                         userSelect: "none",
                       }}
@@ -1004,22 +1070,28 @@ export function SidebarPromptLibrary(props?: {
                             <path d="M12 7v5l3 2" />
                           </svg>
                         ) : (
-                          <span style={{ fontSize: 10 }}>
-                            {isCollapsed ? "\u25B6" : "\u25BC"}
-                          </span>
+                          <svg
+                            width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                            style={{ transition: "transform .2s ease", transform: isCollapsed ? "rotate(-90deg)" : "rotate(0deg)", flexShrink: 0 }}
+                            aria-hidden="true"
+                          >
+                            <path d="M6 9l6 6 6-6" />
+                          </svg>
                         )}
                       </span>
                       <span>{tag}</span>
                       <span style={{ fontSize: 10, opacity: 0.6 }}>{T("pl.sidebar.groupCount", { count: items.length })}</span>
                     </div>
-                    {!isCollapsed && items.map((p) => (
+                    {!isCollapsed && (
+                      <div style={{ padding: "2px 10px 8px", display: "flex", flexDirection: "column", gap: 8 }}>
+                        {items.map((p) => (
                       <div
                         key={p.id}
                         data-pl-id={p.id}
+                        className="pl-prompt-card"
                         onClick={hoverEnabled ? hover.hide : undefined}
                         style={{
-                          padding: "12px 14px 13px",
-                          borderBottom: `1px solid ${TONE.border}`,
+                          padding: "12px 14px",
                           display: "flex",
                           flexDirection: "column",
                           gap: 8,
@@ -1091,7 +1163,9 @@ export function SidebarPromptLibrary(props?: {
                           <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => remove(p)}>{T("pl.delete")}</Button>
                         </div>
                       </div>
-                    ))}
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -1100,6 +1174,8 @@ export function SidebarPromptLibrary(props?: {
           </div>
             </>
           )}
+          {/* 统计视图：独立展示（隐藏搜索与列表） */}
+          {!editing && activeView === "stats" && <StatsPanel t={T} onBack={() => setActiveView("list")} />}
           {/* 编辑/新建表单：editing 时独立展示（隐藏搜索与列表） */}
           {editing && (
             <div style={{ flex: 1, overflow: "auto", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 9 }}>

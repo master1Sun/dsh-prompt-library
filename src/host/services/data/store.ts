@@ -16,18 +16,18 @@ import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { load, dump } from "js-yaml";
-import type { PluginSettings, Prompt, TrashItem } from "../../types.js";
-import { clampTitle, DEFAULT_SETTINGS, TITLE_MAX_LEN } from "../../types.js";
-import { enrichLearnedPrompt, isAiAvailable } from "./ai.js";
-import { emitDataChanged } from "./events.js";
-import { syncCharacterChatInto } from "./character.js";
+import type { PluginSettings, Prompt, TrashItem } from "../../../types.js";
+import { clampTitle, DEFAULT_SETTINGS, TITLE_MAX_LEN } from "../../../types.js";
+import { enrichLearnedPrompt, isAiAvailable } from "../ai/ai.js";
+import { emitDataChanged } from "../sse/events.js";
+import { syncCharacterChatInto } from "../assistant/character.js";
 import {
   dbPath,
   SETTINGS_NAMESPACE,
   storePath,
   systemSettingsPath,
-} from "../utils/paths.js";
-import { stripBom } from "../utils/text.js";
+} from "../../utils/paths.js";
+import { stripBom } from "../../utils/text.js";
 
 // ── SQLite 连接与初始化 ────────────────────────────────────────────────────
 
@@ -1122,6 +1122,10 @@ export interface LibraryStats {
   addedIn7Days: number;
   /** 新增趋势：近 30 天新增提示词数量。 */
   addedIn30Days: number;
+  /** 近 7 天最常用的前 5 条（按近 7 天使用次数降序，来自 usage_log）。 */
+  topUsed7: Array<{ title: string; count: number }>;
+  /** 近 7 天经 AI 完善的提示词数量。 */
+  aiRefinedIn7: number;
 }
 
 /** 一周的毫秒数。 */
@@ -1176,6 +1180,24 @@ export async function computeLibraryStats(): Promise<LibraryStats> {
     const addedIn7Days = all.filter((p) => p.createdAt > weekAgo).length;
     const addedIn30Days = all.filter((p) => p.createdAt > monthAgo).length;
 
+    // 近 7 天最常使用（基于 usage_log 聚合，关联标题）与近 7 天 AI 完善
+    const usageRows7 = cur
+      .prepare("SELECT promptId FROM usage_log WHERE usedAt > ?")
+      .all(weekAgo) as Array<{ promptId: string }>;
+    const countByPrompt = new Map<string, number>();
+    for (const r of usageRows7) countByPrompt.set(r.promptId, (countByPrompt.get(r.promptId) ?? 0) + 1);
+    const topUsed7: Array<{ title: string; count: number }> = [];
+    if (countByPrompt.size > 0) {
+      const byId = new Map(all.map((p) => [p.id, p.title]));
+      const sorted = [...countByPrompt.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+      for (const [id, count] of sorted) topUsed7.push({ title: byId.get(id) ?? "（已删除）", count });
+    }
+    const aiRefinedIn7 = (
+      cur
+        .prepare("SELECT COUNT(*) AS c FROM prompts WHERE aiRefined = 1 AND aiRefinedAt > ?")
+        .get(weekAgo) as { c: number }
+    ).c;
+
     return Promise.resolve({
       total,
       totalUsage,
@@ -1194,6 +1216,8 @@ export async function computeLibraryStats(): Promise<LibraryStats> {
       aiRefinedPct,
       addedIn7Days,
       addedIn30Days,
+      topUsed7,
+      aiRefinedIn7,
     });
   } catch (e) {
     return Promise.reject(e);
@@ -1352,6 +1376,61 @@ export async function getLastSnapshotAt(): Promise<number> {
   }
 }
 
+/**
+ * 读取最近 N 条统计历史快照（按时间正序返回，供统计可视化趋势图使用）。
+ * 解析失败或旧格式的快照直接跳过，保证返回的数据结构完整可用。
+ */
+export async function listStatsSnapshots(limit = 12): Promise<StatsSnapshot[]> {
+  try {
+    const cur = getDb();
+    const rows = cur
+      .prepare("SELECT * FROM stats_history ORDER BY createdAt DESC LIMIT ?")
+      .all(limit) as unknown as Array<{
+      id: number;
+      stats: string;
+      comment: string | null;
+      createdAt: number;
+    }>;
+    const snaps: StatsSnapshot[] = [];
+    for (const row of rows) {
+      let raw: Partial<WeeklyStats>;
+      try {
+        raw = JSON.parse(row.stats) as Partial<WeeklyStats>;
+      } catch {
+        continue;
+      }
+      // 兼容旧版本快照：缺少核心字段视为无效，直接跳过。
+      if (
+        typeof raw.rangeStart !== "number" ||
+        typeof raw.rangeEnd !== "number" ||
+        !Array.isArray(raw.addedTitles) ||
+        !Array.isArray(raw.topUsed)
+      ) {
+        continue;
+      }
+      snaps.push({
+        id: row.id,
+        stats: {
+          rangeStart: raw.rangeStart,
+          rangeEnd: raw.rangeEnd,
+          addedCount: raw.addedCount ?? 0,
+          addedTitles: raw.addedTitles,
+          usedPromptCount: raw.usedPromptCount ?? 0,
+          usageCount: raw.usageCount ?? 0,
+          topUsed: raw.topUsed,
+          aiRefinedCount: raw.aiRefinedCount ?? 0,
+        },
+        comment: row.comment ?? "",
+        createdAt: row.createdAt,
+      });
+    }
+    // 倒序读取后反转，得到时间正序（旧→新），便于图表直接按序绘制。
+    snaps.reverse();
+    return Promise.resolve(snaps);
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
 /** 重命名标签：更新标签表并把所有提示词中的旧标签替换为新标签（合并去重、去空）。返回受影响条数。 */
 export function renameTag(from: string, to: string): Promise<number> {
   try {

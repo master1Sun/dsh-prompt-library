@@ -16,7 +16,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import type { Prompt, TrashItem } from "../../types.js";
+import type { Prompt, TrashItem } from "../../../types.js";
 import {
   createTag as apiCreateTag,
   deleteTag as apiDeleteTag,
@@ -29,11 +29,11 @@ import {
   listTrash as apiListTrash,
   renameTag as apiRenameTag,
   restoreTrash as apiRestoreTrash,
-} from "../services/api.js";
-import { notifyDataChanged, useDataChanged } from "../services/data-sync.js";
+} from "../../services/api.js";
+import { notifyDataChanged, useDataChanged } from "../../services/data-sync.js";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
-import { plBtn } from "../utils/button-style.js";
-import { type PLTranslate, usePLT } from "../i18n/i18n.js";
+import { plBtn } from "../../utils/button-style.js";
+import { type PLTranslate, usePLT } from "../../i18n/i18n.js";
 
 const MONO =
   '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "SimHei", "黑体", sans-serif';

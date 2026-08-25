@@ -7,8 +7,8 @@
  */
 import type { Context } from "@deepseek-ai/cordis";
 import { makePromptRoutes } from "./host/routes/routes.js";
-import { registerActivity } from "./host/services/activity.js";
-import { dataChangedRoute, emitExportDownload } from "./host/services/events.js";
+import { registerActivity } from "./host/services/assistant/activity.js";
+import { dataChangedRoute, emitExportDownload } from "./host/services/sse/events.js";
 import {
   autoLearn,
   computeLibraryStats,
@@ -21,7 +21,7 @@ import {
   readGlobalLocale,
   saveStatsSnapshot,
   welcomePromptOnce,
-} from "./host/services/store.js";
+} from "./host/services/data/store.js";
 import {
   commentOnStats,
   enrichPromptProfessional,
@@ -29,10 +29,10 @@ import {
   logAiInjected,
   polishPromptBody,
   registerLlm,
-} from "./host/services/ai.js";
-import { soulSystemSync, ensureSoulFile, shouldInjectChatCharacter } from "./host/services/character.js";
-import { ensureHarnessFile, harnessSystemSync } from "./host/services/harness.js";
-import { autoUpdateDaily } from "./host/services/update.js";
+} from "./host/services/ai/ai.js";
+import { soulSystemSync, ensureSoulFile, shouldInjectChatCharacter } from "./host/services/assistant/character.js";
+import { ensureHarnessFile, harnessSystemSync } from "./host/services/harness/harness.js";
+import { autoUpdateDaily } from "./host/services/update/update.js";
 // 操作手册：纯文本字符串，聊天消息按纯文本渲染（markdown/HTML 都无法解析），用换行符排版
 import { manualEn, manualZh } from "./manual.js";
 

@@ -4,16 +4,16 @@
  * 内容分两块：
  *  - 使用手册：插件核心能力要点（本地 i18n 文案，跟随系统语言切换）；
  *  - 版本说明：仅展示最新一个版本的标题 + 更新要点；
- *    数据来自 host/services/version-notes.ts（本地多语言），不再读取网络 JSON。
+ *    数据来自 host/services/update/version-notes.ts（本地多语言），不再读取网络 JSON。
  * 与其它弹窗交互保持一致：只能通过右上角关闭按钮或底部「知道了」按钮关闭，
  * 禁止点击遮罩/外部区域关闭。
  */
 import { type CSSProperties, useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
-import { plBtn } from "../utils/button-style.js";
-import { type PLT } from "../i18n/i18n.js";
-import { getAnnouncement, type AnnouncementData, type VersionEntry } from "../services/api.js";
+import { plBtn } from "../../utils/button-style.js";
+import { type PLT } from "../../i18n/i18n.js";
+import { getAnnouncement, type AnnouncementData, type VersionEntry } from "../../services/api.js";
 
 const MONO =
   'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif)';

@@ -7,8 +7,8 @@
  */
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
-import { plBtn } from "../utils/button-style.js";
-import { type PLT } from "../i18n/i18n.js";
+import { plBtn } from "../../utils/button-style.js";
+import { type PLT } from "../../i18n/i18n.js";
 
 const MONO =
   'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif)';

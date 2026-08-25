@@ -2,14 +2,14 @@
 // 不依赖右侧面板：开启开关后，在聊天区高亮选中文本会浮出「+ 添加提示词」按钮，
 // 点击弹出独立居中弹窗，选中文本预填到正文，保存即入库。
 import { useEffect, useCallback, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import { createPrompt as apiCreate, listTags as apiListTags } from "../services/api.js";
-import { markRecent } from "../utils/recent-created.js";
-import { notifyDataChanged, useDataChanged } from "../services/data-sync.js";
+import { createPrompt as apiCreate, listTags as apiListTags } from "../../services/api.js";
+import { markRecent } from "../../utils/recent-created.js";
+import { notifyDataChanged, useDataChanged } from "../../services/data-sync.js";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
-import { plBtn } from "../utils/button-style.js";
-import { TagInput } from "./TagInput.js";
-import { insertVariableAt } from "./TemplateVariables.js";
-import { type PLTranslate, usePLT } from "../i18n/i18n.js";
+import { plBtn } from "../../utils/button-style.js";
+import { TagInput } from "../common/TagInput.js";
+import { insertVariableAt } from "../common/TemplateVariables.js";
+import { type PLTranslate, usePLT } from "../../i18n/i18n.js";
 
 const MONO =
   'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif)';

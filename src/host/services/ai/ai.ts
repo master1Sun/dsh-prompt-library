@@ -11,13 +11,13 @@
  */
 import { BlockAssembler, createUserMessage } from "@deepseek-ai/dsh-llm";
 import type { GenerateOptions, LlmRuntime, LlmModelInfo } from "@deepseek-ai/dsh-llm";
-import type { PluginSettings, Prompt } from "../../types.js";
-import { listTags, readGlobalLocale, updatePrompt } from "./store.js";
-import { parseRefineResult, type AiRefineResult } from "../utils/refine.js";
+import type { PluginSettings, Prompt } from "../../../types.js";
+import { listTags, readGlobalLocale, updatePrompt } from "../data/store.js";
+import { parseRefineResult, type AiRefineResult } from "../../utils/refine.js";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { buildSoulBoundary, readSoulDoc } from "./character.js";
-import { logDir } from "../utils/paths.js";
+import { buildSoulBoundary, readSoulDoc } from "../assistant/character.js";
+import { logDir } from "../../utils/paths.js";
 
 /** 单次 AI 完善调用的超时（毫秒）。 */
 const AI_TIMEOUT_MS = 30_000;

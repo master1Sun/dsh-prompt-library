@@ -11,9 +11,9 @@
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getSettings, listPrompts, getSkillNameForPrompt, setSkillNameForPrompt } from "./store.js";
+import { getSettings, listPrompts, getSkillNameForPrompt, setSkillNameForPrompt } from "../data/store.js";
 import { isAiAvailable, generateSkillDescriptor } from "./ai.js";
-import { dshHome } from "../utils/paths.js";
+import { dshHome } from "../../utils/paths.js";
 
 /** 技能根目录：~/.dsh/skills/ */
 export function skillsRoot(): string {

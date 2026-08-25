@@ -8,8 +8,8 @@
  * 鼠标从正文移入卡片期间会取消隐藏，移出卡片后再延迟隐藏。
  */
 import { useRef, useState, type ReactNode } from "react";
-import type { Prompt } from "../../types.js";
-import { clampTitle } from "../../types.js";
+import type { Prompt } from "../../../types.js";
+import { clampTitle } from "../../../types.js";
 
 const MONO =
   '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "SimHei", "黑体", sans-serif';

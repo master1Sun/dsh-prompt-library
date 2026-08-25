@@ -13,10 +13,10 @@
  * 修改后立即生效，无需保存按钮。
  */
 import { type CSSProperties, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import type { PluginSettings } from "../../types.js";
-import { DEFAULT_SETTINGS } from "../../types.js";
-import { getAiSelectables, getSettings, updateSettings as apiUpdateSettings, getUpdate, applyUpdate, type ClientAiSelectable, type UpdateInfo } from "../services/api.js";
-import { type PLTranslate, usePLT } from "../i18n/i18n.js";
+import type { PluginSettings } from "../../../types.js";
+import { DEFAULT_SETTINGS } from "../../../types.js";
+import { getAiSelectables, getSettings, updateSettings as apiUpdateSettings, getUpdate, applyUpdate, type ClientAiSelectable, type UpdateInfo } from "../../services/api.js";
+import { type PLTranslate, usePLT } from "../../i18n/i18n.js";
 
 const MONO =
   '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "SimHei", "黑体", sans-serif';

@@ -15,10 +15,10 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import type { PluginSettings } from "../../types.js";
-import { DEFAULT_SETTINGS } from "../../types.js";
-import { genIntro, getActivity, type ActivityPhase, type ActivitySnapshot } from "../services/api.js";
-import { type PLTranslate, usePLT } from "../i18n/i18n.js";
+import type { PluginSettings } from "../../../types.js";
+import { DEFAULT_SETTINGS } from "../../../types.js";
+import { genIntro, getActivity, type ActivityPhase, type ActivitySnapshot } from "../../services/api.js";
+import { type PLTranslate, usePLT } from "../../i18n/i18n.js";
 import { AnnouncementModal } from "./AnnouncementModal.js";
 import {
   HOVER_SEQUENCE,
@@ -31,7 +31,7 @@ import {
   sequenceFrame,
   type SpriteSheet,
   type SpriteTrack,
-} from "../utils/sprite.js";
+} from "../../utils/sprite.js";
 
 const TONE = {
   text: "var(--dsw-alias-label-primary, #1f2937)",
@@ -323,7 +323,7 @@ export function PromptAssistant(props: Props): ReactNode {
   }, [sheet, hovering, activity.phase]);
 
   // 活动阶段 → i18n 键（为避免动态模板键破坏类型推导，用显式映射表）
-  type ZhKey = keyof typeof import("../i18n/i18n.js").zh;
+  type ZhKey = keyof typeof import("../../i18n/i18n.js").zh;
   const PHASE_KEY: Record<ActivityPhase, ZhKey> = {
     idle: "pl.phase.idle",
     waiting: "pl.phase.waiting",

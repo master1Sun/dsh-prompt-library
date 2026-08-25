@@ -271,3 +271,78 @@ export function getAnnouncement(lang?: string): Promise<AnnouncementData> {
     : "/api/prompt-library/announcement";
   return send<AnnouncementData>("GET", url);
 }
+
+// ── 词库统计（供统计可视化面板）────────────────────────────────────────
+
+/** 词库使用统计（与 host store.computeLibraryStats 对齐）。 */
+export interface LibraryStats {
+  /** 提示词总数。 */
+  total: number;
+  /** 累计使用次数。 */
+  totalUsage: number;
+  /** 曾使用过的提示词数量。 */
+  usedCount: number;
+  /** 从未使用过的提示词数量。 */
+  unusedCount: number;
+  /** 最常用的前 5 条（按使用次数降序）。 */
+  topUsed: Array<{ title: string; usageCount: number; lastUsedAt: number }>;
+  /** 最近使用的前 5 条（按最后使用时间降序）。 */
+  recentUsed: Array<{ title: string; lastUsedAt: number }>;
+  /** 标签及其被引用次数。 */
+  tagStats: Array<{ name: string; count: number }>;
+  /** 回收站条数。 */
+  trashCount: number;
+  /** 复用活力：近 7 天曾被使用的提示词数量。 */
+  usedIn7Days: number;
+  /** 复用活力：近 30 天曾被使用的提示词数量。 */
+  usedIn30Days: number;
+  /** 沉睡提示词：创建超 30 天且从未使用的最久前 3 条。 */
+  longestUnused: Array<{ title: string; days: number }>;
+  /** 正文总字数。 */
+  totalBodyLength: number;
+  /** 平均每条正文字数。 */
+  avgBodyLength: number;
+  /** 已由 AI 完善的提示词数量。 */
+  aiRefinedCount: number;
+  /** AI 完善占比（0-100）。 */
+  aiRefinedPct: number;
+  /** 近 7 天新增提示词数量。 */
+  addedIn7Days: number;
+  /** 近 30 天新增提示词数量。 */
+  addedIn30Days: number;
+  /** 近 7 天最常用的前 5 条（按近 7 天使用次数降序）。 */
+  topUsed7: Array<{ title: string; count: number }>;
+  /** 近 7 天经 AI 完善的提示词数量。 */
+  aiRefinedIn7: number;
+}
+
+/** 每周增量统计（近 7 天：新增/使用/AI 完善）。 */
+export interface WeeklyStats {
+  rangeStart: number;
+  rangeEnd: number;
+  addedCount: number;
+  addedTitles: string[];
+  usedPromptCount: number;
+  usageCount: number;
+  topUsed: Array<{ title: string; count: number }>;
+  aiRefinedCount: number;
+}
+
+/** 一次统计历史快照。 */
+export interface StatsSnapshot {
+  id: number;
+  stats: WeeklyStats;
+  comment: string;
+  createdAt: number;
+}
+
+/** 统计接口返回：当前实时统计 + 历史快照序列（时间正序，供趋势图）。 */
+export interface PromptStatsData {
+  stats: LibraryStats;
+  snapshots: StatsSnapshot[];
+}
+
+/** 获取词库统计（当前统计 + 近 12 周快照）。 */
+export function getStats(): Promise<PromptStatsData> {
+  return send<PromptStatsData>("GET", "/api/prompt-library/stats");
+}

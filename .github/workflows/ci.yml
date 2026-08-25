@@ -1,0 +1,41 @@
+﻿# CI：push/PR 时执行类型检查与构建，作为发布前的质量门禁。
+#
+# 说明：
+# - typecheck 依赖 @deepseek-ai/* 类型包。peerDeps（cordis / dsh-llm）由 npm 自动安装，
+#   其余在 lockfile 外的（dsh-host-webserver / dsh-client-*）通过 --no-save 补装。
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install DSH type packages (outside lockfile)
+        run: >
+          npm install --no-save --no-package-lock
+          @deepseek-ai/dsh-host-webserver
+          @deepseek-ai/dsh-client-runtime
+          @deepseek-ai/dsh-client-locale
+          @deepseek-ai/dsh-client-ui-slots
+          @deepseek-ai/dsh-client-ui-conversation
+          @deepseek-ai/dsh-client-ui-primitives
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build

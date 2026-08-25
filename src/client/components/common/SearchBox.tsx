@@ -36,14 +36,14 @@ const chipStyle: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
-  height: 25,
-  padding: "0 8px",
+  height: 24,
+  padding: "0 10px",
   boxSizing: "border-box",
-  maxWidth: 160,
+  maxWidth: "100%",
   overflow: "hidden",
   textOverflow: "ellipsis",
   border: `1px solid ${TONE.border}`,
-  borderRadius: 4,
+  borderRadius: 999,
   fontWeight: 500,
   fontSize: 11,
   lineHeight: 1,
@@ -53,23 +53,45 @@ const chipStyle: CSSProperties = {
   appearance: "none",
   cursor: "pointer",
   userSelect: "none",
-  transition: "background 0.18s ease, color 0.18s ease, border-color 0.18s ease",
+  transition:
+    "background 0.18s ease, color 0.18s ease, border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease",
 };
 
 /** 标签过滤条容器的统一间距。 */
 const barStyle: CSSProperties = {
   display: "flex",
   flexWrap: "wrap",
-  columnGap: 6,
-  rowGap: 6,
-  marginTop: 8,
-  maxHeight: 56,
-  overflowY: "auto",
+  columnGap: 8,
+  rowGap: 8,
+  marginTop: 10,
+  paddingBottom: 2,
 };
+
+/** 图钉图标：用于「被钉选」的标签。 */
+function PinIcon(): ReactNode {
+  return (
+    <svg
+      width="11"
+      height="11"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      style={{ marginRight: 4, flexShrink: 0 }}
+      aria-hidden="true"
+    >
+      <path d="M12 17v5" />
+      <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z" />
+    </svg>
+  );
+}
 
 /**
  * 标签过滤条：一组可点击的标签粒子，单选过滤。
  * 「全部」表示不过滤；点击已选中的标签可取消选择。
+ * 选中的标签呈「图钉钉住」效果：带图钉图标、轻微上浮与投影。
  */
 export function TagFilterBar(props: {
   tags: string[];
@@ -83,10 +105,15 @@ export function TagFilterBar(props: {
     background: selected ? TONE.accentSoft : TONE.row,
     color: selected ? TONE.accent : TONE.text,
     borderColor: selected ? TONE.accent : TONE.border,
+    // pin 效果：选中标签轻微上浮、带投影，像被图钉钉在过滤条上
+    transform: selected ? "translateY(-1px)" : "none",
+    boxShadow: selected ? "0 2px 6px rgba(15, 23, 42, 0.18)" : "none",
+    padding: selected ? "0 7px 0 6px" : "0 8px",
   });
   return (
     <div style={barStyle}>
       <button type="button" onClick={() => onChange("")} style={chip(active === "")}>
+        {active === "" && <PinIcon />}
         {allLabel ?? "全部"}
       </button>
       {tags.map((tag) => (
@@ -97,6 +124,7 @@ export function TagFilterBar(props: {
           title={tag}
           style={chip(active === tag)}
         >
+          {active === tag && <PinIcon />}
           {tag}
         </button>
       ))}
@@ -190,6 +218,7 @@ export function SearchBox({
 
       <input
         ref={inputRef}
+        className="pl-search-input"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {
@@ -199,11 +228,11 @@ export function SearchBox({
         style={{
           width: "100%",
           boxSizing: "border-box",
-          padding: "7px 30px 7px 28px",
+          padding: "8px 30px 8px 28px",
           color: TONE.text,
           background: TONE.row,
           border: `1px solid ${TONE.border}`,
-          borderRadius: 7,
+          borderRadius: 9,
           fontFamily: MONO,
           fontSize: 13,
           outline: "none",

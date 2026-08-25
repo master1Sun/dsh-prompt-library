@@ -3,7 +3,7 @@
  *
  * 数据全部来自代码：
  *  - 使用手册：i18n 文案键 pl.announce.manual.*，跟随系统语言；
- *  - 通告（版本更新说明）：src/host/services/version-notes.ts，按版本号 + 标题 + 条目排版，支持多语言。
+ *  - 通告（版本更新说明）：src/host/services/update/version-notes.ts，按版本号 + 标题 + 条目排版，支持多语言。
  *
  * 不再读取任何网络 JSON。远程拉取、缓存、URL 校验等整套逻辑已移除。
  * 接口保持不变（/api/prompt-library/announcement），调用方传入 lang 查询参数可指定语言。

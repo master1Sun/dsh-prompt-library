@@ -17,8 +17,8 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import type { PluginSettings, Prompt } from "../../types.js";
-import { clampTitle, DEFAULT_SETTINGS } from "../../types.js";
+import type { PluginSettings, Prompt } from "../../../types.js";
+import { clampTitle, DEFAULT_SETTINGS } from "../../../types.js";
 import {
   createPrompt as apiCreate,
   deletePrompt as apiDelete,
@@ -29,26 +29,27 @@ import {
   usePrompt as apiUse,
   learnPrompt as apiLearn,
   polishPrompt as apiPolish,
-} from "../services/api.js";
+} from "../../services/api.js";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
-import { PL_BUTTON_CSS, plBtn } from "../utils/button-style.js";
-import { SidebarPromptLibrary } from "./SidebarPromptLibrary.js";
-import { SelectionAddPrompt } from "./SelectionAddPrompt.js";
-import { Pagination } from "./Pagination.js";
-import { TagInput } from "./TagInput.js";
-import { ConfirmDialog } from "./ConfirmDialog.js";
-import { AUTO_LEARN_TOAST_MS, useAutoLearn } from "../utils/auto-learn.js";
-import { isRecent, markRecent } from "../utils/recent-created.js";
-import { notifyDataChanged, useDataChanged, useExportDownloaded, useFillDraft } from "../services/data-sync.js";
-import { type PLT, type PLTranslate, usePLT } from "../i18n/i18n.js";
-import { SearchBox } from "./SearchBox.js";
+import { PL_BUTTON_CSS, plBtn } from "../../utils/button-style.js";
+import { SidebarPromptLibrary } from "../sidebar/SidebarPromptLibrary.js";
+import { SelectionAddPrompt } from "../selection/SelectionAddPrompt.js";
+import { Pagination } from "../common/Pagination.js";
+import { TagInput } from "../common/TagInput.js";
+import { ConfirmDialog } from "../common/ConfirmDialog.js";
+import { AUTO_LEARN_TOAST_MS, useAutoLearn } from "../../utils/auto-learn.js";
+import { isRecent, markRecent } from "../../utils/recent-created.js";
+import { notifyDataChanged, useDataChanged, useExportDownloaded, useFillDraft } from "../../services/data-sync.js";
+import { type PLT, type PLTranslate, usePLT } from "../../i18n/i18n.js";
+import { SearchBox, TagFilterBar } from "../common/SearchBox.js";
+import { StatsPanel } from "../stats/StatsPanel.js";
 import {
   applyVariables,
   extractVariables,
   hasVariables,
   insertVariableAt,
   TemplateFillModal,
-} from "./TemplateVariables.js";
+} from "../common/TemplateVariables.js";
 
 
 /**
@@ -603,6 +604,8 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   const draft = useInput((s) => s.draft);
 
   const [open, setOpen] = useState(false);
+  // 面板视图：列表 / 统计
+  const [activeView, setActiveView] = useState<"list" | "stats">("list");
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   // 待确认删除的提示词（自定义确认弹窗，替代系统 confirm）
   const [deleteConfirm, setDeleteConfirm] = useState<Prompt | null>(null);
@@ -613,6 +616,8 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   const [query, setQuery] = useState("");
   // 实时搜索：输入变化立即可用于过滤
   const clearSearch = useCallback(() => setQuery(""), []);
+  // 标签过滤：选中后仅显示含该标签的提示词（与搜索词叠加）
+  const [tagFilter, setTagFilter] = useState("");
   const [editor, setEditor] = useState<{ mode: "none" | "create" | "edit"; id?: string; title: string; body: string; tags: string }>({
     mode: "none", title: "", body: "", tags: ""
   });
@@ -735,22 +740,25 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return q
-      ? prompts.filter((p) => {
-          const hay = `${p.title} ${p.body} ${(p.tags ?? []).join(" ")}`.toLowerCase();
-          return hay.includes(q);
-        })
-      : prompts;
-  }, [prompts, query]);
+    return prompts.filter((p) => {
+      // 标签过滤（与搜索词叠加）
+      if (tagFilter && !(p.tags ?? []).includes(tagFilter)) return false;
+      if (q) {
+        const hay = `${p.title} ${p.body} ${(p.tags ?? []).join(" ")}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [prompts, query, tagFilter]);
 
   // ── 翻页 ───────────────────────────────────────────────────────────────────
   const PAGE_SIZE = 10;
   const [page, setPage] = useState(1);
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  // 搜索词或数据变化时回到第 1 页
+  // 搜索词/标签或数据变化时回到第 1 页
   useEffect(() => {
     setPage(1);
-  }, [query, prompts]);
+  }, [query, tagFilter, prompts]);
   // 当前页数据切片
   const pageItems = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
@@ -1191,12 +1199,31 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                 >
                   {T("pl.new")}
                 </Button>
+                {/* 统计视图切换：查看词库统计图表 */}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className={plBtn("ghost", "sm")}
+                  onClick={() => setActiveView((v) => (v === "stats" ? "list" : "stats"))}
+                  disabled={editing}
+                  title={activeView === "stats" ? T("pl.stats.back") : T("pl.stats.view")}
+                  icon={
+                    <svg
+                      width="13" height="13" viewBox="0 0 24 24" fill="none"
+                      stroke={activeView === "stats" ? TONE.accent : "currentColor"}
+                      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                    >
+                      <path d="M4 20V14M10 20V10M16 20V4M22 20H2" />
+                    </svg>
+                  }
+                />
               </div>
             </header>
 
-            {/* 搜索框：输入即时生效（实时过滤） */}
-            {!editing && (
-              <div style={{ padding: "10px 16px", flexShrink: 0 }}>
+            {/* 搜索框 + 标签过滤：输入即时生效（实时过滤）；统计视图下隐藏 */}
+            {!editing && activeView === "list" && (
+              <div style={{ padding: "10px 16px 4px", flexShrink: 0 }}>
                 <SearchBox
                   value={query}
                   onChange={setQuery}
@@ -1204,9 +1231,19 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                   onClear={clearSearch}
                   placeholder={T("pl.search")}
                 />
+                <TagFilterBar
+                  tags={allTags}
+                  active={tagFilter}
+                  onChange={setTagFilter}
+                  allLabel={T("pl.tagFilterAll")}
+                />
               </div>
             )}
 
+            {/* 统计视图：独立展示（隐藏搜索与列表） */}
+            {activeView === "stats" && !editing ? (
+              <StatsPanel t={T} onBack={() => setActiveView("list")} />
+            ) : (
             <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
               {phase === "loading" && (
                 <div style={{ padding: "20px 16px", color: TONE.muted, fontSize: 13, textAlign: "center" }}>
@@ -1326,6 +1363,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                 </ul>
               )}
             </div>
+            )}
             {/* 编辑/新建模式：取消与保存按钮固定于面板底部（不随表单内容滚动） */}
             {editing && (
               <div
@@ -1346,8 +1384,8 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                 </Button>
               </div>
             )}
-            {/* 翻页：按页展示，置于滚动区外、固定于面板底部 */}
-            {!editing && phase === "ready" && (
+            {/* 翻页：按页展示，置于滚动区外、固定于面板底部；统计视图下隐藏 */}
+            {!editing && activeView === "list" && phase === "ready" && (
               <Pagination page={page} totalPages={totalPages} onChange={setPage} />
             )}
           </section>

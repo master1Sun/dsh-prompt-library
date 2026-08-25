@@ -258,6 +258,50 @@ export const zh = {
   "pl.setModuleLabDesc": "实验性能力，可能影响整个 AI 对话的表现，请谨慎开启。",
   "pl.setModuleUpdate": "更新",
   "pl.setModuleUpdateDesc": "管理插件版本检查与自动更新。",
+
+  // 统计可视化
+  "pl.stats.title": "统计",
+  "pl.stats.view": "查看统计",
+  "pl.stats.back": "返回列表",
+  "pl.stats.loadFail": "统计加载失败",
+  "pl.stats.neverUsed": "从未使用",
+  "pl.stats.justNow": "刚刚",
+  "pl.stats.minAgo": "{n} 分钟前",
+  "pl.stats.hourAgo": "{n} 小时前",
+  "pl.stats.dayAgo": "{n} 天前",
+  "pl.stats.emptyList": "暂无数据",
+  "pl.stats.trend": "每周趋势",
+  "pl.stats.trendEmpty": "暂无趋势数据，使用一段时间后自动生成",
+  "pl.stats.trendAdded": "新增",
+  "pl.stats.trendUsage": "使用",
+  "pl.stats.total": "提示词总数",
+  "pl.stats.totalUsage": "总使用次数",
+  "pl.stats.usedRate": "使用率",
+  "pl.stats.usedCount": "已使用 {count} 条",
+  "pl.stats.aiRefined": "AI 优化次数",
+  "pl.stats.aiRefinedCount": "共 {count} 次",
+  "pl.stats.used7": "近 7 天使用",
+  "pl.stats.used30": "近 30 天使用",
+  "pl.stats.added7": "近 7 天新增",
+  "pl.stats.added30": "近 30 天新增",
+  "pl.stats.topUsed7": "近 7 天最常使用",
+  "pl.stats.aiRefined7": "近 7 天 AI 完善",
+  "pl.stats.analysis": "近 7 天分析",
+  "pl.stats.analysisEmpty": "暂无分析，7 天后自动生成",
+  "pl.stats.analysisPeriod": "统计周期 {start} ~ {end}",
+  "pl.stats.analysisAdded": "新增",
+  "pl.stats.analysisUsage": "使用",
+  "pl.stats.analysisActive": "活跃 {n} 条",
+  "pl.stats.analysisAi": "AI 完善",
+  "pl.stats.analysisNewTitles": "新增提示词",
+  "pl.stats.avgBody": "平均字数",
+  "pl.stats.trash": "回收站",
+  "pl.stats.tags": "标签分布",
+  "pl.stats.topUsed": "最常使用",
+  "pl.stats.recentUsed": "最近使用",
+  "pl.stats.sleeper": "沉睡提示词",
+  "pl.stats.sleeperEmpty": "暂无沉睡提示词",
+  "pl.stats.days": "{days} 天未使用",
 } as const;
 
 /** 英文字典（键与中文完全一致）。 */
@@ -506,6 +550,50 @@ export const en: Record<keyof typeof zh, string> = {
   "pl.setModuleUpdate": "Update",
   "pl.setModuleUpdateDesc": "Manage plugin version checking and auto-update.",
   "pl.tagFilterAll": "All",
+
+  // Statistics visualization
+  "pl.stats.title": "Statistics",
+  "pl.stats.view": "View statistics",
+  "pl.stats.back": "Back to list",
+  "pl.stats.loadFail": "Failed to load statistics",
+  "pl.stats.neverUsed": "Never used",
+  "pl.stats.justNow": "Just now",
+  "pl.stats.minAgo": "{n} min ago",
+  "pl.stats.hourAgo": "{n} h ago",
+  "pl.stats.dayAgo": "{n} days ago",
+  "pl.stats.emptyList": "No data yet",
+  "pl.stats.trend": "Weekly trend",
+  "pl.stats.trendEmpty": "No trend data yet; it is generated automatically over time",
+  "pl.stats.trendAdded": "Added",
+  "pl.stats.trendUsage": "Used",
+  "pl.stats.total": "Total prompts",
+  "pl.stats.totalUsage": "Total uses",
+  "pl.stats.usedRate": "Usage rate",
+  "pl.stats.usedCount": "{count} used",
+  "pl.stats.aiRefined": "AI refinements",
+  "pl.stats.aiRefinedCount": "{count} in total",
+  "pl.stats.used7": "Used in 7 days",
+  "pl.stats.used30": "Used in 30 days",
+  "pl.stats.added7": "Added in 7 days",
+  "pl.stats.added30": "Added in 30 days",
+  "pl.stats.topUsed7": "Top used (7d)",
+  "pl.stats.aiRefined7": "AI refined (7d)",
+  "pl.stats.analysis": "7-day Analysis",
+  "pl.stats.analysisEmpty": "No analysis yet; generated after 7 days",
+  "pl.stats.analysisPeriod": "Period {start} ~ {end}",
+  "pl.stats.analysisAdded": "Added",
+  "pl.stats.analysisUsage": "Used",
+  "pl.stats.analysisActive": "{n} active",
+  "pl.stats.analysisAi": "AI refined",
+  "pl.stats.analysisNewTitles": "New prompts",
+  "pl.stats.avgBody": "Avg. body length",
+  "pl.stats.trash": "Recycle bin",
+  "pl.stats.tags": "Tags",
+  "pl.stats.topUsed": "Most used",
+  "pl.stats.recentUsed": "Recently used",
+  "pl.stats.sleeper": "Dormant prompts",
+  "pl.stats.sleeperEmpty": "No dormant prompts",
+  "pl.stats.days": "{days} days idle",
 };
 
 /** 把命名空间合并进框架的类型表，让 register / t 座位获得键级类型推导。 */
@@ -537,5 +625,15 @@ export function fallbackT(key: keyof typeof zh, params?: Record<string, unknown>
 
 /** 组件内取 t：有框架注入的 t 用它，否则回退中文。 */
 export function usePLT(t?: PLTranslate): PLT {
-  return (t ?? fallbackT) as PLT;
+  const base = (t ?? fallbackT) as PLT;
+  return (key, params) => {
+    let text = base(key, params);
+    if (params) {
+      for (const [k, v] of Object.entries(params)) {
+        // 宿主 t 可能不处理占位符，统一再替换一次 `{name}`，避免界面出现原文
+        text = text.split(`{${k}}`).join(String(v));
+      }
+    }
+    return text;
+  };
 }

@@ -15,10 +15,10 @@
  *（@deepseek-ai/dsh-client-runtime/client 等）和 react——它们不会被打包。
  */
 import type { ReactNode } from "react";
-import { PromptLibraryButton } from "./components/PromptLibraryButton.js";
-import { AIPolishButton } from "./components/AIPolishButton.js";
-import { SettingsSection } from "./components/SettingsSection.js";
-import { SettingsDataSection } from "./components/SettingsDataSection.js";
+import { PromptLibraryButton } from "./components/chat/PromptLibraryButton.js";
+import { AIPolishButton } from "./components/chat/AIPolishButton.js";
+import { SettingsSection } from "./components/settings/SettingsSection.js";
+import { SettingsDataSection } from "./components/settings/SettingsDataSection.js";
 import { en, NS, zh } from "./i18n/i18n.js";
 import { startDataChangedSubscription } from "./services/data-sync.js";
 import {

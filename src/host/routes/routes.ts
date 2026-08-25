@@ -13,10 +13,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { WebRoute } from "@deepseek-ai/dsh-host-webserver";
 import type { ApiResponse, PluginSettings, Prompt, PromptInput, PromptPatch } from "../../types.js";
-import { generateIntro, listAiSelectables, polishPromptBody } from "../services/ai.js";
-import { generateSkillsFromPrompts } from "../services/skills.js";
+import { generateIntro, listAiSelectables, polishPromptBody } from "../services/ai/ai.js";
+import { generateSkillsFromPrompts } from "../services/ai/skills.js";
 import {
   autoLearn,
+  computeLibraryStats,
   createPrompt,
   createTag,
   deletePrompt,
@@ -27,6 +28,7 @@ import {
   getSettings,
   importPrompts,
   listPrompts,
+  listStatsSnapshots,
   listTags,
   listTrash,
   recordUsage,
@@ -34,10 +36,10 @@ import {
   restorePrompts,
   updatePrompt,
   updateSettings,
-} from "../services/store.js";
-import { checkUpdate, upgradePlugin } from "../services/update.js";
-import { getActivity } from "../services/activity.js";
-import { getAnnouncement } from "../services/announcement.js";
+} from "../services/data/store.js";
+import { checkUpdate, upgradePlugin } from "../services/update/update.js";
+import { getActivity } from "../services/assistant/activity.js";
+import { getAnnouncement } from "../services/update/announcement.js";
 
 const PREFIX = "/api/prompt-library";
 
@@ -361,6 +363,14 @@ export function makePromptRoutes(): WebRoute[] {
         return json(res, 200, { ok: true, data });
       }
 
+      // GET /stats — 词库统计（供统计可视化面板展示）
+      if (method === "GET" && tail === "/stats") {
+        const [stats, snapshots] = await Promise.all([
+          computeLibraryStats(),
+          listStatsSnapshots(12),
+        ]);
+        return json(res, 200, { ok: true, data: { stats, snapshots } });
+      }
       return json(res, 404, { ok: false, error: `no route ${method} ${tail}` });
     } catch (err) {
       // 错误详情（含本地路径/堆栈）仅记录日志，不原样返回给客户端，避免信息泄露

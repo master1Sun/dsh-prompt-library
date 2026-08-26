@@ -14,7 +14,9 @@ import { readFile, rm, writeFile } from "node:fs/promises";
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
+// 惰性加载 node:sqlite（屏蔽实验特性警告），DatabaseSync 仅作类型使用
+import { createDatabase } from "../../utils/node-sqlite.js";
+import type { DatabaseSync } from "node:sqlite";
 import { load, dump } from "js-yaml";
 import type { PluginSettings, Prompt, TrashItem } from "../../../types.js";
 import { clampTitle, DEFAULT_SETTINGS, TITLE_MAX_LEN } from "../../../types.js";
@@ -41,7 +43,7 @@ function getDb(): DatabaseSync {
   // 因此延后到首次真实访问数据时进行。
   const path = dbPath();
   mkdirSync(dirname(path), { recursive: true });
-  const next = new DatabaseSync(path);
+  const next = createDatabase(path);
   // WAL 提升并发读写健壮性；busy_timeout 让短时锁等待自动重试而非立刻报错
   next.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
   next.exec(`
@@ -1458,6 +1460,47 @@ export async function computeLibraryStats(): Promise<LibraryStats> {
       aiRefinedIn7,
       autoLearnedCount,
     });
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+// ── 使用热力图（usage_log 按本地时区聚合）────────────────────────────────
+
+/** 热力图一个单元格：本地时区星期（0=周日）+ 小时（0-23）+ 次数。 */
+export interface HeatmapCell {
+  weekday: number;
+  hour: number;
+  count: number;
+}
+
+/**
+ * 计算使用热力图：把近期 usage_log 的每次使用按「本地时区 星期 × 小时」折叠计数。
+ * 返回稀疏单元（只含有过使用的格子），由前端补齐 7×24 网格。
+ *
+ * @param days 统计窗口（毫秒时间戳差），默认近 90 天。
+ */
+export async function computeHeatmap(days = 90): Promise<HeatmapCell[]> {
+  try {
+    const cur = getDb();
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+    const rows = (cur
+      .prepare("SELECT usedAt FROM usage_log WHERE usedAt > ?")
+      .all(cutoff) as unknown) as Array<{ usedAt: number }>;
+    const counts = new Map<string, number>();
+    for (const r of rows) {
+      if (!r.usedAt || r.usedAt <= 0) continue;
+      const d = new Date(r.usedAt);
+      const key = `${d.getDay()}:${d.getHours()}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    const cells: HeatmapCell[] = [];
+    for (const [key, count] of counts) {
+      const [weekday, hour] = key.split(":").map((n) => Number(n));
+      cells.push({ weekday, hour, count });
+    }
+    cells.sort((a, b) => a.weekday - b.weekday || a.hour - b.hour);
+    return Promise.resolve(cells);
   } catch (e) {
     return Promise.reject(e);
   }

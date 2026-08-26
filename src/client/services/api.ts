@@ -480,10 +480,18 @@ export interface StatsSnapshot {
   createdAt: number;
 }
 
-/** 统计接口返回：当前实时统计 + 历史快照序列（时间正序，供趋势图）。 */
+/** 使用热力图一个单元：本地时区星期（0=周日）+ 小时（0-23）+ 次数。 */
+export interface HeatmapCell {
+  weekday: number;
+  hour: number;
+  count: number;
+}
+
+/** 统计接口返回：当前实时统计 + 历史快照序列（时间正序，供趋势图）+ 使用热力图。 */
 export interface PromptStatsData {
   stats: LibraryStats;
   snapshots: StatsSnapshot[];
+  heatmap: HeatmapCell[];
 }
 
 /** 获取词库统计（当前统计 + 近 12 周快照）。 */

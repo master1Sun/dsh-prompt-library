@@ -23,6 +23,7 @@ import {
 } from "../services/ai/skills.js";
 import {
   autoLearn,
+  computeHeatmap,
   computeLibraryStats,
   computeInactiveDays,
   computeStreak,
@@ -535,11 +536,12 @@ export function makePromptRoutes(): WebRoute[] {
 
       // GET /stats — 词库统计（供统计可视化面板展示）
       if (method === "GET" && tail === "/stats") {
-        const [stats, snapshots] = await Promise.all([
+        const [stats, snapshots, heatmap] = await Promise.all([
           computeLibraryStats(),
           listStatsSnapshots(12),
+          computeHeatmap(),
         ]);
-        return json(res, 200, { ok: true, data: { stats, snapshots } });
+        return json(res, 200, { ok: true, data: { stats, snapshots, heatmap } });
       }
 
       // GET /backups — 列出自动备份目录中的备份文件（按时间倒序）

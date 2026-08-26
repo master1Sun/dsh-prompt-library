@@ -18,6 +18,7 @@ import { DEFAULT_SETTINGS } from "../../../types.js";
 import {
   applyUpdate,
   getAiSelectables,
+  getAssistantStatus,
   getSettings,
   getStats,
   getUpdate,
@@ -29,6 +30,7 @@ import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { plBtn } from "../../utils/button-style.js";
 import { type PLTranslate, usePLT } from "../../i18n/i18n.js";
 import { PLUGIN_VERSION } from "../../version.js";
+import { BackupModule } from "./modules/BackupModule.js";
 
 const MONO =
   '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "SimHei", "黑体", sans-serif';
@@ -396,7 +398,6 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
   const [openPanel, setOpenPanel] = useState(false);
   const [openDisplay, setOpenDisplay] = useState(false);
   const [openUpdate, setOpenUpdate] = useState(false);
-  const [openLab, setOpenLab] = useState(false);
   // 更新提醒状态：updateInfo 为 null 表示尚未检查/检查失败
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [checking, setChecking] = useState(false);
@@ -405,6 +406,8 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 自动学习统计：已学习条数 + 近 7 天 AI 完善次数（设置面板展示用）
   const [learnStats, setLearnStats] = useState<{ autoLearnedCount: number; aiRefinedIn7: number } | null>(null);
+  // 词库助手开关是否已解锁：等级满级（成就最高档）后解锁，可自由开启/关闭；未满级强制常驻
+  const [assistantMaxed, setAssistantMaxed] = useState(false);
 
   useEffect(() => {
     getSettings()
@@ -427,6 +430,13 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
         }),
       )
       .catch(() => setLearnStats(null));
+  }, []);
+
+  // 拉取游戏化快照，判断词库助手开关是否满级解锁（next === 0 表示已满级）
+  useEffect(() => {
+    getAssistantStatus()
+      .then((s) => setAssistantMaxed((s.level?.next ?? 1) === 0))
+      .catch(() => setAssistantMaxed(false));
   }, []);
 
   // 保存设置到后台并通知其他组件
@@ -697,14 +707,18 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
         open={openDisplay}
         onToggle={() => setOpenDisplay((v) => !v)}
       >
-        {/* 词库助手显隐（主开关；关闭时子项仅灰显，不改动用户保存的值，重新打开时恢复） */}
+        {/* 词库助手显隐（主开关）：默认常驻锁定为开启并置灰；满级成就解锁后可自由开关，
+             关闭后不再显示词库助手与其气泡；主开关关闭时子项一并置灰（仅灰显，不改动保存值），词库助手显示时始终可配置 */}
         <ToggleRow
           label={T("pl.set.assistant")}
-          desc={T("pl.set.assistantDesc")}
-          checked={draft.assistantEnabled}
+          desc={`${T("pl.set.assistantDesc")} · ${
+            assistantMaxed ? T("pl.set.assistantUnlocked") : T("pl.set.assistantUnlock")
+          }`}
+          checked={assistantMaxed ? draft.assistantEnabled : true}
+          disabled={!assistantMaxed}
           onChange={(v) => updateAndSave({ assistantEnabled: v })}
         />
-        {/* 词库助手子项：通过缩进呈现父子层级，不额外绘制连接线 */}
+        {/* 词库助手子项：主开关关闭（满级解锁态）时一并置灰，词库助手显示时始终可配置；通过缩进呈现父子层级 */}
         <div
           style={{
             marginLeft: 22,
@@ -712,12 +726,29 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             flexDirection: "column",
           }}
         >
+          {/* 助手形象：经典助手 / 哈士奇 / 鲸鱼款；仅当词库助手显示时可配置 */}
+          <SelectRow
+            label={T("pl.set.character")}
+            desc={T("pl.set.characterDesc")}
+            value={draft.assistantCharacter}
+            disabled={assistantMaxed && !draft.assistantEnabled}
+            onChange={(v) =>
+              updateAndSave({
+                assistantCharacter: v === "whale" ? "whale" : v === "husky" ? "husky" : "classic",
+              })
+            }
+            options={[
+              { value: "classic", label: T("pl.set.characterClassic") },
+              { value: "husky", label: T("pl.set.characterHusky") },
+              { value: "whale", label: T("pl.set.characterWhale") },
+            ]}
+          />
           {/* 公告控制：仅当词库助手显示时可开关，默认开启；关闭后词库助手右键菜单不显示「公告」 */}
           <ToggleRow
             label={T("pl.set.announcement")}
             desc={T("pl.set.announcementDesc")}
             checked={draft.announcementEnabled}
-            disabled={!draft.assistantEnabled}
+            disabled={assistantMaxed && !draft.assistantEnabled}
             onChange={(v) => updateAndSave({ announcementEnabled: v })}
           />
           {/* 工具面板：仅当词库助手显示时可开关；关闭词库助手仅灰显，不改动真实保存值 */}
@@ -725,15 +756,39 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             label={T("pl.set.rightPanel")}
             desc={T("pl.set.rightPanelDesc")}
             checked={draft.rightPanelEnabled}
-            disabled={!draft.assistantEnabled}
+            disabled={assistantMaxed && !draft.assistantEnabled}
             onChange={(v) => updateAndSave({ rightPanelEnabled: v })}
+          />
+          {/* 人格管理：词库助手右键菜单「人格管理」入口；仅当词库助手显示时可开关 */}
+          <ToggleRow
+            label={T("pl.set.persona")}
+            desc={T("pl.set.personaDesc")}
+            checked={draft.personaEnabled}
+            disabled={assistantMaxed && !draft.assistantEnabled}
+            onChange={(v) => updateAndSave({ personaEnabled: v })}
+          />
+          {/* 看板：词库助手右键菜单「看板」入口（统计可视化）；仅当词库助手显示时可开关 */}
+          <ToggleRow
+            label={T("pl.set.dashboard")}
+            desc={T("pl.set.dashboardDesc")}
+            checked={draft.dashboardEnabled}
+            disabled={assistantMaxed && !draft.assistantEnabled}
+            onChange={(v) => updateAndSave({ dashboardEnabled: v })}
+          />
+          {/* 数据管理：词库助手右键菜单「数据管理」入口；仅当词库助手显示时可开关 */}
+          <ToggleRow
+            label={T("pl.set.dataManagement")}
+            desc={T("pl.set.dataManagementDesc")}
+            checked={draft.dataManagementEnabled}
+            disabled={assistantMaxed && !draft.assistantEnabled}
+            onChange={(v) => updateAndSave({ dataManagementEnabled: v })}
           />
           {/* 等级助手：控制小助手等级徽章与右键菜单「成就」入口；仅当词库助手显示时可开关 */}
           <ToggleRow
             label={T("pl.set.levelAssistant")}
             desc={T("pl.set.levelAssistantDesc")}
             checked={draft.levelEnabled}
-            disabled={!draft.assistantEnabled}
+            disabled={assistantMaxed && !draft.assistantEnabled}
             onChange={(v) => updateAndSave({ levelEnabled: v })}
           />
           {/* 我的等级公告：新成就解锁时由小助手气泡播报；仅当词库助手显示时可开关 */}
@@ -741,7 +796,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             label={T("pl.set.levelAnnouncement")}
             desc={T("pl.set.levelAnnouncementDesc")}
             checked={draft.levelAnnouncementEnabled}
-            disabled={!draft.assistantEnabled}
+            disabled={assistantMaxed && !draft.assistantEnabled}
             onChange={(v) => updateAndSave({ levelAnnouncementEnabled: v })}
           />
         </div>
@@ -751,12 +806,32 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           checked={draft.showComposerButton}
           onChange={(v) => updateAndSave({ showComposerButton: v })}
         />
+        {/* 词库按钮纯图标 / 图标+文字 切换（仅在显示词库按钮时可配置）；缩进从属于「聊天框显示词库按钮」 */}
+        <div style={{ paddingLeft: 14, borderLeft: `1px solid ${TONE.border}`, marginLeft: 6 }}>
+          <ToggleRow
+            label={T("pl.set.composerBtnIconOnly")}
+            desc={T("pl.set.composerBtnIconOnlyDesc")}
+            checked={draft.composerButtonIconOnly}
+            disabled={!draft.showComposerButton}
+            onChange={(v) => updateAndSave({ composerButtonIconOnly: v })}
+          />
+        </div>
         <ToggleRow
           label={T("pl.set.showPolishBtn")}
           desc={T("pl.set.showPolishBtnDesc")}
           checked={draft.showAIPolishButton}
           onChange={(v) => updateAndSave({ showAIPolishButton: v })}
         />
+        {/* AI 优化按钮纯图标 / 图标+文字 切换（仅在显示 AI 优化按钮时可配置）；缩进从属于「聊天框显示 AI 优化按钮」 */}
+        <div style={{ paddingLeft: 14, borderLeft: `1px solid ${TONE.border}`, marginLeft: 6 }}>
+          <ToggleRow
+            label={T("pl.set.polishBtnIconOnly")}
+            desc={T("pl.set.polishBtnIconOnlyDesc")}
+            checked={draft.aiPolishButtonIconOnly}
+            disabled={!draft.showAIPolishButton}
+            onChange={(v) => updateAndSave({ aiPolishButtonIconOnly: v })}
+          />
+        </div>
         <ToggleRow
           label={T("pl.set.tildaTrigger")}
           desc={T("pl.set.tildaTriggerDesc")}
@@ -783,22 +858,10 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
         />
       </ModuleCard>
 
-      {/* 分类模块四：实验室 */}
-      <ModuleCard
-        title={T("pl.setModuleLab")}
-        desc={T("pl.setModuleLabDesc")}
-        open={openLab}
-        onToggle={() => setOpenLab((v) => !v)}
-      >
-        <ToggleRow
-          label={T("pl.set.chatCharacter")}
-          desc={T("pl.set.chatCharacterDesc")}
-          checked={draft.applyCharacterToChat}
-          onChange={(v) => updateAndSave({ applyCharacterToChat: v })}
-        />
-      </ModuleCard>
+      {/* 备份管理（独立卡片）：从「词库管理」面板迁移至此，集中管理自动备份设置/手动备份/备份文件恢复 */}
+      <BackupModule t={t} />
 
-      {/* 分类模块五：关于与更新 */}
+      {/* 分类模块四：关于与更新 */}
       <ModuleCard
         title={T("pl.setModuleAboutUpdate")}
         desc={T("pl.setModuleAboutUpdateDesc")}

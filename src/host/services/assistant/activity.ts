@@ -1,9 +1,9 @@
 /**
- * 词库助手「活动状态机」— 把官方 DSH 会话活动投影成可驱动小人动画的 phase。
+ * 词库助手「活动状态机」— 把官方 DSH 会话活动投影成可驱动助手动画的 phase。
  *
  * 监听 `session/event` 官方事件，投影为 thinking / waiting / tool / review /
  * done / failed / idle 七个阶段，客户端轮询 `GET /api/prompt-library/activity`
- * 拿到当前 phase 后驱动蓝脸小人动画。
+ * 拿到当前 phase 后驱动蓝脸助手动画。
  *
  * 同时按最近聊天内容粗分类「聊天主题风格」（code/writing/translate/qa/general），
  * 从 host 端文案表（见 phrases.ts）挑选与主题、阶段、语言匹配的一条文案随快照返回，
@@ -12,7 +12,13 @@
  * 本模块是纯函数 + 单例内存状态；模块级单例由宿主 apply 时注册监听更新。
  */
 import type { Context } from "@deepseek-ai/cordis";
-import { classifyTopic, pickPhaseCopy, type CopyLang, type TopicStyle } from "./phrases.js";
+import {
+  classifyTopic,
+  pickPhaseCopy,
+  type CharacterKey,
+  type CopyLang,
+  type TopicStyle,
+} from "./phrases.js";
 
 /** 词库助手认识的七个活动阶段。 */
 export type ActivityPhase =
@@ -27,7 +33,7 @@ export type ActivityPhase =
 /** 暴露给客户端的活动快照。 */
 export interface ActivitySnapshot {
   phase: ActivityPhase;
-  /** 是否有正在进行的会话；无会话时小人应回到 idle。 */
+  /** 是否有正在进行的会话；无会话时助手应回到 idle。 */
   sessionActive: boolean;
   /** 当前聊天主题风格（code/writing/translate/qa/general）。 */
   topic: TopicStyle;
@@ -98,7 +104,7 @@ class ActivityMachine {
   }
 
   /** 渲染当前决策：done/failed 的展示窗口到期后回落 idle，并附上匹配主题+阶段的文案。 */
-  render(lang: CopyLang): ActivitySnapshot {
+  render(lang: CopyLang, char: CharacterKey = "classic"): ActivitySnapshot {
     const nowMs = this.now();
     const doneSettled =
       this.phase === "done" &&
@@ -113,7 +119,7 @@ class ActivityMachine {
       phase,
       sessionActive: this.sessionActive,
       topic: this.topic,
-      text: pickPhaseCopy(lang, phase, this.topic, this.counters[phase] ?? 0),
+      text: pickPhaseCopy(lang, phase, this.topic, this.counters[phase] ?? 0, char),
     };
   }
 }
@@ -223,17 +229,17 @@ let displayMachine: ActivityMachine | undefined;
 let displayActive = false;
 
 /** 读取当前活动快照（供路由返回给客户端；lang 决定文案语言）。 */
-export function getActivity(lang: CopyLang = "zh"): ActivitySnapshot {
+export function getActivity(lang: CopyLang = "zh", char: CharacterKey = "classic"): ActivitySnapshot {
   if (displayMachine === undefined) {
     return {
       phase: "idle",
       sessionActive: displayActive,
       topic: "general",
-      text: pickPhaseCopy(lang, "idle", "general", 0),
+      text: pickPhaseCopy(lang, "idle", "general", 0, char),
     };
   }
   // 无活跃会话时强制 idle；有会话则按机器决策返回。
-  return displayActive ? displayMachine.render(lang) : { phase: "idle", sessionActive: false, topic: "general", text: pickPhaseCopy(lang, "idle", "general", 0) };
+  return displayActive ? displayMachine.render(lang, char) : { phase: "idle", sessionActive: false, topic: "general", text: pickPhaseCopy(lang, "idle", "general", 0, char) };
 }
 
 /**

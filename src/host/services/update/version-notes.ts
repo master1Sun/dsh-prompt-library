@@ -33,23 +33,31 @@ export interface VersionNote {
  */
 export const VERSION_NOTES: VersionNote[] = [
   {
-    version: "0.8.16",
+    version: "0.9.0",
     date: "2026-08-26",
     zh: {
-      title: "词库助手等级 · 换装 · 心情",
+      title: "哈士奇形象 · 满级解锁 · 导入归零 · 人格留白",
       items: [
+        "新增「哈士奇」助手形象，灰白毛色、冰蓝眼睛，与米兔形象可随时切换。",
+        "成就满级后解锁「显示词库助手」开关，可自由开启/关闭；未满级前开关置灰，助手强制常驻。",
+        "导入的数据使用次数归零，按「新数据」处理；备份恢复仍保留原使用记录。",
+        "新建人格默认只有一行标题，正文留空由你自己填写。",
         "等级回落：30 天未使用自动降一级，等级不再只升不降。",
-        "成就升级：成就弹窗改为等级圆环 + 奖牌墙，不同等级小人配色与星章不同。",
-        "小人换装：按聊天主题切换职业形象（代码-工程师帽 / 写作-贝雷帽 / 翻译-领带 / 问答-眼镜）。",
-        "心情系统：小人记录每日会话成败，成功开心蹦跳、失败垂头丧气，情绪同步到动作与气泡。",
+        "成就升级：成就弹窗改为等级圆环 + 奖牌墙，不同等级助手配色与星章不同。",
+        "助手换装：按聊天主题切换职业形象（代码-工程师帽 / 写作-贝雷帽 / 翻译-领带 / 问答-眼镜）。",
+        "心情系统：助手记录每日会话成败，成功开心蹦跳、失败垂头丧气，情绪同步到动作与气泡。",
         "设置新增「等级助手」「我的等级公告」开关，可分别控制等级徽章、成就入口与解锁播报。",
         "词库助手左键不再联动面板，开合统一走右键菜单；右键菜单按开关显隐。",
         "修复公告弹窗无法打开的问题。",
       ],
     },
     en: {
-      title: "Assistant level · Costumes · Mood",
+      title: "Husky look · Max-level unlock · Fresh ledger · Blank personae",
       items: [
+        "New \"Husky\" assistant look with grey fur and ice-blue eyes, switchable with the classic rabbit anytime.",
+        "Reaching the max level unlocks the \"Show assistant\" toggle; below max it stays disabled and the assistant is always shown.",
+        "Imported prompts begin at zero usage and are treated as new data; backup restores keep their original usage.",
+        "A new persona opens with a single title line; the body is left blank for you to fill in.",
         "Level decay: unused for 30 days drops one level; levels can now decrease.",
         "Achievements upgrade: dialog reworked into a level ring + medal wall; each level shows distinct colors and star badges.",
         "Costumes: the assistant switches outfits by chat topic (engineer hat for code / beret for writing / tie for translation / glasses for Q&A).",
@@ -169,7 +177,7 @@ export const VERSION_NOTES: VersionNote[] = [
         "公告动态配置：双击词库助手即可查看公告，使用手册与通告内容随版本内置并支持多语言切换。",
         "自动更新：新增自动更新开关与更新提醒，版本检查以 npm 为主源、GitHub Release 兜底，发现新版本后可按配置后台静默安装。",
         "模板变量优化：插入 {{变量}} 时聚焦输入框，预览区自动滚动定位到对应位置；未填变量会拦截插入并提示，避免遗漏。",
-        "词库助手：新增双击事件，双击小人弹出公告弹窗；助手气泡提示与活动状态动画同步优化。",
+        "词库助手：新增双击事件，双击助手弹出公告弹窗；助手气泡提示与活动状态动画同步优化。",
         "公告显示控制：新增「显示公告」开关，关闭后双击词库助手不再弹出公告，默认开启，仅在显示词库助手时可配置。",
         "使用手册本地化：公告中的使用手册支持 i18n 多语言切换，跟随系统语言自动变更。",
       ],

@@ -9,6 +9,7 @@ import { markRecent } from "../../utils/recent-created.js";
 import { notifyDataChanged, useDataChanged } from "../../services/data-sync.js";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { plBtn } from "../../utils/button-style.js";
+import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../../utils/dialog-style.js";
 import { TagInput } from "../common/TagInput.js";
 import {
   applyVariables,
@@ -433,38 +434,22 @@ export function SelectionAddPrompt(props: Props): ReactNode {
           role="dialog"
           aria-modal="true"
           aria-label={T("pl.addToLibrary")}
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 2147483647,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: "rgba(0,0,0,0.35)",
-          }}
+          className={PL_DIALOG_OVERLAY}
         >
+          <style>{PL_DIALOG_CSS}</style>
           <div
             onClick={(e) => e.stopPropagation()}
+            className={PL_DIALOG}
             style={{
               width: 520,
               maxWidth: "calc(100vw - 40px)",
               maxHeight: "min(600px, calc(100vh - 40px))",
-              boxSizing: "border-box",
-              display: "flex",
-              flexDirection: "column",
               gap: 9,
-              background: TONE.panel,
-              border: `1px solid ${TONE.border}`,
-              borderRadius: 12,
-              boxShadow: "none",
-              padding: "18px 20px",
-              color: TONE.text,
-              fontFamily: MONO,
             }}
           >
             <strong style={{ fontSize: 15, fontWeight: 520, paddingBottom: 6, flexShrink: 0 }}>{T("pl.addToLibrary")}</strong>
             {/* 表单内容区：超出最大高度时独立滚动，按钮区固定在弹窗底部 */}
-            <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column", gap: 9 }}>
+            <div style={{ flex: 1, minHeight: 0, overflow: "auto", paddingRight: 10, display: "flex", flexDirection: "column", gap: 9 }}>
               <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted, flexShrink: 0 }}>
                 {T("pl.titleField")}
                 <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} style={inputStyle} />
@@ -517,35 +502,19 @@ export function SelectionAddPrompt(props: Props): ReactNode {
           role="dialog"
           aria-modal="true"
           aria-label={T("pl.applyTemplate")}
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 2147483647,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: "rgba(0,0,0,0.35)",
-          }}
+          className={PL_DIALOG_OVERLAY}
         >
+          <style>{PL_DIALOG_CSS}</style>
           <div
             onClick={(e) => e.stopPropagation()}
+            className={PL_DIALOG}
             style={{
               width: 480,
               maxWidth: "calc(100vw - 40px)",
               // 固定宽高（480 × 560）：仅当页面窗口小于固定尺寸时才自适应收缩，
               // 内容多时列表在内部滚动，不随内容撑高
               height: "min(560px, calc(100vh - 40px))",
-              boxSizing: "border-box",
-              display: "flex",
-              flexDirection: "column",
               gap: 10,
-              background: TONE.panel,
-              border: `1px solid ${TONE.border}`,
-              borderRadius: 12,
-              boxShadow: "none",
-              padding: "18px 20px",
-              color: TONE.text,
-              fontFamily: MONO,
             }}
           >
             <strong style={{ fontSize: 15, fontWeight: 520, paddingBottom: 2, flexShrink: 0 }}>{T("pl.applyTemplate")}</strong>
@@ -598,7 +567,7 @@ export function SelectionAddPrompt(props: Props): ReactNode {
               </div>
             )}
             {/* 模板列表：超出最大高度时独立滚动 */}
-            <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ flex: 1, minHeight: 0, overflow: "auto", paddingRight: 10, display: "flex", flexDirection: "column", gap: 6 }}>
               {templates.length === 0 && (
                 <div style={{ padding: "18px 12px", color: TONE.muted, fontSize: 13, textAlign: "center" }}>
                   {T("pl.applyTemplateEmpty")}

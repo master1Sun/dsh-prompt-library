@@ -238,7 +238,7 @@ function TrendChart({ snapshots, T }: { snapshots: StatsSnapshot[]; T: PLT }): R
   );
 }
 
-/** 统计页「总览」：只展示核心重点与趋势概览，详细列表放在「明细」标签。 */
+/** 统计页「总览」：概览重点卡片 + 近 7 天分析，详细列表放在「明细」标签。 */
 export function StatsContent({
   stats,
   snapshots,
@@ -249,7 +249,10 @@ export function StatsContent({
   T: PLT;
 }): ReactNode {
   useThemeSync(); // 订阅宿主主题变化，切换白天/黑夜时刷新主题色
+  const TONE = getTone();
   const usedRate = stats.total > 0 ? Math.round((stats.usedCount / stats.total) * 100) : 0;
+  // 最近一次每周统计快照（每 7 天自动统计一次），用于「近 7 天分析」
+  const lastSnap = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -267,42 +270,6 @@ export function StatsContent({
         <StatCard label={T("pl.stats.used7")} value={stats.usedIn7Days} />
       </div>
 
-      {/* 每周趋势（总览的核心可视化） */}
-      <Section title={T("pl.stats.trend")}>
-        <TrendChart snapshots={snapshots} T={T} />
-      </Section>
-    </div>
-  );
-}
-
-/** 统计页「明细」：近 7 天分析、最常/最近使用、沉睡提示词等详细列表。 */
-function StatsDetails({
-  stats,
-  snapshots,
-  T,
-}: {
-  stats: LibraryStats;
-  snapshots: StatsSnapshot[];
-  T: PLT;
-}): ReactNode {
-  useThemeSync();
-  const TONE = getTone();
-  const topUsedRows = useMemo(
-    () =>
-      stats.topUsed.map((p) => ({
-        key: p.title,
-        label: p.title,
-        value: p.usageCount,
-        sub: formatAgo(p.lastUsedAt, T),
-      })),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [stats.topUsed],
-  )
-  // 最近一次每周统计快照（每 7 天自动统计一次），用于「近 7 天分析」
-  const lastSnap = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {/* 近 7 天分析（最近一次每周统计快照，每 7 天自动统计一次） */}
       <Section title={T("pl.stats.analysis")}>
         {!lastSnap ? (
@@ -360,6 +327,40 @@ function StatsDetails({
             )}
           </div>
         )}
+      </Section>
+    </div>
+  );
+}
+
+/** 统计页「明细」：每周趋势、最常/最近使用、沉睡提示词等详细列表。 */
+function StatsDetails({
+  stats,
+  snapshots,
+  T,
+}: {
+  stats: LibraryStats;
+  snapshots: StatsSnapshot[];
+  T: PLT;
+}): ReactNode {
+  useThemeSync();
+  const TONE = getTone();
+  const topUsedRows = useMemo(
+    () =>
+      stats.topUsed.map((p) => ({
+        key: p.title,
+        label: p.title,
+        value: p.usageCount,
+        sub: formatAgo(p.lastUsedAt, T),
+      })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [stats.topUsed],
+  )
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* 每周趋势（明细最上方） */}
+      <Section title={T("pl.stats.trend")}>
+        <TrendChart snapshots={snapshots} T={T} />
       </Section>
 
       {/* 最常使用 */}
@@ -641,27 +642,21 @@ export function StatsPanel({ t, onBack }: { t?: PLT; onBack?: () => void }): Rea
     <div
       style={{
         flex: 1,
-        overflow: "auto",
-        padding: "12px 14px 18px",
+        minHeight: 0,
         display: "flex",
         flexDirection: "column",
-        gap: 12,
         fontFamily: MONO,
       }}
     >
-      {/* 顶部吸顶工具条：返回按钮 + 视图切换 Tab 一起固定，内容下滑时浮在顶部 */}
+      {/* 顶部固定工具条：返回按钮 + 视图切换 Tab，固定在头部不随内容滚动 */}
       {(onBack || data) && (
         <div
           style={{
-            position: "sticky",
-            top: 0,
-            zIndex: 10,
-            background: TONE.panel,
-            margin: "0 -14px",
-            padding: "0 14px",
+            flexShrink: 0,
             display: "flex",
             flexDirection: "column",
             gap: 12,
+            padding: "12px 14px 0",
           }}
         >
           {onBack && (
@@ -694,6 +689,19 @@ export function StatsPanel({ t, onBack }: { t?: PLT; onBack?: () => void }): Rea
           {data && <StatsTabBar active={tab} onChange={setTab} T={T} />}
         </div>
       )}
+      {/* 独立滚动内容区：过长时出现滚动条，头部保持固定 */}
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: "auto",
+          overflowX: "hidden",
+          padding: "12px 10px 18px",
+          display: "flex",
+          flexDirection: "column",
+          gap: 12,
+        }}
+      >
       {error && (
         <div
           style={{
@@ -724,6 +732,7 @@ export function StatsPanel({ t, onBack }: { t?: PLT; onBack?: () => void }): Rea
           {tab === "details" && <StatsDetails stats={data.stats} snapshots={data.snapshots} T={T} />}
         </>
       )}
+      </div>
     </div>
   );
 }

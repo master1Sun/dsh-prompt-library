@@ -713,7 +713,7 @@ export async function commentOnStats(
 
 /**
  * 依据指定语言调用 AI 生成「词库」的功能简介（5 句，一行一句）。
- * 供浮动小人悬停气泡轮询展示；AI 不可用或失败时返回 undefined，由调用方回退到内置简介。
+ * 供浮动助手悬停气泡轮询展示；AI 不可用或失败时返回 undefined，由调用方回退到内置简介。
  */
 export async function generateIntro(
   lang: "zh" | "en",

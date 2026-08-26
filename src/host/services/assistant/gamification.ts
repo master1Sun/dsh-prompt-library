@@ -32,12 +32,50 @@ export interface LevelInfo {
   inactiveDays: number;
 }
 
-/** 单条成就（含解锁状态，供前端播报）。 */
+/** 成就稀有度：影响奖牌配色与成就分值。 */
+export type Rarity = "common" | "rare" | "epic" | "legendary";
+
+/** 稀有度 → 成就分值（解锁后计入总成就点）。 */
+export const RARITY_POINTS: Record<Rarity, number> = {
+  common: 1,
+  rare: 3,
+  epic: 5,
+  legendary: 10,
+};
+
+/** 成就成长称号档位：按已解锁比例命名（用于头部排行展示）。 */
+export type AchievementRank = "wanderer" | "explorer" | "collector" | "star" | "legend";
+
+/** 单条成就（含解锁状态、稀有度、进度与分值，供前端播报与展示）。 */
 export interface AchievementInfo {
   id: string;
   title: string;
   desc: string;
   achieved: boolean;
+  /** 稀有度。 */
+  rarity: Rarity;
+  /** 解锁可得分值。 */
+  points: number;
+  /** 当前进度值。 */
+  progress: number;
+  /** 达成目标值。 */
+  target: number;
+}
+
+/** 成就汇总（头部排行：称号 + 成就点 + 达成数）。 */
+export interface AchievementSummary {
+  /** 成长称号（按语言）。 */
+  rank: string;
+  /** 成长称号档位标识。 */
+  rankKey: AchievementRank;
+  /** 已解锁成就数。 */
+  unlocked: number;
+  /** 成就总数。 */
+  total: number;
+  /** 已获得成就点。 */
+  earnedPoints: number;
+  /** 成就点上限。 */
+  maxPoints: number;
 }
 
 /** 一条彩蛋文案。 */
@@ -50,6 +88,7 @@ export interface EasterEggInfo {
 export interface AssistantStatus {
   level: LevelInfo;
   achievements: AchievementInfo[];
+  achievementSummary: AchievementSummary;
   easterEgg: EasterEggInfo | null;
 }
 
@@ -104,100 +143,157 @@ export function computeLevel(totalUsage: number, lang: GamifyLang, inactiveDays 
 
 interface AchievementRule {
   id: string;
+  rarity: Rarity;
   zhTitle: string;
   enTitle: string;
   zhDesc: string;
   enDesc: string;
-  /** 是否已达成（基于统计快照 + 连续活跃天数）。 */
-  check: (s: LibraryStats, streak: number) => boolean;
+  /** 达成所需目标值。 */
+  target: number;
+  /** 当前进度（基于统计快照 + 连续活跃天数）。 */
+  progress: (s: LibraryStats, streak: number) => number;
 }
 
+/** 取一个不大于 target 的进度（避免进度条溢出）。 */
+const cap = (v: number, target: number): number => Math.min(v, target);
+
 const ACHIEVEMENT_RULES: AchievementRule[] = [
-  {
-    id: "first_use", zhTitle: "初出茅庐", enTitle: "First Steps",
+  // ── 使用里程碑 ──
+  { id: "first_use", rarity: "common", target: 1, zhTitle: "初出茅庐", enTitle: "First Steps",
     zhDesc: "累计使用 1 次提示词", enDesc: "Use a prompt for the first time",
-    check: (s) => s.totalUsage >= 1,
-  },
-  {
-    id: "use_10", zhTitle: "渐入佳境", enTitle: "Getting the Hang",
+    progress: (s) => cap(s.totalUsage, 1) },
+  { id: "use_10", rarity: "common", target: 10, zhTitle: "渐入佳境", enTitle: "Getting the Hang",
     zhDesc: "累计使用 10 次提示词", enDesc: "Use prompts 10 times in total",
-    check: (s) => s.totalUsage >= 10,
-  },
-  {
-    id: "use_50", zhTitle: "驾轻就熟", enTitle: "Skilled Hands",
+    progress: (s) => cap(s.totalUsage, 10) },
+  { id: "use_50", rarity: "rare", target: 50, zhTitle: "驾轻就熟", enTitle: "Skilled Hands",
     zhDesc: "累计使用 50 次提示词", enDesc: "Use prompts 50 times in total",
-    check: (s) => s.totalUsage >= 50,
-  },
-  {
-    id: "use_200", zhTitle: "炉火纯青", enTitle: "Masterful",
+    progress: (s) => cap(s.totalUsage, 50) },
+  { id: "use_200", rarity: "epic", target: 200, zhTitle: "炉火纯青", enTitle: "Masterful",
     zhDesc: "累计使用 200 次提示词", enDesc: "Use prompts 200 times in total",
-    check: (s) => s.totalUsage >= 200,
-  },
-  {
-    id: "use_1000", zhTitle: "登峰造极", enTitle: "Peak Performance",
+    progress: (s) => cap(s.totalUsage, 200) },
+  { id: "use_1000", rarity: "legendary", target: 1000, zhTitle: "登峰造极", enTitle: "Peak Performance",
     zhDesc: "累计使用 1000 次提示词", enDesc: "Use prompts 1000 times in total",
-    check: (s) => s.totalUsage >= 1000,
-  },
-  {
-    id: "collector_20", zhTitle: "小小藏书家", enTitle: "Mini Collector",
+    progress: (s) => cap(s.totalUsage, 1000) },
+  { id: "use_3000", rarity: "legendary", target: 3000, zhTitle: "万法归一", enTitle: "Prompts Beyond Measure",
+    zhDesc: "累计使用 3000 次提示词", enDesc: "Use prompts 3000 times in total",
+    progress: (s) => cap(s.totalUsage, 3000) },
+
+  // ── 词库收藏 ──
+  { id: "collector_20", rarity: "common", target: 20, zhTitle: "小小藏书家", enTitle: "Mini Collector",
     zhDesc: "词库收藏满 20 条提示词", enDesc: "Collect 20 prompts in the library",
-    check: (s) => s.total >= 20,
-  },
-  {
-    id: "collector_100", zhTitle: "词库收藏家", enTitle: "Grand Collector",
+    progress: (s) => cap(s.total, 20) },
+  { id: "collector_100", rarity: "rare", target: 100, zhTitle: "词库收藏家", enTitle: "Grand Collector",
     zhDesc: "词库收藏满 100 条提示词", enDesc: "Collect 100 prompts in the library",
-    check: (s) => s.total >= 100,
-  },
-  {
-    id: "ai_first", zhTitle: "AI 信徒", enTitle: "AI Believer",
+    progress: (s) => cap(s.total, 100) },
+  { id: "collector_300", rarity: "epic", target: 300, zhTitle: "藏书万卷", enTitle: "A Library's Shores",
+    zhDesc: "词库收藏满 300 条提示词", enDesc: "Collect 300 prompts in the library",
+    progress: (s) => cap(s.total, 300) },
+
+  // ── AI 完善 ──
+  { id: "ai_first", rarity: "common", target: 1, zhTitle: "AI 信徒", enTitle: "AI Believer",
     zhDesc: "首次用 AI 完善提示词", enDesc: "Polish a prompt with AI for the first time",
-    check: (s) => s.aiRefinedCount >= 1,
-  },
-  {
-    id: "ai_50", zhTitle: "AI 炼金术师", enTitle: "AI Alchemist",
+    progress: (s) => cap(s.aiRefinedCount, 1) },
+  { id: "ai_50", rarity: "rare", target: 50, zhTitle: "AI 炼金术师", enTitle: "AI Alchemist",
     zhDesc: "累计用 AI 完善 50 条提示词", enDesc: "Polish 50 prompts with AI in total",
-    check: (s) => s.aiRefinedCount >= 50,
-  },
-  {
-    id: "streak_7", zhTitle: "七日之约", enTitle: "A Week of Devotion",
+    progress: (s) => cap(s.aiRefinedCount, 50) },
+  { id: "ai_200", rarity: "epic", target: 200, zhTitle: "AI 点石成金", enTitle: "AI Grandmaster",
+    zhDesc: "累计用 AI 完善 200 条提示词", enDesc: "Polish 200 prompts with AI in total",
+    progress: (s) => cap(s.aiRefinedCount, 200) },
+  { id: "ai_cover", rarity: "rare", target: 30, zhTitle: "AI 得力干将", enTitle: "AI's Right Hand",
+    zhDesc: "AI 完善的词条占比达 30%", enDesc: "30% of your prompts polished by AI",
+    progress: (s) => cap(s.aiRefinedPct, 30) },
+
+  // ── 连续活跃 ──
+  { id: "streak_7", rarity: "common", target: 7, zhTitle: "七日之约", enTitle: "A Week of Devotion",
     zhDesc: "连续 7 天使用词库", enDesc: "Use the library 7 days in a row",
-    check: (_s, streak) => streak >= 7,
-  },
-  {
-    id: "streak_30", zhTitle: "月度劳模", enTitle: "Monthly Champ",
+    progress: (_s, streak) => cap(streak, 7) },
+  { id: "streak_30", rarity: "rare", target: 30, zhTitle: "月度劳模", enTitle: "Monthly Champ",
     zhDesc: "连续 30 天使用词库", enDesc: "Use the library 30 days in a row",
-    check: (_s, streak) => streak >= 30,
-  },
-  {
-    id: "streak_100", zhTitle: "忠实伙伴", enTitle: "Loyal Companion",
+    progress: (_s, streak) => cap(streak, 30) },
+  { id: "streak_100", rarity: "epic", target: 100, zhTitle: "忠实伙伴", enTitle: "Loyal Companion",
     zhDesc: "连续 100 天使用词库", enDesc: "Use the library 100 days in a row",
-    check: (_s, streak) => streak >= 100,
-  },
-  {
-    id: "active_7", zhTitle: "活力四射", enTitle: "Full of Energy",
+    progress: (_s, streak) => cap(streak, 100) },
+  { id: "streak_365", rarity: "legendary", target: 365, zhTitle: "全年无休", enTitle: "Year-round Companion",
+    zhDesc: "连续 365 天使用词库", enDesc: "Use the library 365 days in a row",
+    progress: (_s, streak) => cap(streak, 365) },
+
+  // ── 近期活跃 ──
+  { id: "active_7", rarity: "common", target: 5, zhTitle: "活力四射", enTitle: "Full of Energy",
     zhDesc: "近 7 天有 5 条提示词被使用", enDesc: "Use 5 different prompts within 7 days",
-    check: (s) => s.usedIn7Days >= 5,
-  },
-  {
-    id: "author_30", zhTitle: "高产作者", enTitle: "Prolific Author",
+    progress: (s) => cap(s.usedIn7Days, 5) },
+  { id: "active_30", rarity: "rare", target: 15, zhTitle: "四处开花", enTitle: "Widespread",
+    zhDesc: "近 30 天用过 15 条不同的提示词", enDesc: "Use 15 different prompts within 30 days",
+    progress: (s) => cap(s.usedIn30Days, 15) },
+
+  // ── 新增 / 自动学习 ──
+  { id: "author_30", rarity: "common", target: 10, zhTitle: "高产作者", enTitle: "Prolific Author",
     zhDesc: "近 30 天新增 10 条提示词", enDesc: "Add 10 prompts within 30 days",
-    check: (s) => s.addedIn30Days >= 10,
-  },
-  {
-    id: "learner_5", zhTitle: "学习达人", enTitle: "Eager Learner",
+    progress: (s) => cap(s.addedIn30Days, 10) },
+  { id: "learner_5", rarity: "common", target: 5, zhTitle: "学习达人", enTitle: "Eager Learner",
     zhDesc: "自动学习入库 5 条提示词", enDesc: "Auto-learn 5 prompts into the library",
-    check: (s) => s.autoLearnedCount >= 5,
-  },
+    progress: (s) => cap(s.autoLearnedCount, 5) },
+  { id: "learner_50", rarity: "rare", target: 50, zhTitle: "学富五车", enTitle: "Encyclopedic",
+    zhDesc: "自动学习入库 50 条提示词", enDesc: "Auto-learn 50 prompts into the library",
+    progress: (s) => cap(s.autoLearnedCount, 50) },
+  { id: "learner_200", rarity: "epic", target: 200, zhTitle: "满载而归", enTitle: "Fully Stocked",
+    zhDesc: "自动学习入库 200 条提示词", enDesc: "Auto-learn 200 prompts into the library",
+    progress: (s) => cap(s.autoLearnedCount, 200) },
+
+  // ── 标签 ──
+  { id: "tags_5", rarity: "common", target: 5, zhTitle: "标签初尝", enTitle: "Tag Starter",
+    zhDesc: "拥有 5 个不同标签", enDesc: "Keep 5 distinct tags",
+    progress: (s) => cap(s.tagStats.length, 5) },
+  { id: "tags_20", rarity: "epic", target: 20, zhTitle: "标签猎人", enTitle: "Tag Hunter",
+    zhDesc: "拥有 20 个不同标签", enDesc: "Keep 20 distinct tags",
+    progress: (s) => cap(s.tagStats.length, 20) },
+
+  // ── 忠诚 / 积累 ──
+  { id: "veteran_50", rarity: "rare", target: 50, zhTitle: "常青树", enTitle: "Evergreen",
+    zhDesc: "同一词条被使用 50 次", enDesc: "Use a single prompt 50 times",
+    progress: (s) => cap(s.topUsed[0]?.usageCount ?? 0, 50) },
+  { id: "word_10000", rarity: "epic", target: 10000, zhTitle: "藏经阁", enTitle: "Vault of Words",
+    zhDesc: "收藏词条累计 1 万字", enDesc: "Stockpile 10,000 characters of prompts",
+    progress: (s) => cap(s.totalBodyLength, 10000) },
 ];
 
-/** 计算全部成就的解锁状态。 */
+/** 计算全部成就的解锁状态（含稀有度、进度与分值）。 */
 export function computeAchievements(stats: LibraryStats, streak: number, lang: GamifyLang): AchievementInfo[] {
-  return ACHIEVEMENT_RULES.map((r) => ({
-    id: r.id,
-    title: lang === "en" ? r.enTitle : r.zhTitle,
-    desc: lang === "en" ? r.enDesc : r.zhDesc,
-    achieved: r.check(stats, streak),
-  }));
+  return ACHIEVEMENT_RULES.map((r) => {
+    const progress = r.progress(stats, streak);
+    return {
+      id: r.id,
+      title: lang === "en" ? r.enTitle : r.zhTitle,
+      desc: lang === "en" ? r.enDesc : r.zhDesc,
+      achieved: progress >= r.target,
+      rarity: r.rarity,
+      points: RARITY_POINTS[r.rarity],
+      progress,
+      target: r.target,
+    };
+  });
+}
+
+/** 依据已解锁比例挑选成长称号（中英双语）。 */
+export function rankFor(unlockedPct: number, lang: GamifyLang): { rank: string; rankKey: AchievementRank } {
+  if (unlockedPct >= 100) return { rank: lang === "en" ? "Legendary Librarian" : "词库传奇", rankKey: "legend" };
+  if (unlockedPct >= 75) return { rank: lang === "en" ? "Starlight Collector" : "星辉收藏家", rankKey: "star" };
+  if (unlockedPct >= 50) return { rank: lang === "en" ? "Master Collector" : "词库鉴藏家", rankKey: "collector" };
+  if (unlockedPct >= 25) return { rank: lang === "en" ? "Library Explorer" : "词库探索者", rankKey: "explorer" };
+  return { rank: lang === "en" ? "Library Wanderer" : "词库旅人", rankKey: "wanderer" };
+}
+
+/** 汇总成就排行（称号 + 达成数 + 成就点）。 */
+export function computeAchievementSummary(
+  achievements: AchievementInfo[],
+  lang: GamifyLang,
+): AchievementSummary {
+  const unlocked = achievements.filter((a) => a.achieved).length;
+  const total = achievements.length;
+  const maxPoints = achievements.reduce((sum, a) => sum + a.points, 0);
+  const earnedPoints = achievements.reduce((sum, a) => (a.achieved ? sum + a.points : sum), 0);
+  const pct = total === 0 ? 0 : Math.round((unlocked / total) * 100);
+  const { rank, rankKey } = rankFor(pct, lang);
+  return { rank, rankKey, unlocked, total, earnedPoints, maxPoints };
 }
 
 // ── 时间 / 节日彩蛋 ─────────────────────────────────────────────────────
@@ -291,9 +387,11 @@ export function buildAssistantStatus(
       aiRefinedIn7: 0,
       autoLearnedCount: 0,
     } as LibraryStats);
+  const achievements = computeAchievements(s, streak, lang);
   return {
     level: computeLevel(s.totalUsage, lang, inactiveDays),
-    achievements: computeAchievements(s, streak, lang),
+    achievements,
+    achievementSummary: computeAchievementSummary(achievements, lang),
     easterEgg: pickEasterEgg(lang),
   };
 }

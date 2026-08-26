@@ -43,7 +43,6 @@ import { rowBackground } from "../../utils/theme.js";
 import { notifyDataChanged, useDataChanged, useExportDownloaded, useFillDraft } from "../../services/data-sync.js";
 import { type PLT, type PLTranslate, usePLT } from "../../i18n/i18n.js";
 import { SearchBox, TagFilterBar } from "../common/SearchBox.js";
-import { StatsPanel } from "../stats/StatsPanel.js";
 import {
   applyVariables,
   extractVariables,
@@ -606,8 +605,6 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   const draft = useInput((s) => s.draft);
 
   const [open, setOpen] = useState(false);
-  // 面板视图：列表 / 统计
-  const [activeView, setActiveView] = useState<"list" | "stats">("list");
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   // 待确认删除的提示词（自定义确认弹窗，替代系统 confirm）
   const [deleteConfirm, setDeleteConfirm] = useState<Prompt | null>(null);
@@ -1103,26 +1100,21 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
       <style>{`@keyframes pl-refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
       <style>{`@keyframes pl-progress { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }`}</style>
       <style>{PL_BUTTON_CSS}</style>
+      {/* 词库聊天栏按钮：底色走层2以在工具栏上清晰可读，悬停/按下沿用官方交互高亮，
+          与 AI 优化按钮一致的 hover 效果（放在 PL_BUTTON_CSS 之后，确保等同优先级时覆盖） */}
+      <style>{`.pl-btn.pl-cbn-btn{border:none;background:var(--dsw-alias-bg-layer-2,#ffffff);box-shadow:none}.pl-btn.pl-cbn-btn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.pl-btn.pl-cbn-btn:active:not(:disabled){background:var(--dsw-alias-interactive-bg-active)}`}</style>
       {showComposerButton && (
         <>
       <Button
         type="button"
         variant="ghost"
         size="sm"
-        className={plBtn("ghost", "sm")}
+        className={`${plBtn("ghost", "sm")} pl-cbn-btn`}
         onClick={handleButtonClick}
         data-tip={T("pl.title")}
         aria-label={T("pl.title")}
         aria-expanded={open}
         aria-controls={panelId}
-        // ghost 全透明样式在工具栏上文字不够清晰：补一层不透明底色 + 边框，
-        // 让按钮作为独立控件一眼可辨、文字清晰可读（色值走主题 token，随明暗主题自适应）
-        style={{
-          color: "var(--dsw-alias-label-primary, #f2f6fc)",
-          background: "var(--dsw-alias-bg-layer-2, #ffffff)",
-          border: "1px solid var(--dsw-alias-border-l2, rgba(196,211,232,0.16))",
-          opacity: 1,
-        }}
         icon={
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path
@@ -1133,15 +1125,17 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
           </svg>
         }
       >
-        {T("pl.title")}
-        {/* 上下展开/折叠指示箭头：随开关旋转，颜色随按钮文本（官方 currentColor） */}
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true" style={{
-          marginLeft: 2,
-          transform: open ? "rotate(180deg)" : "rotate(0deg)",
-          transition: "transform 0.2s ease",
-        }}>
-          <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
+        {!settings.composerButtonIconOnly && T("pl.title")}
+        {/* 上下展开/折叠指示箭头：随开关旋转，颜色随按钮文本（官方 currentColor）；纯图标模式下隐藏以保持简洁 */}
+        {!settings.composerButtonIconOnly && (
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true" style={{
+            marginLeft: 2,
+            transform: open ? "rotate(180deg)" : "rotate(0deg)",
+            transition: "transform 0.2s ease",
+          }}>
+            <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        )}
       </Button>
 
       {/* toast（自动学习时附带「撤销」入口） */}
@@ -1368,48 +1362,29 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                 >
                   {T("pl.new")}
                 </Button>
-                {/* 统计视图切换：查看词库统计图表 */}
+                {/* 关闭按钮：一键隐藏面板（不保留折叠内容） */}
                 <Button
                   type="button"
                   variant="ghost"
                   size="sm"
-                  className={plBtn("ghost", "sm")}
-                  onClick={() => setActiveView((v) => (v === "stats" ? "list" : "stats"))}
-                  disabled={editing}
-                  data-tip={activeView === "stats" ? T("pl.stats.back") : T("pl.stats.view")}
-                  icon={
-                    <svg
-                      width="13" height="13" viewBox="0 0 24 24" fill="none"
-                      stroke={activeView === "stats" ? TONE.accent : "currentColor"}
-                      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-                    >
-                      <path d="M4 20V14M10 20V10M16 20V4M22 20H2" />
-                    </svg>
-                  }
-                />
-                {/* 折叠按钮：一键隐藏面板（不保留折叠内容） */}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className={plBtn("ghost", "sm")}
+                  className={`${plBtn("ghost", "sm")} pl-btn--no-border`}
                   onClick={() => setOpen(false)}
-                  data-tip={T("pl.skillModal.collapse")}
-                  aria-label={T("pl.skillModal.collapse")}
+                  data-tip={T("pl.close")}
+                  aria-label={T("pl.close")}
                   icon={
                     <svg
                       width="13" height="13" viewBox="0 0 24 24" fill="none"
                       stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
                     >
-                      <path d="M6 9l6 6 6-6" />
+                      <path d="M18 6L6 18M6 6l12 12" />
                     </svg>
                   }
                 />
               </div>
             </header>
 
-            {/* 搜索框 + 标签过滤：输入即时生效（实时过滤）；统计视图下隐藏 */}
-            {!editing && activeView === "list" && (
+            {/* 搜索框 + 标签过滤：输入即时生效（实时过滤） */}
+            {!editing && (
               <div style={{ padding: "10px 16px 4px", flexShrink: 0 }}>
                 <SearchBox
                   value={query}
@@ -1427,10 +1402,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
               </div>
             )}
 
-            {/* 统计视图：独立展示（隐藏搜索与列表） */}
-            {activeView === "stats" && !editing ? (
-              <StatsPanel t={T} onBack={() => setActiveView("list")} />
-            ) : (
+            {/* 主列表区 */}
             <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
               {phase === "loading" && (
                 <div style={{ padding: "20px 16px", color: TONE.muted, fontSize: 13, textAlign: "center" }}>
@@ -1591,7 +1563,6 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                 </ul>
               )}
             </div>
-            )}
             {/* 编辑/新建模式：取消与保存按钮固定于面板底部（不随表单内容滚动） */}
             {editing && (
               <div
@@ -1612,8 +1583,8 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                 </Button>
               </div>
             )}
-            {/* 翻页：按页展示，置于滚动区外、固定于面板底部；统计视图下隐藏 */}
-            {!editing && activeView === "list" && phase === "ready" && (
+            {/* 翻页：按页展示，置于滚动区外、固定于面板底部 */}
+            {!editing && phase === "ready" && (
               <Pagination page={page} totalPages={totalPages} onChange={setPage} />
             )}
             {/* 查看弹层：覆盖整个面板展示完整标题/标签/正文，仅可通过关闭按钮关闭 */}

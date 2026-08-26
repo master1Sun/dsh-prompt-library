@@ -42,7 +42,6 @@ import { notifyDataChanged, useDataChanged } from "../../services/data-sync.js";
 import { PL_BUTTON_CSS, plBtn } from "../../utils/button-style.js";
 import { rowBackground } from "../../utils/theme.js";
 import { PromptAssistant } from "../assistant/PromptAssistant.js";
-import { StatsPanel } from "../stats/StatsPanel.js";
 import { type PLTranslate, usePLT } from "../../i18n/i18n.js";
 import { Highlight, SearchBox, TagFilterBar } from "../common/SearchBox.js";
 import { TagInput } from "../common/TagInput.js";
@@ -245,7 +244,7 @@ export function SidebarPromptLibrary(props?: {
   const { inputActions, draft, t } = props ?? {};
   const T = usePLT(t);
   const settings = useSettings();
-  // 浮动面板状态：位置/尺寸/折叠持久化到 localStorage；默认折叠，显示小人
+  // 浮动面板状态：位置/尺寸/折叠持久化到 localStorage；默认折叠，显示助手
   const [float, setFloat] = useState<FloatState>(loadFloatState);
   const collapsed = float.collapsed;
   const setCollapsed = useCallback(
@@ -270,8 +269,6 @@ export function SidebarPromptLibrary(props?: {
   const [tagNames, setTagNames] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [tagFilter, setTagFilter] = useState("");
-  // 面板视图：列表 / 统计
-  const [activeView, setActiveView] = useState<"list" | "stats">("list");
   // 实时搜索：输入变化立即可用于过滤
   const clearSearch = useCallback(() => setQuery(""), []);
   const [phase, setPhase] = useState<"idle" | "loading" | "ready" | "error">("idle");
@@ -346,7 +343,7 @@ export function SidebarPromptLibrary(props?: {
   // 编辑表单正文输入框引用：供「插入变量 {{}}」定位光标
   const bodyRef = useRef<HTMLTextAreaElement>(null);
 
-  // ── 浮动面板：拖拽定位 / 缩放尺寸 / 折叠小人 ────────────────────────────
+  // ── 浮动面板：拖拽定位 / 缩放尺寸 / 折叠助手 ────────────────────────────
   // 以「会话窗口」为锚点：会话容器被其它窗口/内部面板挤压、或缩小返回原大小时，
   // 计算 chat 矩形并重算 view，面板跟随会话窗口收回与展开。world 位置（float.x/y）不变，
   // 大到会话窗口扩大后又能回到原本的位置与尺寸。
@@ -872,16 +869,14 @@ export function SidebarPromptLibrary(props?: {
 .pl-search-input:focus { box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 16%, transparent); }
 }`}</style>
       <style>{PL_BUTTON_CSS}</style>
-      {/* 词库助手（小人+气泡）：独立组件，自管理位置/冒泡/简介；左键不联动面板，
+      {/* 词库助手（助手+气泡）：独立组件，自管理位置/冒泡/简介；左键不联动面板，
           面板开合统一走右键菜单「打开工具面板」回调。
-          受「显示词库助手」设置控制，关闭后整屏隐藏。 */}
-      {settings.assistantEnabled && (
-        <PromptAssistant
+          词库助手已常驻，不再受「显示词库助手」开关控制。 */}
+      <PromptAssistant
           t={T}
           settings={settings}
           onTogglePanel={() => updateFloat({ collapsed: !float.collapsed })}
         />
-      )}
         <section
           ref={panelRef}
           role="dialog"
@@ -893,7 +888,7 @@ export function SidebarPromptLibrary(props?: {
             zIndex: 2147483646,
             width: view.width,
             height: view.height,
-            display: !settings.assistantEnabled || !settings.rightPanelEnabled || collapsed ? "none" : "flex",
+            display: !settings.rightPanelEnabled || collapsed ? "none" : "flex",
             flexDirection: "column",
             animation: collapsed ? "none" : "pl-pop-in .28s cubic-bezier(.22,1,.36,1)",
             overflow: "hidden",
@@ -929,7 +924,7 @@ export function SidebarPromptLibrary(props?: {
               <path d="M7 17L17 7M9 17h8V9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </div>
-          {/* 头部 — 常规布局：左标题（书本图标 + 词库名），右侧依次为刷新/新建/最小化 */}
+          {/* 头部 — 常规布局：左标题（书本图标 + 词库名），右侧依次为刷新/新建/关闭 */}
           <header
             onMouseDown={startPanelDrag}
             className="pl-grab"
@@ -999,37 +994,18 @@ export function SidebarPromptLibrary(props?: {
               >
                 {T("pl.new")}
               </Button>
-              {/* 统计视图切换：查看词库统计图表 */}
+              {/* 关闭按钮：收进右侧操作区，采用常规的 X 图标按钮 */}
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                className={plBtn("ghost", "sm")}
-                onClick={() => setActiveView((v) => (v === "stats" ? "list" : "stats"))}
-                disabled={editing}
-                data-tip={activeView === "stats" ? T("pl.stats.back") : T("pl.stats.view")}
-                icon={
-                  <svg
-                    width="13" height="13" viewBox="0 0 24 24" fill="none"
-                    stroke={activeView === "stats" ? TONE.accent : "currentColor"}
-                    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-                  >
-                    <path d="M4 20V14M10 20V10M16 20V4M22 20H2" />
-                  </svg>
-                }
-              />
-              {/* 最小化按钮：收进右侧操作区，采用常规的下箭头图标按钮 */}
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className={plBtn("ghost", "sm")}
+                className={`${plBtn("ghost", "sm")} pl-btn--no-border`}
                 onMouseDown={(e: ReactMouseEvent<HTMLButtonElement>) => e.stopPropagation()}
                 onClick={() => setCollapsed(true)}
-                data-tip={T("pl.sidebar.collapse")}
+                data-tip={T("pl.close")}
                 icon={
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M3 8l9 9 9-9" />
+                    <path d="M18 6L6 18M6 6l12 12" />
                   </svg>
                 }
               />
@@ -1037,7 +1013,7 @@ export function SidebarPromptLibrary(props?: {
           </header>
 
           {/* 搜索框：输入即时生效（实时过滤） */}
-          {!editing && activeView === "list" && (
+          {!editing && (
             <>
               <div style={{ padding: "12px 12px 4px", flexShrink: 0 }}>
                 <SearchBox
@@ -1272,8 +1248,6 @@ export function SidebarPromptLibrary(props?: {
           </div>
             </>
           )}
-          {/* 统计视图：独立展示（隐藏搜索与列表） */}
-          {!editing && activeView === "stats" && <StatsPanel t={T} onBack={() => setActiveView("list")} />}
           {/* 编辑/新建表单：editing 时独立展示（隐藏搜索与列表） */}
           {editing && (
             <div style={{ flex: 1, overflow: "auto", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 9 }}>

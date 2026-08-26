@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { plBtn } from "../../utils/button-style.js";
+import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../../utils/dialog-style.js";
 import { type PLT } from "../../i18n/i18n.js";
 
 const MONO =
@@ -313,33 +314,17 @@ export function TemplateFillModal({
       role="dialog"
       aria-modal="true"
       aria-label={t("pl.template.title")}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 2147483647,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "rgba(0,0,0,0.35)",
-      }}
+      className={PL_DIALOG_OVERLAY}
     >
+      <style>{PL_DIALOG_CSS}</style>
       <div
         onClick={(e) => e.stopPropagation()}
+        className={PL_DIALOG}
         style={{
           width: 460,
           maxWidth: "calc(100vw - 40px)",
           maxHeight: "min(520px, calc(100vh - 40px))",
-          boxSizing: "border-box",
-          display: "flex",
-          flexDirection: "column",
           gap: 10,
-          background: TONE.panel,
-          border: `1px solid ${TONE.borderStrong}`,
-          borderRadius: 12,
-          boxShadow: "none",
-          padding: "18px 20px",
-          color: TONE.text,
-          fontFamily: MONO,
         }}
       >
         <strong style={{ fontSize: 15, fontWeight: 520, paddingBottom: 4, flexShrink: 0 }}>
@@ -355,6 +340,7 @@ export function TemplateFillModal({
             flex: 1,
             minHeight: 0,
             overflow: "auto",
+            paddingRight: 10,
             display: "flex",
             flexDirection: "column",
             gap: 10,

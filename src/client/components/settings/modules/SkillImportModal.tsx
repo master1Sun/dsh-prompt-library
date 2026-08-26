@@ -19,6 +19,7 @@ import {
 } from "react";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { plBtn } from "../../../utils/button-style.js";
+import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../../../utils/dialog-style.js";
 import { type PLT, type PLTranslate, usePLT } from "../../../i18n/i18n.js";
 import {
   describeSkill,
@@ -716,33 +717,16 @@ export function SkillImportModal(props: {
       role="dialog"
       aria-modal="true"
       aria-label={T(mode === "export" ? "pl.skillModal.exportTitle" : "pl.skillModal.title")}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 2147483647,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "rgba(0,0,0,.35)",
-        padding: 20,
-        boxSizing: "border-box",
-      }}
+      className={PL_DIALOG_OVERLAY}
     >
+      <style>{PL_DIALOG_CSS}</style>
       <div
+        className={PL_DIALOG}
         style={{
           width: 1020,
           maxWidth: "90%",
           height: "min(720px, calc(100vh - 60px))",
-          boxSizing: "border-box",
-          display: "flex",
-          flexDirection: "column",
           gap: 12,
-          background: TONE.panel,
-          border: `1px solid ${TONE.borderStrong}`,
-          borderRadius: 12,
-          padding: "18px 20px",
-          color: TONE.text,
-          fontFamily: MONO,
         }}
       >
         {/* 标题 + 关闭按钮（弹窗仅通过按钮手动关闭） */}
@@ -837,7 +821,7 @@ export function SkillImportModal(props: {
         )}
 
         {/* 条目列表：可滚动 */}
-        <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ flex: 1, minHeight: 0, overflow: "auto", paddingRight: 10, display: "flex", flexDirection: "column", gap: 10 }}>
           {entries.length === 0 ? (
             <div
               style={{

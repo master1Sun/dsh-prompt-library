@@ -1,17 +1,17 @@
 /**
- * 词库助手「小人雪碧图」。
+ * 词库助手「助手雪碧图」。
  *
- * 把蓝脸小人渲染成一张运行时生成的雪碧图：用 canvas 按「轨道 = 行、帧 = 列」
+ * 把米兔（长耳圆脸小兔）渲染成一张运行时生成的雪碧图：用 canvas 按「轨道 = 行、帧 = 列」
  * 逐格绘制定格帧，再由 background-position 按每轨道每帧时长播放。
  *
  * - TRACKS        ：每个动画轨道一行的每帧停留时长（ms）。
  * - SEQUENCES     ：活动阶段 → 轨道序列（播放该阶段时依次切轨）。
- * - HOVER_SEQUENCE：鼠标移入小人的打招呼序列（小动画）。
+ * - HOVER_SEQUENCE：鼠标移入助手的打招呼序列（小动画）。
  * - getSpriteSheet：按「等级 + 聊天主题 + 心情」组合懒生成并缓存雪碧图 data URL；
- *                   失败返回 null，由调用方回退到原生 SVG 小人。
+ *                   失败返回 null，由调用方回退到原生 SVG 助手。
  *
- * 小人差异化（QQ 式成长 & 换装人格化 & 心情表情）：
- * - 等级：身体主色按等级分阶变化（灰→蓝→绿→紫→金→橙），胸前缀一枚同色小星章；
+ * 助手差异化（QQ 式成长 & 换装人格化 & 心情表情）：
+ * - 等级：米兔整体保持暖白形象，等级色只作胸前小星章点缀（灰→蓝→绿→紫→金→橙），不改全身颜色；
  * - 聊天主题：按职业换装（代码=工程师帽 / 写作=贝雷帽 / 翻译=领带 / 问答=眼镜）；
  * - 心情：开心时笑容更开、腮红更浓，低落时嘴角下垂、略低头。
  */
@@ -24,7 +24,9 @@ export type SpriteTopic = "code" | "writing" | "translate" | "qa" | "general";
 
 /** 生成雪碧图的可选差异项。 */
 export interface SpriteOptions {
-  /** 等级 1-6：决定身体主色与胸前徽章色。 */
+  /** 程序化款型：经典米兔 / 哈士奇（鲸鱼款用静态素材，不传）。 */
+  character?: DrawnCharacter;
+  /** 等级 1-6：决定胸前徽章色。 */
   level?: number;
   /** 聊天主题：决定职业装扮（帽子/贝雷帽/领带/眼镜）。 */
   topic?: SpriteTopic;
@@ -49,7 +51,7 @@ function clampLevel(level: number | undefined): number {
 export const SPRITE_CELL = 72; // 每帧设计尺寸（与 SVG viewBox 一致）
 export const SPRITE_COLUMNS = 8; // 雪碧图每行的帧数上限
 
-/** 小人动画轨道（对应雪碧图的一整行）。 */
+/** 助手动画轨道（对应雪碧图的一整行）。 */
 export type SpriteTrack =
   | "idle"
   | "hover"
@@ -101,15 +103,68 @@ export const SEQUENCES: Record<string, SpriteTrack[]> = {
   failed: ["failed"],
 };
 
-/** 鼠标移入小人时的打招呼序列（小动画）。 */
+/** 鼠标移入助手时的打招呼序列（小动画）。 */
 export const HOVER_SEQUENCE: SpriteTrack[] = ["wave", "idle"];
 
-/** 雪碧图结果：data URL 与几何信息。 */
+// ── 鲸鱼款助手：使用随插件分发的静态雪碧图素材，几何/轨道与鲸鱼素材对齐 ──
+// 词库助手全部轨道语义保留（待机/等待/思考/忙碌/整理/完成/失败/打招呼），
+// 只是把每个轨道映射到鲸鱼素材的行，并按鲸鱼素材的帧数与时长为每帧定位。
+
+/** 词库助手助手款型（与 host 的 assistantCharacter 设置保持一致）。 */
+export type PetCharacter = "classic" | "husky" | "whale";
+
+/** 程序化绘制款型（鲸鱼款用静态素材，不参与此枚举）。 */
+export type DrawnCharacter = "classic" | "husky";
+
+/** 鲸鱼款雪碧图几何：每帧 192×208、每行 8 帧、共 9 行。
+ * 素材由 host 路由按字节返回（见 routes.ts 的 /assets/whale）。 */
+export const WHALE_COLUMNS = 8;
+export const WHALE_ROWS = 9;
+/** 鲸鱼素材的静态地址（host 路由提供 image/webp 字节）。 */
+export const WHALE_ASSET_URL = "/api/prompt-library/assets/whale";
+
+/** 鲸鱼款：词库助手轨道 → 雪碧图行号（与素材行为单位对齐）。 */
+export const WHALE_TRACK_ROW: Record<SpriteTrack, number> = {
+  idle: 0, // 待机
+  hover: 3, // 打招呼 → 挥舞
+  waiting: 6, // 等待
+  thinking: 7, // 思考 → 小跑
+  tool: 1, // 忙碌 → 向右移动
+  review: 8, // 整理
+  done: 4, // 完成 → 跳跃
+  failed: 5, // 失败
+  wave: 3, // 挥舞（打招呼）
+};
+
+/** 鲸鱼款：每个轨道一行的帧下标与每帧停留时长（取自鲸鱼素材的原始动画节拍）。 */
+export const WHALE_TRACKS: Record<SpriteTrack, { frames: number[]; durations: number[] }> = {
+  idle: { frames: [0, 1, 2, 3, 4, 5], durations: [500, 500, 600, 500, 500, 600] },
+  hover: { frames: [0, 1, 2, 3], durations: [450, 450, 450, 450] },
+  waiting: { frames: [0, 1, 2, 3, 4, 5], durations: [550, 550, 600, 550, 550, 600] },
+  thinking: { frames: [0, 1, 2, 3, 4, 5], durations: [330, 330, 330, 330, 330, 400] },
+  tool: { frames: [0, 1, 2, 3, 4, 5, 6, 7], durations: [300, 300, 300, 300, 300, 300, 300, 400] },
+  review: { frames: [0, 1, 2, 3, 4, 5], durations: [650, 650, 650, 650, 650, 650] },
+  done: { frames: [0, 1, 2, 3, 4], durations: [400, 400, 400, 450, 450] },
+  failed: { frames: [0, 1, 2, 3, 4, 5, 6, 7], durations: [550, 550, 550, 600, 650, 700, 550, 550] },
+  wave: { frames: [0, 1, 2, 3], durations: [450, 450, 450, 450] },
+};
+
+/** 轨道定义集合类型（经典/鲸鱼款通用）。 */
+export type TrackDefMap = Record<SpriteTrack, { frames: number[]; durations: number[] }>;
+
+/** 雪碧图结果：可用的素材地址 + 几何信息 + 轨道行为与延时。 */
 export interface SpriteSheet {
   url: string;
-  cell: number;
+  /** 单帧在图片上的像素宽（经典 72 / 鲸鱼款 192）。 */
+  cellW: number;
+  /** 单帧在图片上的像素高（经典 72 / 鲸鱼款 208）。 */
+  cellH: number;
   columns: number;
   rows: number;
+  /** 轨道 → 雪碧图行号（随形象不同而变化）。 */
+  trackRow: Record<SpriteTrack, number>;
+  /** 轨道 → 帧下标与每帧时长（随形象不同而变化）。 */
+  tracks: TrackDefMap;
 }
 
 /** 帧定位结果。 */
@@ -119,8 +174,12 @@ export interface SpriteFrame {
 }
 
 /** 序列中 elapsedMs 对应的（轨道, 帧）：先按轨道总时长分配轨道，再按帧时长定位帧。 */
-export function sequenceFrame(sequence: SpriteTrack[], elapsedMs: number): SpriteFrame {
-  const itemDurations = sequence.map((tk) => TRACKS[tk].durations.reduce((a, b) => a + b, 0));
+export function sequenceFrame(
+  sequence: SpriteTrack[],
+  elapsedMs: number,
+  tracks: TrackDefMap = TRACKS,
+): SpriteFrame {
+  const itemDurations = sequence.map((tk) => tracks[tk].durations.reduce((a, b) => a + b, 0));
   const total = itemDurations.reduce((a, b) => a + b, 0);
   let off = Math.max(0, elapsedMs) % total;
   let item = 0;
@@ -129,8 +188,8 @@ export function sequenceFrame(sequence: SpriteTrack[], elapsedMs: number): Sprit
     item += 1;
   }
   const track = sequence[item];
-  const dur = TRACKS[track].durations;
-  const frames = TRACKS[track].frames;
+  const dur = tracks[track].durations;
+  const frames = tracks[track].frames;
   let col = 0;
   while (col < frames.length - 1 && off >= dur[col]) {
     off -= dur[col];
@@ -157,7 +216,8 @@ const P = (p: Partial<Pose>): Pose => ({ ...BASE, ...p });
 
 /** 每个轨道一行的逐帧姿势（下标对应帧）。 */
 const POSE: Record<SpriteTrack, Pose[]> = {
-  idle: [P({}), P({ dip: 1, blink: 1 }), P({}), P({ dip: -1 })],
+  // 待机：嘴在「微笑」与「o 形」间交替，呈现轻柔的开合呼吸/说话感
+  idle: [P({ mouth: "smile" }), P({ dip: 1, mouth: "open" }), P({ mouth: "smile" }), P({ dip: -1, mouth: "open" })],
   hover: [P({ mouth: "open" }), P({ dip: -3, mouth: "open", arm: 0.2 }), P({ mouth: "open" }), P({ dip: -2, mouth: "open" })],
   waiting: [P({}), P({ tilt: -4 }), P({}), P({ tilt: 4 })],
   thinking: [P({ tilt: 6, dip: -1 }), P({ tilt: 6, dip: -2 }), P({ tilt: 5 }), P({ tilt: 6, dip: -1 })],
@@ -174,10 +234,11 @@ const POSE: Record<SpriteTrack, Pose[]> = {
   wave: [P({ arm: -0.55, mouth: "open" }), P({ arm: 0, mouth: "open" }), P({ arm: -0.9, mouth: "smile" }), P({ arm: 0, mouth: "open" })],
 };
 
-/** 小人配色：body 为身体/脸主色，feature 为五官对比色。 */
+/** 米兔配色：body 为暖白身体/脸，feature 为五官深色，outline 为描边色（浅色模式保证可见）。 */
 interface Palette {
   body: string;
   feature: string;
+  outline: string;
 }
 
 /** 相对亮度（0..1），用于判断主色深浅。 */
@@ -195,37 +256,22 @@ function luminance(hex: string): number {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
-/** 两个十六进制颜色按比例混合（ratio 为 b 的占比），返回 #rrggbb。 */
-function blend(a: string, b: string, ratio: number): string {
-  const pa = /^#?([0-9a-f]{6})$/i.exec(a.trim());
-  const pb = /^#?([0-9a-f]{6})$/i.exec(b.trim());
-  if (!pa || !pb) return a;
-  const na = parseInt(pa[1], 16);
-  const nb = parseInt(pb[1], 16);
-  const lerp = (x: number, y: number): number => Math.round(x + (y - x) * ratio);
-  const toHex = (n: number): string => n.toString(16).padStart(2, "0");
-  const r = lerp((na >> 16) & 255, (nb >> 16) & 255);
-  const g = lerp((na >> 8) & 255, (nb >> 8) & 255);
-  const b0 = lerp(na & 255, nb & 255);
-  return `#${toHex(r)}${toHex(g)}${toHex(b0)}`;
-}
-
-/** 读取主题前景色，并按等级叠加分阶色调；五官取其对比色。 */
-function resolvePalette(level = 1): Palette {
-  let body = "#1f2937";
+/** 米兔配色：body 固定暖白（不随等级改变全身颜色），feature 深色五官，outline 主题描边。 */
+function resolvePalette(): Palette {
+  // 米兔为白色形象：身体统一米白，五官用深色，保证日夜模式都清晰
+  const body = "#f9f5ec";
+  const feature = "#1f2937";
+  let outline = "#c9c2b4";
   try {
     const v = window
       .getComputedStyle(document.documentElement)
-      .getPropertyValue("--dsw-alias-label-primary")
+      .getPropertyValue("--dsw-alias-border-l2")
       .trim();
-    if (v) body = v;
+    if (v) outline = v;
   } catch {
-    /* 忽略，用默认深色 */
+    /* 忽略，用默认暖灰描边 */
   }
-  // 等级分阶：身体主色按 50% 向等级色混合，让不同等级小人一眼可辨
-  body = blend(body, LEVEL_COLORS[clampLevel(level) - 1], 0.5);
-  const feature = luminance(body) > 0.5 ? "#10141c" : "#fff";
-  return { body, feature };
+  return { body, feature, outline };
 }
 
 function drawEyes(ctx: CanvasRenderingContext2D, blink: number, pal: Palette): void {
@@ -246,22 +292,25 @@ function drawEyes(ctx: CanvasRenderingContext2D, blink: number, pal: Palette): v
     ctx.moveTo(39.6, 33.4); ctx.lineTo(42.4, 33.4);
     ctx.stroke();
   } else {
-    // 睁眼：画瞳孔
-    ctx.fillStyle = pal.body;
+    // 睁眼：深色眼珠上加白色高光，米兔水灵灵的眼睛
+    ctx.fillStyle = "#ffffff";
     ctx.beginPath();
-    ctx.arc(32, 33.6, 1.2, 0, Math.PI * 2);
+    ctx.arc(32, 33.6, 1.1, 0, Math.PI * 2);
     ctx.fill();
     ctx.beginPath();
-    ctx.arc(42, 33.6, 1.2, 0, Math.PI * 2);
+    ctx.arc(42, 33.6, 1.1, 0, Math.PI * 2);
     ctx.fill();
   }
 }
 
-function drawMouth(ctx: CanvasRenderingContext2D, mouth: Pose["mouth"], pal: Palette): void {
-  ctx.strokeStyle = pal.feature;
+/** 米兔红：嘴部统一用亮红色（米兔标志性红唇），覆盖深色五官描边。 */
+const MOUTH_RED = "#e5444b";
+
+function drawMouth(ctx: CanvasRenderingContext2D, mouth: Pose["mouth"]): void {
+  ctx.strokeStyle = MOUTH_RED;
   ctx.lineWidth = 1.8;
   ctx.lineCap = "round";
-  ctx.fillStyle = pal.feature;
+  ctx.fillStyle = MOUTH_RED;
   if (mouth === "open") {
     // 开心的「o」形嘴
     ctx.beginPath();
@@ -421,7 +470,36 @@ function drawLevelBadge(ctx: CanvasRenderingContext2D, level: number | undefined
   ctx.fill();
 }
 
-/** 在一个格子里按姿势绘制一帧小人（含等级配色、主题装扮与心情表情）。 */
+/** 米兔双耳：长圆形竖耳（暖白+描边）+ 粉色内耳；在画脸前绘制，耳根被脸盖住更自然。 */
+function drawEars(ctx: CanvasRenderingContext2D, pal: Palette): void {
+  ctx.strokeStyle = pal.outline;
+  ctx.lineWidth = 0.9;
+  // 左耳
+  ctx.beginPath();
+  ctx.ellipse(27.5, 14.5, 4.6, 9, 0.12, 0, Math.PI * 2);
+  ctx.fillStyle = pal.body;
+  ctx.globalAlpha = 0.92;
+  ctx.fill();
+  ctx.stroke();
+  // 右耳
+  ctx.beginPath();
+  ctx.ellipse(44.5, 14.5, 4.6, 9, -0.12, 0, Math.PI * 2);
+  ctx.fillStyle = pal.body;
+  ctx.fill();
+  ctx.stroke();
+  // 内耳（米兔经典粉）
+  ctx.fillStyle = "#f6a9c4";
+  ctx.globalAlpha = 0.85;
+  ctx.beginPath();
+  ctx.ellipse(27.5, 14.5, 2, 6, 0.12, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(44.5, 14.5, 2, 6, -0.12, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+/** 在一个格子里按姿势绘制一帧（先施加姿态变换，再按款型分派绘制）。 */
 function drawCell(
   ctx: CanvasRenderingContext2D,
   gx: number,
@@ -439,60 +517,317 @@ function drawCell(
   ctx.scale(1, p.squashY);
   ctx.translate(-36, -47);
 
-  // 淡色身体
-  ctx.globalAlpha = 0.16;
+  if ((opts.character ?? "classic") === "husky") drawHuskyBody(ctx, p, pal, opts);
+  else drawBunnyBody(ctx, p, pal, opts);
+  ctx.restore();
+}
+
+/** 经典米兔：暖白长耳圆脸小兔（含等级配色、主题装扮与心情表情）。 */
+function drawBunnyBody(
+  ctx: CanvasRenderingContext2D,
+  p: Pose,
+  pal: Palette,
+  opts: SpriteOptions,
+): void {
+  // 身体（米兔短胖的小身子：暖白 + 描边）
   ctx.fillStyle = pal.body;
+  ctx.strokeStyle = pal.outline;
+  ctx.lineWidth = 0.9;
   ctx.beginPath();
-  ctx.ellipse(36, 29, 15, 16, 0, 0, Math.PI * 2);
+  ctx.ellipse(36, 42, 12, 9, 0, 0, Math.PI * 2);
   ctx.fill();
-  ctx.globalAlpha = 1;
+  ctx.stroke();
 
   // 小手（绕身体底部摆动）
   ctx.save();
   ctx.translate(36, 47);
   ctx.rotate(p.arm);
-  ctx.globalAlpha = 0.85;
   ctx.fillStyle = pal.body;
   ctx.beginPath();
   ctx.ellipse(0, 5, 12, 9, 0, 0, Math.PI * 2);
   ctx.fill();
-  ctx.globalAlpha = 0.4;
+  ctx.strokeStyle = pal.outline;
+  ctx.lineWidth = 0.8;
+  ctx.stroke();
   ctx.fillStyle = pal.feature;
   ctx.beginPath();
   ctx.ellipse(-11, 4, 5, 4, 0, 0, Math.PI * 2);
   ctx.fill();
-  ctx.globalAlpha = 1;
   ctx.restore();
 
-  // 脸
+  // 四只脚（米兔四脚：前后各一对暖白小椭圆，靠后的一对略小略高形成纵深感）
   ctx.fillStyle = pal.body;
+  ctx.strokeStyle = pal.outline;
+  ctx.lineWidth = 0.8;
+  // 后脚（较小，稍高）
+  ctx.beginPath();
+  ctx.ellipse(33, 49, 3.4, 2.7, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(39, 49, 3.4, 2.7, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  // 前脚（较大，稍低）
+  ctx.beginPath();
+  ctx.ellipse(29, 52, 4.2, 3.4, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(43, 52, 4.2, 3.4, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // 双耳（在脸之下绘制，耳根自然被脸盖住）
+  drawEars(ctx, pal);
+
+  // 脸（米兔暖白圆脸 + 描边）
+  ctx.fillStyle = pal.body;
+  ctx.strokeStyle = pal.outline;
+  ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.arc(36, 34, 15, 0, Math.PI * 2);
   ctx.fill();
+  ctx.stroke();
 
-  // 腮红
-  ctx.globalAlpha = 0.45 * p.cheek;
-  ctx.fillStyle = pal.feature;
+  // 腮红（米兔经典粉）
+  ctx.globalAlpha = 0.5 * p.cheek;
+  ctx.fillStyle = "#f6a9c4";
   ctx.beginPath();
-  ctx.arc(29, 37, 2.4, 0, Math.PI * 2);
+  ctx.arc(29, 37, 2.6, 0, Math.PI * 2);
   ctx.fill();
   ctx.beginPath();
-  ctx.arc(43, 37, 2.4, 0, Math.PI * 2);
+  ctx.arc(43, 37, 2.6, 0, Math.PI * 2);
   ctx.fill();
   ctx.globalAlpha = 1;
 
   drawEyes(ctx, p.blink, pal);
-  drawMouth(ctx, p.mouth, pal);
+  drawMouth(ctx, p.mouth);
 
   // 职业装扮（换装人格化）
   drawCostume(ctx, opts.topic, pal);
-  // 等级胸前星章（QQ 式成长标识）
+  // 等级胸前星章（QQ 式成长标识，等级色仅作小点缀不改全身）
   drawLevelBadge(ctx, opts.level);
+}
+
+/** 哈士奇：灰白毛色、深色三角耳、冰蓝双瞳、浅色口鼻（米兔的等级星章/职业装扮/心情通用）。 */
+function drawHuskyBody(
+  ctx: CanvasRenderingContext2D,
+  p: Pose,
+  pal: Palette,
+  opts: SpriteOptions,
+): void {
+  const dark = "#434a54"; // 哈士奇深灰/黑毛（耳朵、额头、背部）
+  const gray = "#c7cdd3"; // 浅灰毛
+  const cream = "#f4f0ea"; // 米白脸毛/胸腹
+  const ice = "#7fb3d8"; // 冰蓝眼瞳
+  const nose = "#2f3540"; // 鼻头
+  const line = pal.outline; // 描边
+
+  // 尾巴（左侧一小截灰毛，垂到底部）
+  ctx.fillStyle = gray;
+  ctx.strokeStyle = line;
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.ellipse(22, 50, 4.6, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // 小脚（四只灰爪，前后各一对略分高低）
+  ctx.fillStyle = gray;
+  ctx.strokeStyle = line;
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.ellipse(33, 49, 3.4, 2.7, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(39, 49, 3.4, 2.7, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(29, 52, 4.2, 3.4, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(43, 52, 4.2, 3.4, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // 身体（浅灰圆润小身板 + 米白胸腹）
+  ctx.fillStyle = gray;
+  ctx.strokeStyle = line;
+  ctx.lineWidth = 0.9;
+  ctx.beginPath();
+  ctx.ellipse(36, 42, 12.5, 9.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = cream;
+  ctx.beginPath();
+  ctx.ellipse(36, 45, 7.5, 5.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 小手（绕身体底部摆动，使用米兔同款手掌）
+  ctx.save();
+  ctx.translate(36, 47);
+  ctx.rotate(p.arm);
+  ctx.fillStyle = gray;
+  ctx.beginPath();
+  ctx.ellipse(0, 5, 12, 9, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = line;
+  ctx.lineWidth = 0.8;
+  ctx.stroke();
+  ctx.fillStyle = nose;
+  ctx.beginPath();
+  ctx.ellipse(-11, 4, 5, 4, 0, 0, Math.PI * 2);
+  ctx.fill();
   ctx.restore();
+
+  // 双耳（尖立三角耳：深色外耳 + 粉芯内耳，耳根被头盖住，先画）
+  ctx.fillStyle = dark;
+  ctx.strokeStyle = line;
+  ctx.lineWidth = 0.9;
+  // 左耳
+  ctx.beginPath();
+  ctx.moveTo(23.5, 10.5);
+  ctx.quadraticCurveTo(19.5, 24, 29.5, 22.8);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  // 右耳
+  ctx.beginPath();
+  ctx.moveTo(48.5, 10.5);
+  ctx.quadraticCurveTo(52.5, 24, 42.5, 22.8);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  // 内耳（哈士奇粉嫩耳芯）
+  ctx.fillStyle = "#f2a0b0";
+  ctx.globalAlpha = 0.85;
+  ctx.beginPath();
+  ctx.moveTo(25.6, 12.5);
+  ctx.quadraticCurveTo(22.6, 22, 28.6, 21.6);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(46.4, 12.5);
+  ctx.quadraticCurveTo(49.4, 22, 43.4, 21.6);
+  ctx.closePath();
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // 头（米白圆脸 + 描边）
+  ctx.fillStyle = cream;
+  ctx.strokeStyle = line;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(36, 34, 15, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // 额头倒三角深色斑纹（哈士奇标志性黑额斑，自头顶汇向鼻梁上方）
+  ctx.fillStyle = dark;
+  ctx.beginPath();
+  ctx.moveTo(22.8, 20);
+  ctx.quadraticCurveTo(36, 14.6, 49.2, 20);
+  ctx.lineTo(45.2, 25.8);
+  ctx.quadraticCurveTo(36, 29.2, 26.8, 25.8);
+  ctx.closePath();
+  ctx.fill();
+  // 白眉心纹（倒三角下缘露出的两撮白毛，衬在眼睛上方）
+  ctx.fillStyle = "#fbfaf6";
+  ctx.beginPath();
+  ctx.ellipse(30.4, 29.4, 3, 1.8, 0.25, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(41.6, 29.4, 3, 1.8, -0.25, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 吻部（口鼻处米白椭圆）
+  ctx.fillStyle = cream;
+  ctx.beginPath();
+  ctx.ellipse(36, 40, 8.4, 6.4, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 冰蓝眼睛（带深色描边与高光，随眨动隐藏）
+  if (p.blink >= 0.4) {
+    ctx.strokeStyle = dark;
+    ctx.lineWidth = 1.2;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(29.6, 33.4); ctx.lineTo(32.4, 33.4);
+    ctx.moveTo(39.6, 33.4); ctx.lineTo(42.4, 33.4);
+    ctx.stroke();
+  } else {
+    ctx.fillStyle = ice;
+    ctx.strokeStyle = dark;
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    ctx.ellipse(31, 33, 3, 3.1, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.ellipse(41, 33, 3, 3.1, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.arc(32, 31.6, 1.1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(42, 31.6, 1.1, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 鼻头（黑色小圆）
+  ctx.fillStyle = nose;
+  ctx.beginPath();
+  ctx.ellipse(36, 38.6, 2.4, 1.9, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 嘴（根据心情：开心 o 形→深色小口、低落下垂、平常微笑）
+  ctx.strokeStyle = "#2f3540";
+  ctx.lineWidth = 1.4;
+  ctx.lineCap = "round";
+  ctx.fillStyle = "#2f3540";
+  if (p.mouth === "open") {
+    ctx.beginPath();
+    ctx.ellipse(36, 43.4, 2.4, 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (p.mouth === "frown") {
+    ctx.beginPath();
+    ctx.moveTo(32, 42.4); ctx.quadraticCurveTo(36, 40.6, 40, 42.4);
+    ctx.stroke();
+  } else if (p.mouth === "flat") {
+    ctx.beginPath();
+    ctx.moveTo(33.5, 42); ctx.lineTo(38.5, 42);
+    ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(32.5, 41.8); ctx.quadraticCurveTo(36, 44.2, 39.5, 41.8);
+    ctx.stroke();
+  }
+
+  // 腮红（开心更浓）
+  ctx.globalAlpha = 0.45 * p.cheek;
+  ctx.fillStyle = "#f2a0b0";
+  ctx.beginPath();
+  ctx.arc(28.5, 37.5, 2.4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(43.5, 37.5, 2.4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // 职业装扮（帽子/贝雷帽/领带/眼镜通用）
+  drawCostume(ctx, opts.topic, pal);
+  // 等级胸前星章（等级色小点缀）
+  drawLevelBadge(ctx, opts.level);
 }
 
 async function buildSheet(opts: SpriteOptions): Promise<SpriteSheet> {
-  const pal = resolvePalette(opts.level);
+  const pal = resolvePalette();
   const canvas = document.createElement("canvas");
   canvas.width = SPRITE_CELL * SPRITE_COLUMNS;
   canvas.height = SPRITE_CELL * SPRITE_ROWS;
@@ -510,17 +845,39 @@ async function buildSheet(opts: SpriteOptions): Promise<SpriteSheet> {
     }
   }
   const url = canvas.toDataURL("image/png");
-  return { url, cell: SPRITE_CELL, columns: SPRITE_COLUMNS, rows: SPRITE_ROWS };
+  return { url, cellW: SPRITE_CELL, cellH: SPRITE_CELL, columns: SPRITE_COLUMNS, rows: SPRITE_ROWS, trackRow: TRACK_ROW, tracks: TRACKS };
 }
 
 /** 模块级缓存：按「等级-主题-心情」组合懒生成并缓存雪碧图；失败返回 null 由调用方回退。 */
 const sheetCache = new Map<string, Promise<SpriteSheet | null>>();
 export function getSpriteSheet(opts: SpriteOptions = {}): Promise<SpriteSheet | null> {
-  const key = `${opts.level ?? 1}-${opts.topic ?? "general"}-${opts.mood ?? "neutral"}`;
+  const key = `${opts.character ?? "classic"}-${opts.level ?? 1}-${opts.topic ?? "general"}-${opts.mood ?? "neutral"}`;
   let p = sheetCache.get(key);
   if (!p) {
     p = buildSheet(opts).catch(() => null);
     sheetCache.set(key, p);
   }
   return p;
+}
+
+// ── 鲸鱼款：静态素材雪碧图（懒生成、缓存、失败回退请求方）───────────────────
+
+let whaleSheetPromise: Promise<SpriteSheet> | null = null;
+/**
+ * 鲸鱼款助手雪碧图：直接指向随插件分发的静态素材地址，几何与轨道由
+ * 鲸鱼轨道常量描述；每次返回同一份（素材为固定形象，无差异化参数）。
+ */
+export function getWhaleSpriteSheet(): Promise<SpriteSheet> {
+  if (!whaleSheetPromise) {
+    whaleSheetPromise = Promise.resolve({
+      url: WHALE_ASSET_URL,
+      cellW: 192,
+      cellH: 208,
+      columns: WHALE_COLUMNS,
+      rows: WHALE_ROWS,
+      trackRow: WHALE_TRACK_ROW,
+      tracks: WHALE_TRACKS,
+    });
+  }
+  return whaleSheetPromise;
 }

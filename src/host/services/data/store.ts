@@ -22,7 +22,6 @@ import type { PluginSettings, Prompt, TrashItem } from "../../../types.js";
 import { clampTitle, DEFAULT_SETTINGS, TITLE_MAX_LEN } from "../../../types.js";
 import { enrichLearnedPrompt, isAiAvailable } from "../ai/ai.js";
 import { emitDataChanged } from "../sse/events.js";
-import { syncCharacterChatInto } from "../assistant/character.js";
 import {
   dbPath,
   SETTINGS_NAMESPACE,
@@ -130,6 +129,25 @@ function getDb(): DatabaseSync {
       stats     TEXT NOT NULL,
       comment   TEXT,
       createdAt INTEGER NOT NULL
+    );
+  `);
+  // 多人格数据表：自定义人格的元信息（SOUL 正文存于 character/personas/<id>/SOUL.md）。
+  next.exec(`
+    CREATE TABLE IF NOT EXISTS personas (
+      id        TEXT PRIMARY KEY,
+      name      TEXT NOT NULL,
+      enabled   INTEGER NOT NULL DEFAULT 1,
+      createdAt INTEGER NOT NULL,
+      updatedAt INTEGER NOT NULL
+    );
+  `);
+  // 工作区/项目路径 → 人格 绑定表：按目录路径记录当前启用人格。
+  // 路径即「工作区或其下项目」的绝对路径，人格解析时按「最深的祖先/相等匹配」生效。
+  next.exec(`
+    CREATE TABLE IF NOT EXISTS persona_scope_bindings (
+      path      TEXT PRIMARY KEY,
+      personaId TEXT NOT NULL,
+      updatedAt INTEGER NOT NULL
     );
   `);
   // 一次性把提示词中已有的标签同步进标签表（幂等）。
@@ -1164,6 +1182,7 @@ export function exportPrompts(ids?: string[]): Promise<PromptBackup> {
  */
 export function importPrompts(
   raw: unknown,
+  opts?: { keepUsage?: boolean },
 ): Promise<{ imported: number; updated: number; skipped: number }> {
   try {
     const list = Array.isArray(raw)
@@ -1220,8 +1239,10 @@ export function importPrompts(
         const aiRefined = p.aiRefined ? 1 : 0;
         const updatedAt = typeof p.updatedAt === "number" ? p.updatedAt : now;
         const createdAt = typeof p.createdAt === "number" ? p.createdAt : updatedAt;
-        const usageCount = typeof p.usageCount === "number" ? p.usageCount : 0;
-        const lastUsedAt = typeof p.lastUsedAt === "number" ? p.lastUsedAt : 0;
+        // 普通导入视为「新数据」：使用次数与上次使用时间一律归零（含覆盖更新的已有条），
+        // 避免沿用导出文件里的使用统计；仅备份恢复（keepUsage）才保留原次数。
+        const usageCount = opts?.keepUsage ? (typeof p.usageCount === "number" ? p.usageCount : 0) : 0;
+        const lastUsedAt = opts?.keepUsage ? (typeof p.lastUsedAt === "number" ? p.lastUsedAt : 0) : 0;
         const existing = cur.prepare("SELECT id FROM prompts WHERE id = ?").get(id);
         upsert.run(
           id,
@@ -1272,7 +1293,8 @@ export function restoreFromJson(
       cur.exec("ROLLBACK");
       throw e;
     }
-    return importPrompts(raw).then((r) => ({ imported: r.imported }));
+    // 备份恢复：保留原库的使用次数等统计（keepUsage）
+    return importPrompts(raw, { keepUsage: true }).then((r) => ({ imported: r.imported }));
   } catch (e) {
     return Promise.reject(e);
   }
@@ -1907,7 +1929,6 @@ async function readSettingsRaw(): Promise<PluginSettings> {
   const ns = await readSystemSettingsNamespace().catch(() => undefined);
   if (ns !== undefined) {
     const settings: PluginSettings = { ...DEFAULT_SETTINGS, ...ns };
-    syncCharacterChatInto(settings.applyCharacterToChat ?? false);
     return settings;
   }
   // 命名空间缺失：用默认值初始化并写入系统配置
@@ -1917,7 +1938,6 @@ async function readSettingsRaw(): Promise<PluginSettings> {
   } catch {
     /* 写入失败也照常返回设置值，不影响本次读取 */
   }
-  syncCharacterChatInto(settings.applyCharacterToChat ?? false);
   return settings;
 }
 
@@ -1944,9 +1964,136 @@ export function updateSettings(patch: Partial<PluginSettings>): Promise<PluginSe
   return readSettingsRaw().then(async (settings) => {
     const next: PluginSettings = { ...settings, ...patch };
     await writeSettingsRaw(next);
-    // 立即同步会话级人格注入开关，让勾选即刻生效。
-    // 关闭只阻止「新会话」注入，已注入的会话永久保持注入，不受中途开关影响。
-    syncCharacterChatInto(next.applyCharacterToChat ?? false);
     return next;
   });
+}
+
+// ── 多人格（自定义 SOUL）数据访问 ─────────────────────────────────────────
+
+/** 自定义人格的元信息（不包含 SOUL 正文；正文以文件形式存放于 character/personas/<id>/SOUL.md）。 */
+export interface PersonaRecord {
+  id: string;
+  name: string;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** 读取一行人格记录的辅助函数（codec 内联，避免重复写列映射）。 */
+function personaFromRow(row: {
+  id: string;
+  name: string;
+  enabled: number;
+  createdAt: number;
+  updatedAt: number;
+}): PersonaRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    enabled: row.enabled === 1,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+/** 列出全部自定义人格（按创建时间升序）。 */
+export function listPersonas(): PersonaRecord[] {
+  try {
+    const rows = getDb()
+      .prepare("SELECT id, name, enabled, createdAt, updatedAt FROM personas ORDER BY createdAt ASC")
+      .all() as Array<{ id: string; name: string; enabled: number; createdAt: number; updatedAt: number }>;
+    return rows.map(personaFromRow);
+  } catch {
+    return [];
+  }
+}
+
+/** 按 id 读取单个人格；不存在返回 undefined。 */
+export function getPersona(id: string): PersonaRecord | undefined {
+  try {
+    const row = getDb()
+      .prepare("SELECT id, name, enabled, createdAt, updatedAt FROM personas WHERE id = ?")
+      .get(id) as
+      | { id: string; name: string; enabled: number; createdAt: number; updatedAt: number }
+      | undefined;
+    return row ? personaFromRow(row) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 创建人格记录（仅元信息；SOUL 文件的写盘由 persona 服务负责）。 */
+export function createPersona(id: string, name: string): PersonaRecord {
+  const now = Date.now();
+  const db_ = getDb();
+  db_
+    .prepare("INSERT INTO personas (id, name, enabled, createdAt, updatedAt) VALUES (?, ?, 1, ?, ?)")
+    .run(id, name, now, now);
+  return { id, name, enabled: true, createdAt: now, updatedAt: now };
+}
+
+/** 更新人格元信息（name / enabled）；记录不存在返回 false。 */
+export function updatePersonaMeta(id: string, patch: { name?: string; enabled?: boolean }): boolean {
+  const existing = getPersona(id);
+  if (!existing) return false;
+  const next: PersonaRecord = {
+    ...existing,
+    name: patch.name ?? existing.name,
+    enabled: patch.enabled ?? existing.enabled,
+    updatedAt: Date.now(),
+  };
+  getDb()
+    .prepare("UPDATE personas SET name = ?, enabled = ?, updatedAt = ? WHERE id = ?")
+    .run(next.name, next.enabled ? 1 : 0, next.updatedAt, id);
+  return true;
+}
+
+/** 删除人格记录及其（工作区/项目）绑定（SOUL 文件删除由 persona 服务负责）。 */
+export function deletePersona(id: string): boolean {
+  const db_ = getDb();
+  db_.prepare("DELETE FROM personas WHERE id = ?").run(id);
+  db_.prepare("DELETE FROM persona_scope_bindings WHERE personaId = ?").run(id);
+  return true;
+}
+
+/** 记录某路径（工作区或其下项目）当前绑定的人格（personaId 为 'default' 或空表示使用全局默认人格）。 */
+export function setScopePersonaBinding(path: string, personaId: string): void {
+  const db_ = getDb();
+  db_
+    .prepare(
+      "INSERT INTO persona_scope_bindings (path, personaId, updatedAt) VALUES (?, ?, ?) ON CONFLICT(path) DO UPDATE SET personaId = excluded.personaId, updatedAt = excluded.updatedAt",
+    )
+    .run(path, personaId, Date.now());
+}
+
+/** 读取某路径精确绑定的人格 id；无精确记录返回空串（视为默认人格）。 */
+export function getScopeBoundPersonaId(path: string): string {
+  try {
+    const row = getDb()
+      .prepare("SELECT personaId FROM persona_scope_bindings WHERE path = ?")
+      .get(path) as { personaId: string } | undefined;
+    return row?.personaId ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** 列出全部路径 → 人格 绑定（personaId 均为非空有效 id，不含 'default'）。 */
+export function listScopeBindings(): Array<{ path: string; personaId: string }> {
+  try {
+    return getDb()
+      .prepare("SELECT path, personaId FROM persona_scope_bindings")
+      .all() as Array<{ path: string; personaId: string }>;
+  } catch {
+    return [];
+  }
+}
+
+/** 清空某路径的人格绑定（回到默认人格）。 */
+export function clearScopePersonaBinding(path: string): void {
+  try {
+    getDb().prepare("DELETE FROM persona_scope_bindings WHERE path = ?").run(path);
+  } catch {
+    /* 删除失败静默 */
+  }
 }

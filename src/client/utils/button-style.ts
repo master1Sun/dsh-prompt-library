@@ -13,11 +13,12 @@ export const PL_BUTTON_CSS = `
 .pl-btn{display:inline-flex;align-items:center;justify-content:center;gap:4px;border:none;border-radius:18px;cursor:pointer;font-size:14px;line-height:22px;color:var(--dsw-alias-label-primary,#f2f6fc);background:transparent;padding:0 14px;font-family:inherit;white-space:nowrap}
 .pl-btn:disabled{cursor:not-allowed;opacity:.4}
 .pl-btn--md{height:36px}
-.pl-btn--sm{height:28px;font-size:12px;line-height:18px;padding:0 10px;border-radius:14px}
+.pl-btn--sm{height:28px;font-size:12px;line-height:18px;padding:0 10px;border-radius:14px;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);background:0 0}
 .pl-btn--primary:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
 .pl-btn--primary:active:not(:disabled){background:var(--dsw-alias-interactive-bg-active)}
 .pl-btn--ghost:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
 .pl-btn--ghost:active:not(:disabled){background:var(--dsw-alias-interactive-bg-active)}
+.pl-btn.pl-btn--no-border{border:none}
 `;
 
 /** 生成官方按钮的组合样式类名。size 默认 sm。 */

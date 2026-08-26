@@ -12,15 +12,17 @@
  */
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
-import { plBtn } from "../../utils/button-style.js";
 import { type PLT } from "../../i18n/i18n.js";
-import { getAssistantStatus, type AssistantLevel, type AssistantStatus } from "../../services/api.js";
+import {
+  getAssistantStatus,
+  type AssistantAchievement,
+  type AssistantLevel,
+  type AssistantStatus,
+} from "../../services/api.js";
 import { getTone, useThemeSync, type ThemeTone } from "../../utils/theme.js";
+import { DialogCloseButton } from "../common/DialogCloseButton.js";
+import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../../utils/dialog-style.js";
 import { LEVEL_COLORS } from "../../utils/sprite.js";
-
-const MONO =
-  'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif)';
 
 interface Props {
   /** 是否显示。 */
@@ -40,7 +42,7 @@ function currentLang(): "zh" | "en" {
   return raw.toLowerCase().startsWith("en") ? "en" : "zh";
 }
 
-/** 等级对应的分阶色（与小人身体/胸前星章同源，QQ 式成长色阶）。 */
+/** 等级对应的分阶色（与助手身体/胸前星章同源，QQ 式成长色阶）。 */
 function levelColor(level: number): string {
   return LEVEL_COLORS[Math.min(Math.max(level, 1), LEVEL_COLORS.length) - 1];
 }
@@ -104,8 +106,32 @@ function LevelRing({ level, TONE }: { level: AssistantLevel; TONE: ThemeTone }):
   );
 }
 
-/** 成就图标：已解锁 = 金色奖杯，未解锁 = 灰色锁。 */
-function MedalIcon({ achieved, TONE }: { achieved: boolean; TONE: ThemeTone }): ReactNode {
+/** 稀有度 → 主色（奖牌渐变主色 + 高光 + 边框 + 阴影）。 */
+const RARITY_COLORS: Record<
+  string,
+  { base: string; high: string; deep: string; border: string; shadow: string; text: string }
+> = {
+  common: { base: "#94a3b8", high: "#cbd5e1", deep: "#64748b", border: "rgba(148,163,184,.55)", shadow: "rgba(148,163,184,.28)", text: "#94a3b8" },
+  rare: { base: "#3b82f6", high: "#93c5fd", deep: "#1d4ed8", border: "rgba(59,130,246,.55)", shadow: "rgba(59,130,246,.35)", text: "#3b82f6" },
+  epic: { base: "#8b5cf6", high: "#c4b5fd", deep: "#6d28d9", border: "rgba(139,92,246,.55)", shadow: "rgba(139,92,246,.35)", text: "#8b5cf6" },
+  legendary: { base: "#f59e0b", high: "#fde68a", deep: "#b45309", border: "rgba(245,158,11,.6)", shadow: "rgba(245,158,11,.38)", text: "#d97706" },
+};
+
+/** 稀有度标签文案（映射到 i18n 键）。 */
+function rarityLabel(rarity: string, t: PLT): string {
+  const key =
+    rarity === "legendary"
+      ? "pl.rarity.legendary"
+      : rarity === "epic"
+        ? "pl.rarity.epic"
+        : rarity === "rare"
+          ? "pl.rarity.rare"
+          : "pl.rarity.common";
+  return t(key);
+}
+
+/** 成就图标：已解锁 = 该稀有度的奖杯，未解锁 = 灰色锁。 */
+function RarityMedal({ achieved, TONE }: { achieved: boolean; TONE: ThemeTone }): ReactNode {
   const color = achieved ? "#fff" : TONE.quiet;
   return (
     <svg width="18" height="18" viewBox="0 0 16 16" style={{ flexShrink: 0, color }} aria-hidden="true">
@@ -132,6 +158,123 @@ function MedalIcon({ achieved, TONE }: { achieved: boolean; TONE: ThemeTone }): 
         </>
       )}
     </svg>
+  );
+}
+
+/** 单条成就卡片：稀有度奖牌 + 标题 / 描述 + 稀有度徽标 + 解锁进度条。 */
+function AchievementCard({ achievement, t, TONE }: { achievement: AssistantAchievement; t: PLT; TONE: ThemeTone }): ReactNode {
+  const a = achievement;
+  const c = RARITY_COLORS[a.rarity] ?? RARITY_COLORS.common;
+  const pct = a.target > 0 ? Math.max(0, Math.min(100, (a.progress / a.target) * 100)) : 0;
+  const achievedColor = `radial-gradient(circle at 35% 28%, ${c.high}, ${c.base} 78%)`;
+  return (
+    <li
+      title={a.achieved ? rarityLabel(a.rarity, t) + " · +" + a.points : t("pl.achievements.lockedHint")}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        fontSize: 12,
+        lineHeight: 1.5,
+        padding: "9px 10px",
+        borderRadius: 9,
+        background: TONE.row,
+        border: `1px solid ${a.achieved ? c.border : TONE.border}`,
+        opacity: a.achieved ? 1 : 0.72,
+        transition: "transform .16s ease, box-shadow .16s ease",
+      }}
+    >
+      {/* 奖章：按稀有度渐变色圆牌，未解锁灰色 */}
+      <div
+        style={{
+          width: 34,
+          height: 34,
+          borderRadius: "50%",
+          flexShrink: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: a.achieved ? achievedColor : TONE.panel,
+          border: `1px solid ${a.achieved ? c.border : TONE.border}`,
+          boxShadow: a.achieved ? `0 2px 7px ${c.shadow}` : "none",
+        }}
+      >
+        <RarityMedal achieved={a.achieved} TONE={TONE} />
+      </div>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+          <span
+            style={{
+              fontWeight: 600,
+              color: a.achieved ? TONE.text : TONE.quiet,
+              fontSize: 12.5,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {a.title}
+          </span>
+          {a.achieved && (
+            <span
+              style={{
+                flexShrink: 0,
+                fontSize: 10,
+                lineHeight: "16px",
+                padding: "0 5px",
+                borderRadius: 8,
+                fontWeight: 700,
+                color: "#fff",
+                background: `linear-gradient(135deg, ${c.high}, ${c.deep})`,
+              }}
+            >
+              +{a.points}
+            </span>
+          )}
+        </div>
+        <div
+          style={{
+            color: a.achieved ? TONE.muted : TONE.quiet,
+            fontSize: 11.5,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {a.desc}
+        </div>
+        {/* 解锁进度条：展示 progress / target */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 5 }}>
+          <div
+            style={{
+              flex: 1,
+              height: 5,
+              borderRadius: 3,
+              background: TONE.panel,
+              border: `1px solid ${TONE.border}`,
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                width: `${pct}%`,
+                height: "100%",
+                borderRadius: 3,
+                background: a.achieved ? `linear-gradient(90deg, ${c.base}, ${c.high})` : TONE.accent,
+                transition: "width .3s ease",
+              }}
+            />
+          </div>
+          <span style={{ fontSize: 10.5, color: TONE.quiet, fontWeight: 600, whiteSpace: "nowrap" }}>
+            {a.achieved
+              ? "100%"
+              : t("pl.achievements.progress")
+                  .replace("{progress}", String(a.progress))
+                  .replace("{target}", String(a.target))}
+          </span>
+        </div>
+      </div>
+    </li>
   );
 }
 
@@ -170,37 +313,24 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
   const level = status?.level;
   const achievements = status?.achievements ?? [];
   const achievedCount = achievements.filter((a) => a.achieved).length;
+  const summary = status?.achievementSummary;
+  const overallPct = summary && summary.total > 0 ? Math.round((summary.unlocked / summary.total) * 100) : 0;
 
   return createPortal(
     <div
       role="dialog"
       aria-modal="true"
       aria-label={t("pl.achievements.title")}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 2147483647,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "rgba(0,0,0,0.35)",
-      }}
+      className={PL_DIALOG_OVERLAY}
     >
+      <style>{PL_DIALOG_CSS}</style>
       <div
         onClick={(e) => e.stopPropagation()}
+        className={PL_DIALOG}
         style={{
           width: 560,
           maxWidth: "calc(100vw - 40px)",
           maxHeight: "min(660px, calc(100vh - 40px))",
-          boxSizing: "border-box",
-          display: "flex",
-          flexDirection: "column",
-          background: TONE.panel,
-          border: `1px solid ${TONE.borderStrong}`,
-          borderRadius: 12,
-          padding: "18px 20px",
-          color: TONE.text,
-          fontFamily: MONO,
         }}
       >
         {/* 标题行 + 右上角关闭按钮 */}
@@ -208,17 +338,7 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
           <strong style={{ flex: 1, fontSize: 15, fontWeight: 600, color: TONE.text }}>
             {t("pl.achievements.title")}
           </strong>
-          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={onClose}>
-            <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
-              <path
-                d="M4 4l8 8M12 4l-8 8"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-              />
-            </svg>
-          </Button>
+          <DialogCloseButton onClick={onClose} label={t("pl.close")} />
         </div>
 
         {/* 内容区：超出最大高度时独立滚动 */}
@@ -227,6 +347,8 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
             flex: 1,
             minHeight: 0,
             overflow: "auto",
+            /* 内容与滚动条之间预留 10px 间距（与官方一致） */
+            paddingRight: 10,
             display: "flex",
             flexDirection: "column",
             gap: 16,
@@ -234,6 +356,91 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
             paddingBottom: 4,
           }}
         >
+          {/* 成长称号总览：称号 + 达成数 + 成就点 + 总进度 */}
+          {summary && (
+            <section
+              style={{
+                background: TONE.row,
+                border: `1px solid ${TONE.border}`,
+                borderRadius: 12,
+                padding: "12px 14px",
+                display: "flex",
+                flexDirection: "column",
+                gap: 10,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                {/* 称号徽标 */}
+                <div
+                  style={{
+                    flexShrink: 0,
+                    padding: "3px 10px",
+                    borderRadius: 12,
+                    fontSize: 12.5,
+                    fontWeight: 700,
+                    color: "#fff",
+                    background:
+                      summary.rankKey === "legend"
+                        ? "linear-gradient(135deg, #fde68a, #d97706)"
+                        : summary.rankKey === "star"
+                          ? "linear-gradient(135deg, #c4b5fd, #7c3aed)"
+                          : summary.rankKey === "collector"
+                            ? "linear-gradient(135deg, #93c5fd, #2563eb)"
+                            : summary.rankKey === "explorer"
+                              ? "linear-gradient(135deg, #6ee7b7, #059669)"
+                              : "linear-gradient(135deg, #cbd5e1, #64748b)",
+                  }}
+                >
+                  {summary.rank}
+                </div>
+                <span style={{ flex: 1 }} />
+                {/* 达成数与成就点 */}
+                <span style={{ fontSize: 12, color: TONE.quiet, fontWeight: 500 }}>
+                  {t("pl.achievements.collected").replace("{n}", String(summary.unlocked))} · {summary.unlocked} /{" "}
+                  {summary.total}
+                </span>
+                <span
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: summary.earnedPoints > 0 ? "#d97706" : TONE.quiet,
+                  }}
+                >
+                  {t("pl.achievements.points")} {summary.earnedPoints} / {summary.maxPoints}
+                </span>
+              </div>
+              {/* 总收集进度条 */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div
+                  style={{
+                    flex: 1,
+                    height: 8,
+                    borderRadius: 5,
+                    background: TONE.panel,
+                    border: `1px solid ${TONE.border}`,
+                    overflow: "hidden",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: `${overallPct}%`,
+                      height: "100%",
+                      borderRadius: 5,
+                      background:
+                        overallPct >= 100
+                          ? "linear-gradient(90deg, #fde68a, #f59e0b)"
+                          : "linear-gradient(90deg, #93c5fd, #8b5cf6, #f59e0b)",
+                      transition: "width .4s ease",
+                    }}
+                  />
+                </div>
+                <span style={{ fontSize: 11.5, color: TONE.quiet, fontWeight: 600, whiteSpace: "nowrap" }}>
+                  {overallPct}%
+                </span>
+              </div>
+            </section>
+          )}
+
           {/* 等级区块：QQ 风格圆形徽章 + 升级进度 + 回落提示 */}
           <section>
             <div style={sectionTitleStyle}>{t("pl.achievements.levelLabel")}</div>
@@ -306,6 +513,36 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
                 </div>
               </div>
             )}
+            {/* 满级解锁「词库助手」开关的激励提示：未满级激励升级，满级提示已解锁 */}
+            {level && (
+              <div
+                style={{
+                  marginTop: 10,
+                  fontSize: 12,
+                  lineHeight: 1.6,
+                  padding: "9px 11px",
+                  borderRadius: 7,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 7,
+                  background: TONE.row,
+                  border: "1px solid transparent",
+                  borderColor:
+                    level.next > level.current
+                      ? TONE.accent
+                      : "var(--dsw-alias-state-success-primary, #78dda0)",
+                  color:
+                    level.next > level.current
+                      ? TONE.accent
+                      : "var(--dsw-alias-state-success-primary, #78dda0)",
+                  fontWeight: 600,
+                }}
+              >
+                {level.next > level.current
+                  ? t("pl.achievements.unlockAssistant")
+                  : t("pl.achievements.unlockAssistantDone")}
+              </div>
+            )}
           </section>
 
           {/* 成就奖牌墙：标题行含解锁计数 */}
@@ -359,79 +596,11 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
                 }}
               >
                 {achievements.map((a) => (
-                  <li
-                    key={a.id}
-                    title={a.achieved ? undefined : t("pl.achievements.lockedHint")}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                      fontSize: 12,
-                      lineHeight: 1.5,
-                      padding: "9px 10px",
-                      borderRadius: 9,
-                      background: TONE.row,
-                      border: `1px solid ${a.achieved ? "rgba(245, 158, 11, .4)" : TONE.border}`,
-                      opacity: a.achieved ? 1 : 0.72,
-                      transition: "transform .16s ease, box-shadow .16s ease",
-                    }}
-                  >
-                    {/* 奖牌：已解锁金色渐变圆牌 + 奖杯，未解锁灰色圆牌 + 锁 */}
-                    <div
-                      style={{
-                        width: 34,
-                        height: 34,
-                        borderRadius: "50%",
-                        flexShrink: 0,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        background: a.achieved
-                          ? "radial-gradient(circle at 35% 28%, #fde68a, #f59e0b 78%)"
-                          : TONE.panel,
-                        border: `1px solid ${a.achieved ? "rgba(245, 158, 11, .6)" : TONE.border}`,
-                        boxShadow: a.achieved ? "0 2px 7px rgba(245, 158, 11, .35)" : "none",
-                      }}
-                    >
-                      <MedalIcon achieved={a.achieved} TONE={TONE} />
-                    </div>
-                    <div style={{ minWidth: 0 }}>
-                      <div
-                        style={{
-                          fontWeight: 600,
-                          color: a.achieved ? TONE.text : TONE.quiet,
-                          fontSize: 12.5,
-                          whiteSpace: "nowrap",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                        }}
-                      >
-                        {a.title}
-                      </div>
-                      <div
-                        style={{
-                          color: a.achieved ? TONE.muted : TONE.quiet,
-                          fontSize: 11.5,
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {a.desc}
-                      </div>
-                    </div>
-                  </li>
+                  <AchievementCard key={a.id} achievement={a} t={t} TONE={TONE} />
                 ))}
               </ul>
             )}
           </section>
-        </div>
-
-        {/* 底部按钮：仅「知道了」可关闭 */}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, paddingTop: 12, flexShrink: 0 }}>
-          <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={onClose}>
-            {t("pl.announce.dismiss")}
-          </Button>
         </div>
       </div>
     </div>,

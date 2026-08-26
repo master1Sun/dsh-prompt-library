@@ -7,7 +7,7 @@
 //                    react + react/jsx-runtime + @deepseek-ai/* 在运行时通过
 //                    factory 的 `require` 解析（即不打入 bundle）。
 import { build as esbuildBuild } from "esbuild";
-import { rm, mkdir, readFile, writeFile } from "node:fs/promises";
+import { cp, rm, mkdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -104,6 +104,14 @@ await esbuildBuild({
   sourcemap: true,
   logLevel: "info",
 });
+
+// 复制随插件分发的静态素材（助手小人雪碧图等）到 lib/assets，供 host 路由按字节返回。
+const srcAssets = join(root, "assets");
+try {
+  await cp(srcAssets, join(libDir, "assets"), { recursive: true });
+} catch {
+  /* 无素材目录时忽略 */
+}
 
 // 一个小标记，让 `dsh --dump-config` 的消费者知道这是构建过的。
 await writeFile(

@@ -4,9 +4,19 @@
  * host 路由的薄封装层；每个函数在成功时返回 `data` 字段，
  * 在非 ok 信封或传输失败时抛出异常。
  */
-import type { PluginSettings, Prompt, PromptInput, PromptPatch, TrashItem } from "../../types.js";
+import type {
+  PersonaBinding,
+  PersonaView,
+  PluginSettings,
+  Prompt,
+  PromptInput,
+  PromptPatch,
+  ScopeNode,
+  TrashItem,
+} from "../../types.js";
 
 const BASE = "/api/prompt-library/prompts";
+const PERSONAS_BASE = "/api/prompt-library/personas";
 
 interface ApiResponse<T> {
   ok: boolean;
@@ -260,7 +270,7 @@ export function getAiSelectables(): Promise<ClientAiSelectable[]> {
   return send<ClientAiSelectable[]>("GET", "/api/prompt-library/ai/providers");
 }
 
-/** 请求 AI 生成词库功能简介（5 句，供浮动小人气泡轮询）；失败时调用方回退到内置简介。 */
+/** 请求 AI 生成词库功能简介（5 句，供浮动助手气泡轮询）；失败时调用方回退到内置简介。 */
 export function genIntro(lang: "zh" | "en"): Promise<{ lines: string[] }> {
   return send<{ lines: string[] }>("POST", "/api/prompt-library/ai/intro", { lang });
 }
@@ -303,6 +313,46 @@ export function updateSettings(patch: Partial<PluginSettings>): Promise<PluginSe
   return send<PluginSettings>("PUT", SETTINGS_BASE, patch);
 }
 
+// ── 多人格管理 ──────────────────────────────────────────────────────────
+
+/** 列出全部人格（含内置默认人格，排最前）。 */
+export function listPersonas(): Promise<PersonaView[]> {
+  return send<PersonaView[]>("GET", PERSONAS_BASE);
+}
+
+/** 新建自定义人格（自动写入默认 SOUL 文件），返回完整视图。 */
+export function createPersona(name: string): Promise<PersonaView> {
+  return send<PersonaView>("POST", PERSONAS_BASE, { name });
+}
+
+/** 更新人格：可改名称 / 启用状态 / SOUL 正文（默认人格的名称与正文只读，更新会被 host 拒绝）。 */
+export function updatePersona(
+  id: string,
+  patch: { name?: string; enabled?: boolean; content?: string },
+): Promise<PersonaView> {
+  return send<PersonaView>("PUT", `${PERSONAS_BASE}/${encodeURIComponent(id)}`, patch);
+}
+
+/** 删除自定义人格（删除记录、会话绑定与 SOUL 文件；默认人格不可删）。 */
+export function deletePersona(id: string): Promise<{ id: string }> {
+  return send<{ id: string }>("DELETE", `${PERSONAS_BASE}/${encodeURIComponent(id)}`);
+}
+
+/** 读取工作区/项目树（节点自带精确绑定的人格 id）。 */
+export function listScopeTree(): Promise<ScopeNode[]> {
+  return send<ScopeNode[]>("GET", `${PERSONAS_BASE}/scopes`);
+}
+
+/** 读取某路径精确绑定的自定义人格 id（无绑定返回空串，表示使用默认人格）。 */
+export function getPersonaBinding(path: string): Promise<PersonaBinding> {
+  return send<PersonaBinding>("GET", `${PERSONAS_BASE}/scopes/binding?path=${encodeURIComponent(path)}`);
+}
+
+/** 设置某路径绑定的人格（传入 'default'/空串 → 回落默认/上层），返回实际生效的人格 id。 */
+export function setPersonaBinding(path: string, personaId: string): Promise<PersonaBinding> {
+  return send<PersonaBinding>("PUT", `${PERSONAS_BASE}/scopes/binding`, { path, personaId });
+}
+
 // ── 词库助手活动状态 ────────────────────────────────────────────────────
 
 /** 词库助手活动阶段（与 host activity.ts 保持一致）。 */
@@ -318,7 +368,7 @@ export type ActivityPhase =
 /** 词库助手活动快照。 */
 export interface ActivitySnapshot {
   phase: ActivityPhase;
-  /** 是否有正在进行的会话；无会话时小人应回到 idle。 */
+  /** 是否有正在进行的会话；无会话时助手应回到 idle。 */
   sessionActive: boolean;
   /** 当前聊天主题风格（code/writing/translate/qa/general），由 host 分类。 */
   topic?: string;
@@ -326,7 +376,7 @@ export interface ActivitySnapshot {
   text?: string;
 }
 
-/** 读取词库助手当前活动阶段与阶段文案（host 状态机投影官方会话事件，驱动小人动画）。 */
+/** 读取词库助手当前活动阶段与阶段文案（host 状态机投影官方会话事件，驱动助手动画）。 */
 export function getActivity(lang?: string): Promise<ActivitySnapshot> {
   const q = lang ? `?lang=${encodeURIComponent(lang)}` : "";
   return send<ActivitySnapshot>("GET", `/api/prompt-library/activity${q}`);
@@ -352,12 +402,36 @@ export interface AssistantLevel {
   inactiveDays?: number;
 }
 
-/** 词库助手单条成就。 */
+/** 词库助手单条成就（含稀有度、进度与分值）。 */
 export interface AssistantAchievement {
   id: string;
   title: string;
   desc: string;
   achieved: boolean;
+  /** 稀有度：common/rare/epic/legendary。 */
+  rarity: "common" | "rare" | "epic" | "legendary";
+  /** 解锁可得分值。 */
+  points: number;
+  /** 当前进度值。 */
+  progress: number;
+  /** 达成目标值。 */
+  target: number;
+}
+
+/** 词库助手成就汇总（称号 + 达成数 + 成就点）。 */
+export interface AssistantAchievementSummary {
+  /** 成长称号。 */
+  rank: string;
+  /** 成长称号档位标识。 */
+  rankKey: "wanderer" | "explorer" | "collector" | "star" | "legend";
+  /** 已解锁成就数。 */
+  unlocked: number;
+  /** 成就总数。 */
+  total: number;
+  /** 已获得成就点。 */
+  earnedPoints: number;
+  /** 成就点上限。 */
+  maxPoints: number;
 }
 
 /** 词库助手一条彩蛋文案。 */
@@ -370,6 +444,7 @@ export interface AssistantEasterEgg {
 export interface AssistantStatus {
   level: AssistantLevel;
   achievements: AssistantAchievement[];
+  achievementSummary: AssistantAchievementSummary;
   easterEgg: AssistantEasterEgg | null;
 }
 

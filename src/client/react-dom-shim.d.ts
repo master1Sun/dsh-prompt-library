@@ -1,7 +1,7 @@
 /**
  * react-dom 运行时由 DSH 模块加载器注入（官方 client 组件同样 require("react-dom")），
  * 但本插件未安装 @types/react-dom，这里提供仅本插件用到的 createPortal 类型，
- * 用于把词库助手小人渲染到 document.body（既显示在最上层，又保留 React 合成事件）。
+ * 用于把词库助手助手渲染到 document.body（既显示在最上层，又保留 React 合成事件）。
  */
 declare module "react-dom" {
   import type { ReactNode, ReactPortal } from "react";

@@ -48,7 +48,7 @@ await mkdir(dstLib, { recursive: true });
 const files = await readdir(srcLib);
 let copied = 0;
 for (const f of files) {
-  await cp(join(srcLib, f), join(dstLib, f), { force: true });
+  await cp(join(srcLib, f), join(dstLib, f), { force: true, recursive: true });
   copied++;
 }
 

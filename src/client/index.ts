@@ -21,13 +21,11 @@ import { PromptLibraryButton } from "./components/chat/PromptLibraryButton.js";
 import { AIPolishButton } from "./components/chat/AIPolishButton.js";
 import { ContextRecommendations } from "./components/chat/ContextRecommendations.js";
 import { SettingsSection } from "./components/settings/SettingsSection.js";
-import { SettingsDataSection } from "./components/settings/SettingsDataSection.js";
 import { en, NS, zh } from "./i18n/i18n.js";
 import { startDataChangedSubscription } from "./services/data-sync.js";
 import {
   registerSettingsNavIcon,
   SETTINGS_NAV_CSS,
-  SETTINGS_NAV_MARKER_DATA,
   SETTINGS_NAV_MARKER_PROMPT,
 } from "./utils/settings-nav-icon.js";
 
@@ -129,18 +127,12 @@ export function apply(ctx: ClientCtx): void {
         document.head.appendChild(style);
       }
       // 给设置导航中文本为「词库设置」的按钮打标记，替换为提示词图标
-      // 给文本为「词库管理」的按钮打标记，替换为数据库图标
       const disposePromptMarker = registerSettingsNavIcon(
         () => t("pl.setSectionTitle"),
         SETTINGS_NAV_MARKER_PROMPT,
       );
-      const disposeDataMarker = registerSettingsNavIcon(
-        () => t("pl.set.dataSection"),
-        SETTINGS_NAV_MARKER_DATA,
-      );
       return () => {
         disposePromptMarker();
-        disposeDataMarker();
         style?.remove();
       };
     },
@@ -158,20 +150,6 @@ export function apply(ctx: ClientCtx): void {
         label: () => t("pl.setSectionTitle"),
       },
       SettingsSection as (props: unknown) => ReactNode,
-    ),
-  );
-
-  // 注册数据管理面板（独立设置槽位）：导入导出 + 标签集中管理
-  ctx.slots.inject("settings.section", () =>
-    ctx.slots.register(
-      {
-        name: "settings.section",
-        id: "prompt-library-data",
-        order: 101,
-        locale: NS,
-        label: () => t("pl.set.dataSection"),
-      },
-      SettingsDataSection as (props: unknown) => ReactNode,
     ),
   );
 }

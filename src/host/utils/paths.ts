@@ -48,6 +48,16 @@ export function dbPath(): string {
   return join(dbDir(), "prompts.db");
 }
 
+/** 宿主存储目录：~/.dsh/storages/（workspace.json 等宿主级数据） */
+export function storageDir(): string {
+  return join(dshHome(), "storages");
+}
+
+/** 宿主工作区清单文件：~/.dsh/storages/workspace.json */
+export function workspaceStorePath(): string {
+  return join(storageDir(), "workspace.json");
+}
+
 /** 系统设置文件：~/.dsh/settings.yaml（插件设置写入其 `prompt-library` 命名空间）。 */
 export function systemSettingsPath(): string {
   return join(dshHome(), "settings.yaml");
@@ -76,6 +86,16 @@ export function characterDir(): string {
 /** AI 人格文件路径：~/.dsh/prompt-library/character/SOUL.md */
 export function soulPath(): string {
   return join(characterDir(), "SOUL.md");
+}
+
+/** 多人格目录：~/.dsh/prompt-library/character/personas/（每个自定义人格一个子目录） */
+export function personasDir(): string {
+  return join(characterDir(), "personas");
+}
+
+/** 某个人格（非默认）的 SOUL 文件路径：~/.dsh/prompt-library/character/personas/<id>/SOUL.md */
+export function personaSoulPath(personaId: string): string {
+  return join(personasDir(), personaId, "SOUL.md");
 }
 
 // ── 会话上下文（harness 文件化）────────────────────────────────────────────

@@ -79,6 +79,48 @@ export interface PromptPatch {
   lastUsedAt?: number;
 }
 
+/** 人格元信息（来自 SQLite personas 表）。 */
+export interface PersonaMeta {
+  /** 稳定标识（UUID）；保留 id `default` 表示内置默认人格。 */
+  id: string;
+  /** 人格名称（可编辑）。 */
+  name: string;
+  /** 是否启用（禁用的人格不会被按会话注入）。 */
+  enabled: boolean;
+  /** 创建时间的纪元毫秒时间戳。 */
+  createdAt: number;
+  /** 最后一次修改的纪元毫秒时间戳。 */
+  updatedAt: number;
+}
+
+/** 面向 UI 的完整人格视图：元信息 + SOUL 正文 + 是否内置默认。 */
+export interface PersonaView extends PersonaMeta {
+  /** 是否为内置默认人格（不可删除/重命名）。 */
+  isDefault: boolean;
+  /** SOUL 正文（默认人格存于 character/SOUL.md，自定义人格存于 character/personas/<id>/SOUL.md）。 */
+  content: string;
+}
+
+/** 工作区/项目路径 → 人格 绑定视图（无绑定返回空串表示「使用默认人格」）。 */
+export interface PersonaBinding {
+  /** 该路径精确绑定的自定义人格 id；空串表示未精确绑定（回落默认/上层）。 */
+  personaId: string;
+}
+
+/** 工作区/项目树节点：供人格管理的「树形选择工作区/项目并绑定」使用。 */
+export interface ScopeNode {
+  /** 绝对路径（绑定的 key）。 */
+  path: string;
+  /** 展示名（工作区用其标题，项目用目录名）。 */
+  title: string;
+  /** 节点类型。 */
+  kind: "workspace" | "project";
+  /** 该层精确绑定的人格 id（'' 表示未精确绑定，回落默认/上层）。 */
+  bound: string;
+  /** 子项目节点（工作区下）或空数组（项目无下级）。 */
+  children: ScopeNode[];
+}
+
 /** 插件设置。 */
 export interface PluginSettings {
   /** 是否开启自动学习。 */
@@ -99,8 +141,12 @@ export interface PluginSettings {
   rightPanelEnabled: boolean;
   /** 是否在聊天框工具栏显示词库按钮。 */
   showComposerButton: boolean;
+  /** 词库按钮用纯图标显示（隐藏文字标签，仅保留图标）。 */
+  composerButtonIconOnly: boolean;
   /** 是否在聊天框工具栏显示 AI 润色按钮。 */
   showAIPolishButton: boolean;
+  /** AI 润色按钮用纯图标显示（隐藏文字标签，仅保留图标）。 */
+  aiPolishButtonIconOnly: boolean;
   /** 是否启用输入 ~ 触发词库选择。 */
   tildaTriggerEnabled: boolean;
   /** 提示词最大存储数量。 */
@@ -117,20 +163,24 @@ export interface PluginSettings {
   aiProvider: string;
   /** AI 调用使用的模型 id（留空则自动发现）。 */
   aiModel: string;
-  /** 小人提示间隔（秒）：未悬停时自动冒气泡的频率。 */
+  /** 助手提示间隔（秒）：未悬停时自动冒气泡的频率。 */
   personTipInterval: number;
-  /** 小人提示显示时长（秒）：自动冒气泡持续展示的时间。 */
+  /** 助手提示显示时长（秒）：自动冒气泡持续展示的时间。 */
   personTipDuration: number;
-  /** [实验室功能] 勾选后，把人格文件注入整个聊天会话，约束整个对话（后果自负）。 */
-  applyCharacterToChat: boolean;
-  /** [实验室功能] 是否自动更新：开启后后台发现有新版本即自动安装，无需手动干预。 */
+  /** 是否自动更新：开启后后台发现有新版本即自动安装，无需手动干预。 */
   autoUpdateEnabled: boolean;
   /** 是否启用公告弹窗（词库助手右键菜单「公告」打开使用手册 + 版本通告）。仅当词库助手显示时可开关，默认开启。 */
   announcementEnabled: boolean;
-  /** 是否启用词库助手等级显示（等级助手）：控制小人等级徽章与右键菜单「成就」入口。默认开启。 */
+  /** 是否启用词库助手等级显示（等级助手）：控制助手等级徽章与右键菜单「成就」入口。默认开启。 */
   levelEnabled: boolean;
-  /** 是否启用词库助手「我的等级公告」：新成就解锁时的小人气泡播报。默认开启。 */
+  /** 是否启用词库助手「我的等级公告」：新成就解锁时的助手气泡播报。默认开启。 */
   levelAnnouncementEnabled: boolean;
+  /** 是否启用「人格管理」入口（词库助手右键菜单项）。仅当词库助手显示时可开关，默认开启。 */
+  personaEnabled: boolean;
+  /** 是否启用「看板」入口（词库助手右键菜单项，打开统计可视化面板）。仅当词库助手显示时可开关，默认开启。 */
+  dashboardEnabled: boolean;
+  /** 是否启用「数据管理」入口（词库助手右键菜单项，含导入导出/标签/回收站）。仅当词库助手显示时可开关，默认开启。 */
+  dataManagementEnabled: boolean;
   /** 是否启用自动备份（启动时及按周期把数据库备份到 backup 目录）。 */
   backupEnabled: boolean;
   /** 自动备份保留的备份文件份数（超出时自动清理最旧的）。 */
@@ -139,37 +189,44 @@ export interface PluginSettings {
   backupSchedule: "daily" | "weekly" | "monthly";
   /** 自动备份文件格式：db（复制数据库文件）/ json（导出为 JSON 备份文件）。 */
   backupFormat: "db" | "json";
+  /** 词库助手助手形象：classic（经典米兔）/ husky（哈士奇）/ whale（鲸鱼款）。 */
+  assistantCharacter: "classic" | "husky" | "whale";
 }
 
 /** 设置的默认值。 */
 export const DEFAULT_SETTINGS: PluginSettings = {
-  autoLearnEnabled: false,
-  autoLearnTag: "auto-learned",
-  autoLearnMinLength: 60,
-  autoLearnManualConfirm: false,
-  panelWidth: 360,
-  panelHeight: 500,
-  assistantEnabled: true,
-  rightPanelEnabled: true,
-  showComposerButton: true,
-  showAIPolishButton: true,
-  tildaTriggerEnabled: true,
-  maxPromptCount: 100,
-  hoverDetailEnabled: false,
-  selectionAddEnabled: false,
-  contextRecommendEnabled: true,
-  aiEnrichEnabled: false,
-  aiProvider: "",
-  aiModel: "",
-  personTipInterval: 10, // 10 秒
-  personTipDuration: 20, // 20 秒
-  applyCharacterToChat: false,
-  autoUpdateEnabled: true, // 自动更新默认开启：发现新版本后台自动安装
-  announcementEnabled: true, // 公告默认开启：词库助手右键菜单展示「公告」入口（使用手册与版本通告）
-  levelEnabled: true, // 等级助手默认开启：小人展示等级徽章，右键菜单含「成就」入口
-  levelAnnouncementEnabled: true, // 我的等级公告默认开启：新成就解锁时小人气泡播报
-  backupEnabled: true, // 自动备份默认开启
-  backupRetention: 15, // 默认保留最近 5 份备份
-  backupSchedule: "weekly", // 默认每天备份一次
-  backupFormat: "db", // 默认备份为数据库文件（.db）
+  autoLearnTag: "auto-learned", // 自动学习提示词使用的默认标签
+  autoLearnMinLength: 60, // 自动学习的最小字符长度（少于该长度不学习）
+  panelWidth: 360, // 右侧面板宽度（px）
+  panelHeight: 500, // 右侧面板高度（px）
+  maxPromptCount: 100, // 提示词最大存储数量（超出时按使用次数/更新时间淘汰）
+  personTipInterval: 10, // 助手未悬停时自动冒气泡的间隔（秒）
+  personTipDuration: 20, // 自动冒气泡的持续显示时长（秒）
+  aiProvider: "", // AI 智能完善使用的 provider（留空自动发现）
+  aiModel: "", // AI 智能完善使用的模型 id（留空自动发现）
+  backupRetention: 15, // 自动备份保留的备份文件份数（超出自动清理最旧的）
+  backupSchedule: "weekly", // 自动备份周期：daily / weekly / monthly
+  backupFormat: "db", // 自动备份文件格式：db（数据库副本）/ json（JSON 导出）
+  assistantCharacter: "classic", // 词库助手助手形象：经典米兔（默认）
+  autoLearnEnabled: true, // 是否开启自动学习
+  autoLearnManualConfirm: true, // 自动学习是否需手动确认（捕获到提示词后弹保存/取消）
+  assistantEnabled: true, // 词库助手显隐（主开关，关闭后右侧面板也无法启用）
+  rightPanelEnabled: true, // 是否启用右侧侧边栏展开/折叠（需先开启词库助手）
+  showComposerButton: true, // 是否在聊天框工具栏显示词库按钮
+  composerButtonIconOnly: false, // 词库按钮用纯图标显示（隐藏文字，仅保留图标）
+  showAIPolishButton: true, // 是否在聊天框工具栏显示 AI 润色按钮
+  aiPolishButtonIconOnly: false, // AI 润色按钮用纯图标显示（隐藏文字，仅保留图标）
+  tildaTriggerEnabled: true, // 是否启用输入 ~ 触发词库选择
+  hoverDetailEnabled: true, // 是否启用鼠标移入列表显示详情
+  selectionAddEnabled: true, // 是否启用选中文本后浮动「添加提示词」入口
+  contextRecommendEnabled: true, // 是否启用基于聊天上下文的提示词推荐
+  aiEnrichEnabled: true, // 是否启用 AI 智能完善（生成标题/标签/摘要并改写正文）
+  autoUpdateEnabled: true, // 自动更新：发现新版本后台自动安装
+  announcementEnabled: true, // 公告入口：词库助手右键菜单展示「公告」
+  levelEnabled: true, // 等级助手：助手等级徽章与右键菜单「成就」入口
+  levelAnnouncementEnabled: true, // 我的等级公告：新成就解锁时的气泡播报
+  personaEnabled: true, // 人格管理：词库助手右键菜单展示「人格管理」入口
+  dashboardEnabled: true, // 看板：词库助手右键菜单展示「看板」入口（统计可视化）
+  dataManagementEnabled: true, // 数据管理：词库助手右键菜单展示「数据管理」入口
+  backupEnabled: true, // 是否启用自动备份（启动时及按周期备份数据库）
 };

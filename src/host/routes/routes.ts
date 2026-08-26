@@ -11,6 +11,8 @@
  * 所有响应使用 ApiResponse 信封。
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import type { WebRoute } from "@deepseek-ai/dsh-host-webserver";
 import type { ApiResponse, PluginSettings, Prompt, PromptInput, PromptPatch } from "../../types.js";
 import { commentOnStats, generateIntro, generateSkillDescriptor, listAiSelectables, polishPromptBody } from "../services/ai/ai.js";
@@ -52,6 +54,15 @@ import { getActivity } from "../services/assistant/activity.js";
 import { buildAssistantStatus } from "../services/assistant/gamification.js";
 import { getAnnouncement } from "../services/update/announcement.js";
 import { deleteBackup, listBackups, restoreBackup, runBackup, type BackupFormat } from "../services/data/backup.js";
+import {
+  bindPersonaToScope,
+  createPersonaWithSoul,
+  deletePersonaWithSoul,
+  getPersonaForScopePath,
+  listPersonaViews,
+  listScopeTree,
+  updatePersonaWithContent,
+} from "../services/persona/persona-service.js";
 
 const PREFIX = "/api/prompt-library";
 
@@ -407,7 +418,7 @@ export function makePromptRoutes(): WebRoute[] {
         return json(res, 200, { ok: true, data: { polished } });
       }
 
-      // POST /ai/intro — AI 生成词库功能简介（5 句，供悬浮小人气泡轮询；失败时前端回退内置简介）
+      // POST /ai/intro — AI 生成词库功能简介（5 句，供悬浮助手气泡轮询；失败时前端回退内置简介）
       if (method === "POST" && tail === "/ai/intro") {
         const raw = await readJsonBody(req);
         const lang = (raw as { lang?: string })?.lang === "en" ? "en" : "zh";
@@ -482,7 +493,7 @@ export function makePromptRoutes(): WebRoute[] {
       }
 
       // GET /activity — 词库助手活动状态机快照（idle/waiting/thinking/tool/review/done/failed），
-      // 驱动小人动画；支持 lang 查询参数，host 按语言返回匹配主题+阶段的文案
+      // 驱动助手动画；支持 lang 查询参数，host 按语言返回匹配主题+阶段的文案
       if (method === "GET" && tail === "/activity") {
         let lang = "zh";
         try {
@@ -493,12 +504,15 @@ export function makePromptRoutes(): WebRoute[] {
         } catch {
           /* 解析失败用默认 zh */
         }
-        const data = getActivity(lang.toLowerCase().startsWith("en") ? "en" : "zh");
+        const settings = await getSettings();
+        const langNorm = lang.toLowerCase().startsWith("en") ? "en" : "zh";
+        const char = settings.assistantCharacter ?? "classic";
+        const data = getActivity(langNorm, char);
         return json(res, 200, { ok: true, data });
       }
 
       // GET /assistant/status — 词库助手游戏化快照：等级 + 成就 + 时间/节日彩蛋，
-      // 驱动小人等级徽章、成就解锁气泡与应景彩蛋；支持 lang 查询参数
+      // 驱动助手等级徽章、成就解锁气泡与应景彩蛋；支持 lang 查询参数
       if (method === "GET" && tail === "/assistant/status") {
         let lang = "zh";
         try {
@@ -605,6 +619,108 @@ export function makePromptRoutes(): WebRoute[] {
           return json(res, 400, {
             ok: false,
             error: err instanceof Error ? err.message : "delete failed",
+          });
+        }
+      }
+
+      // ── 多人格（自定义 SOUL，按工作区/项目切换） ─────────────────────────
+
+      // GET /personas — 列出全部人格（含内置默认人格，排最前）
+      if (method === "GET" && segments[0] === "personas" && segments.length === 1) {
+        const data = await listPersonaViews();
+        return json(res, 200, { ok: true, data });
+      }
+
+      // GET /personas/scopes — 列出工作区/项目树（节点自带精确绑定的人格 id）
+      if (method === "GET" && segments[0] === "personas" && segments[1] === "scopes" && segments.length === 2) {
+        return json(res, 200, { ok: true, data: listScopeTree() });
+      }
+
+      // GET /personas/scopes/binding?path= — 读取某路径的精确绑定（无绑定返回空串）
+      if (method === "GET" && segments[0] === "personas" && segments[1] === "scopes" && segments[2] === "binding") {
+        const q = new URLSearchParams(tail.includes("?") ? tail.slice(tail.indexOf("?") + 1) : "");
+        const path = q.get("path") ?? "";
+        return json(res, 200, { ok: true, data: { personaId: getPersonaForScopePath(path) } });
+      }
+
+      // PUT /personas/scopes/binding {path, personaId} — 设置某路径绑定（'default'/空 → 回落默认/上层）
+      if (method === "PUT" && segments[0] === "personas" && segments[1] === "scopes" && segments[2] === "binding") {
+        const raw = await readJsonBody(req);
+        const path =
+          typeof raw === "object" && raw !== null && typeof (raw as { path?: unknown }).path === "string"
+            ? (raw as { path: string }).path
+            : "";
+        const personaId =
+          typeof raw === "object" && raw !== null && typeof (raw as { personaId?: unknown }).personaId === "string"
+            ? (raw as { personaId: string }).personaId
+            : "";
+        if (!path) return json(res, 400, { ok: false, error: "invalid body: {path, personaId}" });
+        const bound = bindPersonaToScope(path, personaId);
+        return json(res, 200, { ok: true, data: { personaId: bound } });
+      }
+
+      // POST /personas {name} — 新建自定义人格
+      if (method === "POST" && segments[0] === "personas" && segments.length === 1) {
+        const raw = await readJsonBody(req);
+        const name =
+          typeof raw === "object" &&
+          raw !== null &&
+          typeof (raw as { name?: unknown }).name === "string"
+            ? (raw as { name: string }).name
+            : "";
+        if (!name.trim()) return json(res, 400, { ok: false, error: "invalid body: {name}" });
+        const data = await createPersonaWithSoul(name);
+        return json(res, 201, { ok: true, data });
+      }
+
+      // PUT /personas/:id {name?, enabled?, content?} — 更新人格元信息 / SOUL 正文
+      if (
+        method === "PUT" &&
+        segments[0] === "personas" &&
+        segments.length === 2 &&
+        segments[1] !== "binding" &&
+        segments[1] !== "scopes"
+      ) {
+        const id = segments[1] ?? "";
+        const raw = await readJsonBody(req);
+        if (typeof raw !== "object" || raw === null) {
+          return json(res, 400, { ok: false, error: "invalid body" });
+        }
+        const b = raw as { name?: unknown; enabled?: unknown; content?: unknown };
+        if (id === "default") return json(res, 400, { ok: false, error: "cannot update built-in default persona" });
+        const updated = await updatePersonaWithContent(id, {
+          name: typeof b.name === "string" ? b.name : undefined,
+          enabled: typeof b.enabled === "boolean" ? b.enabled : undefined,
+          content: typeof b.content === "string" ? b.content : undefined,
+        });
+        if (!updated) return json(res, 404, { ok: false, error: "not found" });
+        return json(res, 200, { ok: true, data: updated });
+      }
+
+      // DELETE /personas/:id — 删除自定义人格（默认人格不可删）
+      if (method === "DELETE" && segments[0] === "personas" && segments.length === 2 && segments[1] !== "binding" && segments[1] !== "scopes") {
+        const removed = await deletePersonaWithSoul(segments[1] ?? "");
+        if (!removed) return json(res, 404, { ok: false, error: "not found" });
+        return json(res, 200, { ok: true, data: { id: segments[1] } });
+      }
+
+      // GET /assets/whale — 返回词库助手「鲸鱼款」助手的雪碧图（image/webp 字节），
+      // 素材随插件构建产物随包分发（lib/assets/whale-spritesheet.webp）。
+      if (method === "GET" && segments[0] === "assets" && segments[1] === "whale" && segments.length === 2) {
+        try {
+          const fileUrl = new URL("./assets/whale-spritesheet.webp", import.meta.url);
+          const buf = await readFile(fileURLToPath(fileUrl));
+          res.writeHead(200, {
+            "content-type": "image/webp",
+            "content-length": String(buf.byteLength),
+            "cache-control": "public, max-age=604800",
+          });
+          res.end(buf);
+          return;
+        } catch (err) {
+          return json(res, 404, {
+            ok: false,
+            error: err instanceof Error ? err.message : "asset not found",
           });
         }
       }

@@ -1,7 +1,7 @@
 /**
  * 词库助手（独立组件）。
  *
- * 以一个小人形象常驻屏幕，可独立拖动；悬停时展示功能简介气泡，未悬停时也会
+ * 以一个助手形象常驻屏幕，可独立拖动；悬停时展示功能简介气泡，未悬停时也会
  * 按设置的频率自动冒气泡提示。与右侧面板解耦：本组件自管理位置/冒泡/简介，
  * 不再内嵌于面板状态。左键不联动面板，面板开合统一由右键菜单「打开工具面板」
  * 通过 onTogglePanel 回调通知父级。
@@ -9,6 +9,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -30,15 +31,18 @@ import { type PLTranslate, usePLT } from "../../i18n/i18n.js";
 import { useThemeSync } from "../../utils/theme.js";
 import { AnnouncementModal } from "./AnnouncementModal.js";
 import { AchievementModal } from "./AchievementModal.js";
+import { PersonaManagerModal } from "./PersonaManagerModal.js";
+import { DashboardModal } from "./DashboardModal.js";
+import { ImportExportModal } from "../settings/modules/ImportExportModal.js";
+import { TagsModal } from "../settings/modules/TagsModal.js";
+import { TrashModal } from "../settings/modules/TrashModal.js";
 import {
   HOVER_SEQUENCE,
   SEQUENCES,
-  SPRITE_CELL,
-  SPRITE_COLUMNS,
-  SPRITE_ROWS,
-  TRACK_ROW,
   getSpriteSheet,
+  getWhaleSpriteSheet,
   sequenceFrame,
+  type PetCharacter,
   type SpriteMood,
   type SpriteOptions,
   type SpriteSheet,
@@ -60,9 +64,21 @@ const TONE = {
 } as const;
 
 /** 右键菜单项图标：统一 15x15 描边风格，底色/颜色由调用方传入。 */
-function CtxIcon({ bg, color, children }: { bg: string; color: string; children: ReactNode }): ReactNode {
+function CtxIcon({
+  bg,
+  color,
+  children,
+}: {
+  bg: string;
+  color: string;
+  children: ReactNode;
+}): ReactNode {
   return (
-    <span className="pl-ctx-ic" style={{ background: bg, color }} aria-hidden="true">
+    <span
+      className="pl-ctx-ic"
+      style={{ background: bg, color }}
+      aria-hidden="true"
+    >
       <svg
         width="15"
         height="15"
@@ -79,7 +95,7 @@ function CtxIcon({ bg, color, children }: { bg: string; color: string; children:
   );
 }
 
-/** 小人尺寸。 */
+/** 助手尺寸。 */
 const PERSON_SIZE = 72;
 /** 屏幕四周最小边距（含顶部落差给宿主 header）。 */
 const FLOAT_MARGIN = 8;
@@ -116,7 +132,8 @@ function saveMood(m: { happy: number; sad: number }): void {
     // 只保留当天记录，移除历史日期键
     const allKeys = localStorage.keys?.() ?? [];
     for (const k of allKeys) {
-      if (k.startsWith(MOOD_KEY_PREFIX) && k !== key) localStorage.removeItem(k);
+      if (k.startsWith(MOOD_KEY_PREFIX) && k !== key)
+        localStorage.removeItem(k);
     }
   } catch {
     /* 忽略存储失败 */
@@ -141,7 +158,7 @@ interface Pos {
   py: number;
 }
 
-/** 计算贴边位置：依据给定位置（目标坐标）与传入视口，把小人缩到离它最近的屏幕边。 */
+/** 计算贴边位置：依据给定位置（目标坐标）与传入视口，把助手缩到离它最近的屏幕边。 */
 function edgePos(p: Pos, vw: number, vh: number): Pos {
   const EDGE = 12; // 贴边后留出的可见宽度/高度（像素）
   const leftSpace = p.px;
@@ -158,7 +175,7 @@ function edgePos(p: Pos, vw: number, vh: number): Pos {
   return { px, py };
 }
 
-/** 读入上次的小人位置；首次进入默认落屏幕右下角。 */
+/** 读入上次的助手位置；首次进入默认落屏幕右下角。 */
 function loadPos(): Pos {
   const w = window.innerWidth;
   const h = window.innerHeight;
@@ -181,7 +198,7 @@ export function PromptAssistant(props: Props): ReactNode {
   // 当前是否黑夜模式：等级徽章等硬编码高对比色需随主题切换
   const dark = useThemeSync();
 
-  // 小人位置：独立持久化，与右侧面板互不影响
+  // 助手位置：独立持久化，与右侧面板互不影响
   const [pos, setPos] = useState<Pos>(loadPos);
   const updatePos = useCallback((patch: Partial<Pos>) => {
     setPos((prev) => {
@@ -232,10 +249,10 @@ export function PromptAssistant(props: Props): ReactNode {
   const [bubbleW, setBubbleW] = useState(176);
   const [bubbleH, setBubbleH] = useState(56);
 
-  // 鼠标是否悬停在小人上（供「自动冒泡」判断是否打扰用户）
+  // 鼠标是否悬停在助手上（供「自动冒泡」判断是否打扰用户）
   const hoverRef = useRef(false);
 
-  // ── 空闲自动贴边：鼠标/键盘超过 30s 无操作，小人自动缩到最近的屏幕边 ──
+  // ── 空闲自动贴边：鼠标/键盘超过 30s 无操作，助手自动缩到最近的屏幕边 ──
   const lastActiveRef = useRef(Date.now());
   const [docked, setDocked] = useState(false);
   const dockedRef = useRef(false);
@@ -266,7 +283,12 @@ export function PromptAssistant(props: Props): ReactNode {
     const onMove = (e: MouseEvent) => {
       const prev = lastCursorRef.current;
       lastCursorRef.current = { x: e.clientX, y: e.clientY };
-      if (prev && Math.abs(e.clientX - prev.x) < 2 && Math.abs(e.clientY - prev.y) < 2) return;
+      if (
+        prev &&
+        Math.abs(e.clientX - prev.x) < 2 &&
+        Math.abs(e.clientY - prev.y) < 2
+      )
+        return;
       markActive();
     };
     window.addEventListener("mousemove", onMove);
@@ -274,7 +296,12 @@ export function PromptAssistant(props: Props): ReactNode {
     window.addEventListener("keydown", markActive);
     // 每 2s 检查一次空闲；贴边期间暂停自动冒泡，避免打扰
     const iv = window.setInterval(() => {
-      if (!dockedRef.current && !bubbleRefId.current && !hoverRef.current && Date.now() - lastActiveRef.current >= IDLE_MS) {
+      if (
+        !dockedRef.current &&
+        !bubbleRefId.current &&
+        !hoverRef.current &&
+        Date.now() - lastActiveRef.current >= IDLE_MS
+      ) {
         dockedRef.current = true;
         setDocked(true);
       }
@@ -304,11 +331,14 @@ export function PromptAssistant(props: Props): ReactNode {
     const vh = viewportRef.current.h;
     const hiX = Math.max(FLOAT_MARGIN, vw - PERSON_SIZE - FLOAT_MARGIN);
     const hiY = Math.max(FLOAT_MARGIN, vh - PERSON_SIZE - FLOAT_MARGIN);
-    // 空闲触发的贴边：无条件把小人缩到离它最近的屏幕边（与当前是否出界无关）。
+    // 空闲触发的贴边：无条件把助手缩到离它最近的屏幕边（与当前是否出界无关）。
     // 恢复靠 markActive 里还原 preDock 的 home 位置实现。
     if (docked) return edgePos(pos, vw, vh);
     // 未贴边：按当前视口夹取 home 位置，窗口缩小夹进可视区、拉大回到原位置（home 保持不变）。
-    return { px: clamp(pos.px, FLOAT_MARGIN, hiX), py: clamp(pos.py, FLOAT_MARGIN, hiY) };
+    return {
+      px: clamp(pos.px, FLOAT_MARGIN, hiX),
+      py: clamp(pos.py, FLOAT_MARGIN, hiY),
+    };
   }, [pos, docked, viewVersion]);
   // 气泡展示的功能简介：优先用首次加载时 AI 生成并缓存的词，否则用 i18n 内置词
   const [intros, setIntros] = useState<string[]>(() => [
@@ -319,17 +349,25 @@ export function PromptAssistant(props: Props): ReactNode {
     T("pl.intro.4"),
   ]);
 
-  // 活动状态机：轮询 host 投影的 phase，驱动小人动作动画与阶段气泡。
+  // 活动状态机：轮询 host 投影的 phase，驱动助手动作动画与阶段气泡。
   // 会话 turn/step/工具/结束事件 → idle/waiting/thinking/tool/review/done/failed；
-  // 每个阶段驱动不同的小人动作与头顶状态气泡。
-  const [activity, setActivity] = useState<ActivitySnapshot>({ phase: "idle", sessionActive: false });
+  // 每个阶段驱动不同的助手动作与头顶状态气泡。
+  const [activity, setActivity] = useState<ActivitySnapshot>({
+    phase: "idle",
+    sessionActive: false,
+  });
   useEffect(() => {
     let cancelled = false;
     // 按当前系统语言请求，host 端返回匹配主题+阶段的文案
-    const lang: "zh" | "en" =
-      (document.documentElement.lang || navigator.language || "zh").toLowerCase().startsWith("en")
-        ? "en"
-        : "zh";
+    const lang: "zh" | "en" = (
+      document.documentElement.lang ||
+      navigator.language ||
+      "zh"
+    )
+      .toLowerCase()
+      .startsWith("en")
+      ? "en"
+      : "zh";
     const tick = () => {
       getActivity(lang)
         .then((snap) => {
@@ -347,9 +385,11 @@ export function PromptAssistant(props: Props): ReactNode {
     };
   }, []);
 
-  // ── 心情系统：按天记录会话成功/失败，驱动小人表情、动作与气泡 ──
+  // ── 心情系统：按天记录会话成功/失败，驱动助手表情、动作与气泡 ──
   // 每次轮询到的阶段从其他阶段跳转到 done/failed 时计一次成功/失败（首次挂载不计）。
-  const [moodCounts, setMoodCounts] = useState<{ happy: number; sad: number }>(loadMood);
+  const [moodCounts, setMoodCounts] = useState<{ happy: number; sad: number }>(
+    loadMood,
+  );
   const prevPhaseRef = useRef<ActivityPhase | null>(null);
   useEffect(() => {
     const phase = activity.phase;
@@ -374,9 +414,11 @@ export function PromptAssistant(props: Props): ReactNode {
 
   // 今日情绪：成功多于失败 → 开心；失败多于成功 → 低落；持平/无记录 → 平常
   const mood: SpriteMood =
-    moodCounts.happy > moodCounts.sad ? "happy"
-    : moodCounts.sad > moodCounts.happy ? "sad"
-    : "neutral";
+    moodCounts.happy > moodCounts.sad
+      ? "happy"
+      : moodCounts.sad > moodCounts.happy
+        ? "sad"
+        : "neutral";
 
   // ── 游戏化：等级徽章 / 成就解锁播报 / 时间彩蛋 / 点击互动 ──
   // toast 为临时气泡（成就 / 互动），优先级高于阶段气泡与简介轮播
@@ -411,7 +453,8 @@ export function PromptAssistant(props: Props): ReactNode {
 
   const showToast = useCallback((t: Toast) => {
     setToast(t);
-    if (toastTimerRef.current !== undefined) window.clearTimeout(toastTimerRef.current);
+    if (toastTimerRef.current !== undefined)
+      window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(
       () => setToast(null),
       t.kind === "achievement" ? 4000 : 2200,
@@ -426,7 +469,8 @@ export function PromptAssistant(props: Props): ReactNode {
   // toast 计时器仅在组件卸载时清理；运行期由 showToast 自行覆盖管理
   useEffect(
     () => () => {
-      if (toastTimerRef.current !== undefined) window.clearTimeout(toastTimerRef.current);
+      if (toastTimerRef.current !== undefined)
+        window.clearTimeout(toastTimerRef.current);
     },
     [],
   );
@@ -434,10 +478,15 @@ export function PromptAssistant(props: Props): ReactNode {
   // 轮询游戏化快照：等级 + 成就 + 彩蛋；间隔较长，避免频繁统计查询
   useEffect(() => {
     let cancelled = false;
-    const lang: "zh" | "en" =
-      (document.documentElement.lang || navigator.language || "zh").toLowerCase().startsWith("en")
-        ? "en"
-        : "zh";
+    const lang: "zh" | "en" = (
+      document.documentElement.lang ||
+      navigator.language ||
+      "zh"
+    )
+      .toLowerCase()
+      .startsWith("en")
+      ? "en"
+      : "zh";
     const tick = () => {
       getAssistantStatus(lang)
         .then((s) => {
@@ -447,9 +496,13 @@ export function PromptAssistant(props: Props): ReactNode {
           // 首次进入：把当前已解锁成就全部标记为已播报，避免历史成就一次性弹窗
           if (!statusInitedRef.current) {
             statusInitedRef.current = true;
-            for (const a of s.achievements) if (a.achieved) announcedRef.current.add(a.id);
+            for (const a of s.achievements)
+              if (a.achieved) announcedRef.current.add(a.id);
             try {
-              localStorage.setItem("pl:achievements-announced", JSON.stringify([...announcedRef.current]));
+              localStorage.setItem(
+                "pl:achievements-announced",
+                JSON.stringify([...announcedRef.current]),
+              );
             } catch {
               /* 忽略存储失败 */
             }
@@ -457,16 +510,22 @@ export function PromptAssistant(props: Props): ReactNode {
           }
           // 新解锁的成就：只播报第一条，避免多条连发；
           // 无论「我的等级公告」是否开启都标记已播报，避免日后开启时补发历史播报
-          const fresh = s.achievements.find((a) => a.achieved && !announcedRef.current.has(a.id));
+          const fresh = s.achievements.find(
+            (a) => a.achieved && !announcedRef.current.has(a.id),
+          );
           if (fresh) {
             announcedRef.current.add(fresh.id);
             try {
-              localStorage.setItem("pl:achievements-announced", JSON.stringify([...announcedRef.current]));
+              localStorage.setItem(
+                "pl:achievements-announced",
+                JSON.stringify([...announcedRef.current]),
+              );
             } catch {
               /* 忽略存储失败 */
             }
             const levelAnnouncement =
-              settingsRef.current?.levelAnnouncementEnabled ?? DEFAULT_SETTINGS.levelAnnouncementEnabled;
+              settingsRef.current?.levelAnnouncementEnabled ??
+              DEFAULT_SETTINGS.levelAnnouncementEnabled;
             if (levelAnnouncement) {
               showToast({
                 kind: "achievement",
@@ -488,7 +547,7 @@ export function PromptAssistant(props: Props): ReactNode {
     };
   }, [showToast]);
 
-  // 点击小人的互动反馈：随机俏皮话；2 秒内连点 5 次触发「晕」
+  // 点击助手的互动反馈：随机俏皮话；2 秒内连点 5 次触发「晕」
   const triggerTap = useCallback(() => {
     const now = Date.now();
     const recent = tapTimesRef.current.filter((t) => now - t < 2000);
@@ -505,47 +564,75 @@ export function PromptAssistant(props: Props): ReactNode {
       tRef.current("pl.tap.2"),
       tRef.current("pl.tap.3"),
     ];
-    showToast({ kind: "tap", text: msgs[Math.floor(Math.random() * msgs.length)] });
+    showToast({
+      kind: "tap",
+      text: msgs[Math.floor(Math.random() * msgs.length)],
+    });
   }, [showToast]);
 
-  // ── 雪碧图小人：把蓝脸小人渲染成运行时生成的雪碧图，用 background-position 帧播放 ──
+  // ── 雪碧图助手：把蓝脸助手渲染成运行时生成的雪碧图，用 background-position 帧播放 ──
   // 轨道 = 行、帧 = 列，配合每轨道时长与阶段序列实现帧播放；鼠标移入播放打招呼小动画。
   // 差异化按「等级-主题-心情」组合生成，任一变化时重新取对应雪碧图（内部按组合缓存）。
   const [sheet, setSheet] = useState<SpriteSheet | null>(null);
   const spriteRef = useRef<HTMLDivElement | null>(null);
-  // 鼠标是否悬停在小人上：悬停时播放打招呼序列（小动画）
+  // 鼠标是否悬停在助手上：悬停时播放打招呼序列（小动画）
   const [hovering, setHovering] = useState(false);
-  const spriteTopic: SpriteTopic = (activity.topic as SpriteTopic | undefined) ?? "general";
+  const spriteTopic: SpriteTopic =
+    (activity.topic as SpriteTopic | undefined) ?? "general";
   // 等级助手关闭时不展示任何等级差异化（身体回到底色、无星章、无 Lv 徽章）
   const levelEnabled = settings?.levelEnabled ?? DEFAULT_SETTINGS.levelEnabled;
   const spriteLevel = levelEnabled ? status?.level?.level : undefined;
+  // 助手款型：经典米兔 / 哈士奇（程序化）+ 鲸鱼款（静态素材）。鲸鱼款沿用全部轨道语义。
+  const character: PetCharacter = settings?.assistantCharacter ?? DEFAULT_SETTINGS.assistantCharacter;
+  // 程序化款型按「款型-等级-主题-心情」差异化；鲸鱼款不参与（走静态素材）。
   const spriteOpts = useMemo<SpriteOptions>(
-    () => ({ level: spriteLevel, topic: spriteTopic, mood }),
-    [spriteLevel, spriteTopic, mood],
+    () => ({
+      character: character === "whale" ? "classic" : character,
+      level: spriteLevel,
+      topic: spriteTopic,
+      mood,
+    }),
+    [character, spriteLevel, spriteTopic, mood],
   );
   useEffect(() => {
     let alive = true;
-    getSpriteSheet(spriteOpts).then((s) => {
-      if (alive) setSheet(s);
-    });
+    const load = character === "whale" ? getWhaleSpriteSheet() : getSpriteSheet(spriteOpts);
+    load
+      .then((s) => {
+        if (!alive) return;
+        if (s === null) return;
+        setSheet(s);
+      })
+      // 鲸鱼素材加载失败时回退：清空雪碧图，保持经典助手不打断现有展示
+      .catch(() => {
+        if (alive) setSheet(null);
+      });
     return () => {
       alive = false;
     };
-  }, [spriteOpts]);
+  }, [character, spriteOpts]);
   // 帧循环：按活动阶段（或悬停打招呼）序列，在每个动画帧上切换 background-position。
-  // 生成失败（sheet 为 null）时保持 SVG 回退，不打断现有小人展示。
+  // 生成失败（sheet 为 null）时保持 SVG 回退，不打断现有助手展示。
   useEffect(() => {
     if (!sheet) return;
     const el = spriteRef.current;
     if (!el) return;
+    // 按每帧几何把背景缩放到助手显示框内：经典款 cell=72 等比放大倍数为 1；
+    // 鲸鱼款 192×208 等比缩放到 PERSON_SIZE，保持比例不改形。
+    const scale = PERSON_SIZE / Math.max(sheet.cellW, sheet.cellH);
+    const stepX = sheet.cellW * scale;
+    const stepY = sheet.cellH * scale;
+    const trackRow = sheet.trackRow;
+    const tracks = sheet.tracks;
     const paint = (f: { track: SpriteTrack; col: number }) => {
-      const row = TRACK_ROW[f.track];
-      el.style.backgroundPosition = `${-f.col * SPRITE_CELL}px ${-row * SPRITE_CELL}px`;
+      const row = trackRow[f.track];
+      el.style.backgroundPosition = `${-f.col * stepX}px ${-row * stepY}px`;
     };
     const seqFor = (): SpriteTrack[] =>
       hovering ? HOVER_SEQUENCE : (SEQUENCES[activity.phase] ?? SEQUENCES.idle);
-    paint(sequenceFrame(seqFor(), 0));
-    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+    paint(sequenceFrame(seqFor(), 0, tracks));
+    const reduce =
+      window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
     if (reduce) return;
     let raf = 0;
     let last = performance.now();
@@ -553,7 +640,7 @@ export function PromptAssistant(props: Props): ReactNode {
     const tick = (ts: number) => {
       elapsed += ts - last;
       last = ts;
-      paint(sequenceFrame(seqFor(), elapsed));
+      paint(sequenceFrame(seqFor(), elapsed, tracks));
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -572,17 +659,23 @@ export function PromptAssistant(props: Props): ReactNode {
     failed: "pl.phase.failed",
   };
 
-  // 活动阶段 → 小人待机/动作动画（空闲/等待保持轻缓呼吸，活跃时切换动作）
+  // 活动阶段 → 助手待机/动作动画（空闲/等待保持轻缓呼吸，活跃时切换动作）
   // 心情融入空闲动画：今天开心时蹦跳更有弹性，低落时慢速微垂
   const personAnim = useMemo(() => {
     switch (activity.phase) {
-      case "thinking": return "pl-person-fastbob .9s ease-in-out infinite";
-      case "tool": return "pl-person-tilt 1.6s ease-in-out infinite";
-      case "done": return "pl-person-jump .7s cubic-bezier(.3,1.4,.4,1) 2";
-      case "failed": return "pl-person-shake .5s ease-in-out 2";
-      case "waiting": return "pl-person-bob 2s ease-in-out infinite";
+      case "thinking":
+        return "pl-person-fastbob .9s ease-in-out infinite";
+      case "tool":
+        return "pl-person-tilt 1.6s ease-in-out infinite";
+      case "done":
+        return "pl-person-jump .7s cubic-bezier(.3,1.4,.4,1) 2";
+      case "failed":
+        return "pl-person-shake .5s ease-in-out 2";
+      case "waiting":
+        return "pl-person-bob 2s ease-in-out infinite";
       default:
-        if (mood === "happy") return "pl-person-happybob 1.8s ease-in-out infinite";
+        if (mood === "happy")
+          return "pl-person-happybob 1.8s ease-in-out infinite";
         if (mood === "sad") return "pl-person-sadbob 2.8s ease-in-out infinite";
         return "pl-person-bob 2.6s ease-in-out infinite";
     }
@@ -614,8 +707,22 @@ export function PromptAssistant(props: Props): ReactNode {
   const [announceOpen, setAnnounceOpen] = useState(false);
   // 成就弹窗：右键菜单入口打开（等级 + 成就列表）
   const [achievementOpen, setAchievementOpen] = useState(false);
+  // 人格管理弹窗：右键菜单入口打开（多人格 CRUD + 会话绑定说明）
+  const [personaOpen, setPersonaOpen] = useState(false);
+  // 看板弹窗：右键菜单「看板」入口打开（统计可视化）
+  const [dashboardOpen, setDashboardOpen] = useState(false);
+  // 数据管理弹窗：右键菜单「数据管理」→ 三个子项分别打开
+  const [importExportOpen, setImportExportOpen] = useState(false);
+  const [tagsOpen, setTagsOpen] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
+  // 右键菜单「数据管理」子菜单是否展开
+  const [dataMenuOpen, setDataMenuOpen] = useState(false);
   // 右键迷你菜单：记录弹出位置（clientX/Y）；点击外部或菜单项后关闭
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  // 右键菜单 DOM 引用，用于测量真实高度后补偿位置，避免底部溢出
+  const ctxMenuRef = useRef<HTMLDivElement | null>(null);
+  // 校正后的菜单位置（渲染后据真实宽高计算，保证完整落在视口内）
+  const [ctxPos, setCtxPos] = useState<{ left: number; top: number }>({ left: 0, top: 0 });
   const openMenuAnnounce = () => {
     setCtxMenu(null);
     setAnnounceOpen(true);
@@ -624,17 +731,50 @@ export function PromptAssistant(props: Props): ReactNode {
     setCtxMenu(null);
     setAchievementOpen(true);
   };
+  const openMenuDashboard = () => {
+    setCtxMenu(null);
+    setDashboardOpen(true);
+  };
 
-  // 右键菜单显隐规则：词库助手未启用时不显示；工具面板 / 公告 / 成就三个入口
-  // 全部关闭时同样不显示（菜单里没有任何可点项）。
+  // 右键菜单显隐规则：词库助手自常驻以来始终启用；工具面板 / 公告 / 成就 / 人格管理 /
+  // 看板 / 数据管理 入口全部关闭时同样不显示（菜单里没有任何可点项）。
   const ctxMenuEnabled =
-    (settings?.assistantEnabled ?? DEFAULT_SETTINGS.assistantEnabled) &&
-    ((settings?.rightPanelEnabled ?? DEFAULT_SETTINGS.rightPanelEnabled) ||
+    (settings?.rightPanelEnabled ?? DEFAULT_SETTINGS.rightPanelEnabled) ||
       (settings?.announcementEnabled ?? DEFAULT_SETTINGS.announcementEnabled) ||
-      levelEnabled);
+      levelEnabled ||
+      (settings?.personaEnabled ?? DEFAULT_SETTINGS.personaEnabled) ||
+      (settings?.dashboardEnabled ?? DEFAULT_SETTINGS.dashboardEnabled) ||
+      (settings?.dataManagementEnabled ??
+        DEFAULT_SETTINGS.dataManagementEnabled);
 
-  // 拖动小人：仅移动小人独立坐标；松手时若未明显移动视为「点击 → 通知父级」
-  const personDragRef = useRef<{ startX: number; startY: number; ox: number; oy: number; moved: boolean } | null>(null);
+  // 右键菜单弹出后，测量真实宽高并把菜单完整限制在视口内（防止内容变长后底部溢出）。
+  // 依赖 ctxMenu 打开与 dataMenuOpen 子菜单展开，两者变化都重新结算位置。
+  useLayoutEffect(() => {
+    if (!ctxMenu || !ctxMenuEnabled) return;
+    const el = ctxMenuRef.current;
+    if (!el) return;
+    const mw = el.offsetWidth;
+    const mh = el.offsetHeight;
+    const M = 8; // 距屏幕边缘的留白
+    const left =
+      ctxMenu.x + mw > window.innerWidth - M
+        ? Math.max(M, ctxMenu.x - mw)
+        : ctxMenu.x;
+    const top =
+      ctxMenu.y + mh > window.innerHeight - M
+        ? Math.max(M, ctxMenu.y - mh)
+        : ctxMenu.y;
+    setCtxPos({ left, top });
+  }, [ctxMenu, dataMenuOpen]);
+
+  // 拖动助手：仅移动助手独立坐标；松手时若未明显移动视为「点击 → 通知父级」
+  const personDragRef = useRef<{
+    startX: number;
+    startY: number;
+    ox: number;
+    oy: number;
+    moved: boolean;
+  } | null>(null);
   const startPersonDrag = (e: ReactMouseEvent<HTMLElement>) => {
     // 仅左键支持拖动与单击开合；右键/中键不启动拖拽，交由 onContextMenu 打开公告
     if (e.button !== 0) return;
@@ -642,7 +782,13 @@ export function PromptAssistant(props: Props): ReactNode {
     setCtxMenu(null);
     e.preventDefault();
     setDragging(true); // 拖拽中禁用位移动画，保证实时跟手
-    personDragRef.current = { startX: e.clientX, startY: e.clientY, ox: pos.px, oy: pos.py, moved: false };
+    personDragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      ox: pos.px,
+      oy: pos.py,
+      moved: false,
+    };
     const onMove = (ev: MouseEvent) => {
       const d = personDragRef.current;
       if (!d) return;
@@ -651,8 +797,16 @@ export function PromptAssistant(props: Props): ReactNode {
       if (Math.abs(dx) > 4 || Math.abs(dy) > 4) d.moved = true;
       const vw = window.innerWidth;
       const vh = window.innerHeight;
-      const px = clamp(d.ox + dx, FLOAT_MARGIN, vw - PERSON_SIZE - FLOAT_MARGIN);
-      const py = clamp(d.oy + dy, FLOAT_MARGIN, vh - PERSON_SIZE - FLOAT_MARGIN);
+      const px = clamp(
+        d.ox + dx,
+        FLOAT_MARGIN,
+        vw - PERSON_SIZE - FLOAT_MARGIN,
+      );
+      const py = clamp(
+        d.oy + dy,
+        FLOAT_MARGIN,
+        vh - PERSON_SIZE - FLOAT_MARGIN,
+      );
       updatePos({ px, py });
     };
     const onUp = () => {
@@ -683,8 +837,8 @@ export function PromptAssistant(props: Props): ReactNode {
     return () => clearInterval(timer);
   }, [bubble]);
 
-  // 气泡固定定位：根据小人所在位置，在上/下/左/右四个方向中选择一个能完整容纳的方向展示，
-  // 并保证气泡整体落在视口内，避免小人拖到屏幕边缘时气泡被遮挡「显示没了」。
+  // 气泡固定定位：根据助手所在位置，在上/下/左/右四个方向中选择一个能完整容纳的方向展示，
+  // 并保证气泡整体落在视口内，避免助手拖到屏幕边缘时气泡被遮挡「显示没了」。
   // 优先级：上方 → 下方 → 左侧 → 右侧。
   const bubblePos = useMemo(() => {
     if (!bubble && !phaseActive && !toast) return null;
@@ -692,9 +846,9 @@ export function PromptAssistant(props: Props): ReactNode {
     const vh = window.innerHeight;
     const W = bubbleW;
     const H = bubbleH;
-    const cx = view.px + PERSON_SIZE / 2; // 小人水平中心
-    const cy = view.py + PERSON_SIZE / 2; // 小人垂直中心
-    // 锚点取「小人盒子顶部往下的可视头部高度」，让尖角指向头部而非盒子空区。
+    const cx = view.px + PERSON_SIZE / 2; // 助手水平中心
+    const cy = view.py + PERSON_SIZE / 2; // 助手垂直中心
+    // 锚点取「助手盒子顶部往下的可视头部高度」，让尖角指向头部而非盒子空区。
     const ANCHOR = 18;
     const gap = 5;
 
@@ -703,38 +857,56 @@ export function PromptAssistant(props: Props): ReactNode {
     let top: number;
 
     if (view.py + ANCHOR - gap - H >= FLOAT_MARGIN) {
-      // 上方放得下：气泡悬于小人头顶上方，与头部保持一点可见空隙，尖角指向头部
+      // 上方放得下：气泡悬于助手头顶上方，与头部保持一点可见空隙，尖角指向头部
       dir = "above";
       top = view.py + ANCHOR - 8 - H;
-      left = Math.min(Math.max(FLOAT_MARGIN, cx - W / 2), vw - W - FLOAT_MARGIN);
+      left = Math.min(
+        Math.max(FLOAT_MARGIN, cx - W / 2),
+        vw - W - FLOAT_MARGIN,
+      );
     } else if (view.py + PERSON_SIZE + gap + H <= vh - FLOAT_MARGIN) {
       // 下方放得下
       dir = "below";
       top = view.py + PERSON_SIZE - ANCHOR + gap;
-      left = Math.min(Math.max(FLOAT_MARGIN, cx - W / 2), vw - W - FLOAT_MARGIN);
+      left = Math.min(
+        Math.max(FLOAT_MARGIN, cx - W / 2),
+        vw - W - FLOAT_MARGIN,
+      );
     } else if (view.px - gap - W >= FLOAT_MARGIN) {
-      // 左侧放得下：垂直贴着小人中心并限制在视口内
+      // 左侧放得下：垂直贴着助手中心并限制在视口内
       dir = "left";
       left = view.px - gap - W;
       top = Math.min(Math.max(FLOAT_MARGIN, cy - H / 2), vh - H - FLOAT_MARGIN);
     } else {
-      // 右侧兜底：贴着小人右侧，垂直居中
+      // 右侧兜底：贴着助手右侧，垂直居中
       dir = "right";
       left = Math.min(view.px + PERSON_SIZE + gap, vw - W - FLOAT_MARGIN);
       top = Math.min(Math.max(FLOAT_MARGIN, cy - H / 2), vh - H - FLOAT_MARGIN);
     }
 
-    // 尖角锚点：上/下方 → 用水平偏移让尖角指小人中心；左/右方 → 用垂直偏移
+    // 尖角锚点：上/下方 → 用水平偏移让尖角指助手中心；左/右方 → 用垂直偏移
     const tailX = cx - left - 5; // 尖角在气泡水平方向上的偏移（above/below）
     const tailY = cy - top - 5; // 尖角在气泡垂直方向上的偏移（left/right）
     return { left, top, dir, tailX, tailY };
-  }, [bubble, phaseActive, toast, bubbleW, bubbleH, view.px, view.py, viewVersion]);
+  }, [
+    bubble,
+    phaseActive,
+    toast,
+    bubbleW,
+    bubbleH,
+    view.px,
+    view.py,
+    viewVersion,
+  ]);
 
   // 首次加载：请求 AI 生成词库功能简介；AI 不可用或失败时保持 i18n 内置词。
   // 按「语言 + 当天日期」缓存到 localStorage：每天换新键重新请求一次，让 AI 每天出新的文案。
   useEffect(() => {
-    const lang: "zh" | "en" =
-      (document.documentElement.lang || "zh").toLowerCase().startsWith("en") ? "en" : "zh";
+    const lang: "zh" | "en" = (document.documentElement.lang || "zh")
+      .toLowerCase()
+      .startsWith("en")
+      ? "en"
+      : "zh";
     const now = new Date();
     const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
     const cacheKey = `pl:intro:${lang}:${day}`;
@@ -761,7 +933,8 @@ export function PromptAssistant(props: Props): ReactNode {
             // 只保留当天的简介缓存，移除同语言的历史缓存键，避免 localStorage 无限累积
             const allKeys = localStorage.keys?.() ?? [];
             for (const k of allKeys) {
-              if (k.startsWith(`pl:intro:${lang}:`) && k !== cacheKey) localStorage.removeItem(k);
+              if (k.startsWith(`pl:intro:${lang}:`) && k !== cacheKey)
+                localStorage.removeItem(k);
             }
             localStorage.setItem(cacheKey, JSON.stringify({ lines }));
           } catch {
@@ -777,46 +950,57 @@ export function PromptAssistant(props: Props): ReactNode {
     };
   }, []);
 
-  // 未悬停时不定时自动冒气泡展示功能简介；无论面板折叠与否都会触发（小人在场即冒泡）。
+  // 未悬停时不定时自动冒气泡展示功能简介；无论面板折叠与否都会触发（助手在场即冒泡）。
   // 悬停中或显示中则跳过本轮，间隔取自设置。
   useEffect(() => {
     const intervalMs =
-      Math.max(5, settings?.personTipInterval ?? DEFAULT_SETTINGS.personTipInterval) * 1000;
+      Math.max(
+        5,
+        settings?.personTipInterval ?? DEFAULT_SETTINGS.personTipInterval,
+      ) * 1000;
     const hideDuration =
-      Math.max(10, settings?.personTipDuration ?? DEFAULT_SETTINGS.personTipDuration) * 1000;
+      Math.max(
+        10,
+        settings?.personTipDuration ?? DEFAULT_SETTINGS.personTipDuration,
+      ) * 1000;
     let showT: ReturnType<typeof setTimeout> | undefined;
     let hideT: ReturnType<typeof setTimeout> | undefined;
     const loop = () => {
-      showT = setTimeout(() => {
-        // 阶段气泡显示中优先级更高，跳过本轮自动冒泡，避免结束后残留简介气泡
-        if (phaseActiveRef.current) {
-          loop();
-          return;
-        }
-        // 到点要弹气泡：若当前处于贴边状态，先取消贴边回到原位再弹，保证提示正常展示
-        if (dockedRef.current) {
-          dockedRef.current = false;
-          setDocked(false);
-          if (preDockRef.current) setPos(preDockRef.current);
-          preDockRef.current = null;
-        }
-        // 悬停中（气泡已由悬停展示）则跳过本轮，避免与悬停气泡叠加
-        if (hoverRef.current) {
-          loop();
-          return;
-        }
-        // 自动冒泡：以较小概率展示 host 推送的应景彩蛋，否则走简介轮播
-        setEggMode(statusRef.current?.easterEgg != null && Math.random() < 0.3);
-        setIntroIdx((i) => i + 1);
-        setBubble(true);
-        hideT = setTimeout(() => {
-          if (!hoverRef.current && !dockedRef.current) {
-            setBubble(false);
-            setEggMode(false);
+      showT = setTimeout(
+        () => {
+          // 阶段气泡显示中优先级更高，跳过本轮自动冒泡，避免结束后残留简介气泡
+          if (phaseActiveRef.current) {
+            loop();
+            return;
           }
-          loop();
-        }, hideDuration);
-      }, intervalMs + Math.random() * intervalMs);
+          // 到点要弹气泡：若当前处于贴边状态，先取消贴边回到原位再弹，保证提示正常展示
+          if (dockedRef.current) {
+            dockedRef.current = false;
+            setDocked(false);
+            if (preDockRef.current) setPos(preDockRef.current);
+            preDockRef.current = null;
+          }
+          // 悬停中（气泡已由悬停展示）则跳过本轮，避免与悬停气泡叠加
+          if (hoverRef.current) {
+            loop();
+            return;
+          }
+          // 自动冒泡：以较小概率展示 host 推送的应景彩蛋，否则走简介轮播
+          setEggMode(
+            statusRef.current?.easterEgg != null && Math.random() < 0.3,
+          );
+          setIntroIdx((i) => i + 1);
+          setBubble(true);
+          hideT = setTimeout(() => {
+            if (!hoverRef.current && !dockedRef.current) {
+              setBubble(false);
+              setEggMode(false);
+            }
+            loop();
+          }, hideDuration);
+        },
+        intervalMs + Math.random() * intervalMs,
+      );
     };
     loop();
     return () => {
@@ -824,6 +1008,12 @@ export function PromptAssistant(props: Props): ReactNode {
       if (hideT) clearTimeout(hideT);
     };
   }, [settings?.personTipInterval, settings?.personTipDuration]);
+
+  // 满级成就（最高等级）解锁「词库助手」开关：满级且用户关闭时才隐藏目前助手与其气泡；
+  // 未满级强制常驻，忽略 assistantEnabled 的历史值，保证旧用户升级后也能恢复显示
+  const assistantMaxed = (status?.level?.next ?? 1) === 0;
+  if (assistantMaxed && !(settings?.assistantEnabled ?? DEFAULT_SETTINGS.assistantEnabled))
+    return null;
 
   return (
     <>
@@ -853,289 +1043,453 @@ export function PromptAssistant(props: Props): ReactNode {
 .pl-ctx-item { display: flex; align-items: center; gap: 9px; padding: 6px 9px; font-size: 12.5px; border-radius: 9px; cursor: pointer; user-select: none; color: var(--dsw-alias-label-primary, #1f2937); transition: background .16s ease, transform .12s ease; }
 .pl-ctx-item:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, .12)); }
 .pl-ctx-item:active { background: var(--dsw-alias-interactive-bg-active, rgba(127, 127, 127, .2)); transform: scale(.97); }
+.pl-ctx-sub { display: flex; align-items: center; gap: 9px; padding: 6px 9px 6px 20px; font-size: 12.5px; border-radius: 9px; cursor: pointer; user-select: none; color: var(--dsw-alias-label-primary, #1f2937); transition: background .16s ease, transform .12s ease; }
+.pl-ctx-sub:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, .12)); }
+.pl-ctx-sub:active { background: var(--dsw-alias-interactive-bg-active, rgba(127, 127, 127, .2)); transform: scale(.97); }
 .pl-ctx-ic { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 7px; flex-shrink: 0; }
 `}</style>
-      {/* 小人：始终显示，可独立拖动，悬停显示气泡；点击回调由父级决定是否联动面板 */}
+      {/* 助手：始终显示，可独立拖动，悬停显示气泡；点击回调由父级决定是否联动面板 */}
       {/* 用 React Portal 渲染到 document.body：既突破祖先层叠/transform 容器显示在最上层，
           又因元素仍在 React 组件树中而保留全部合成事件（拖动、点击）。 */}
       {createPortal(
-      <div
-        aria-label={T("pl.title")}
-        onMouseDown={startPersonDrag}
-        onContextMenu={(e) => {
-          // 右键：弹出迷你菜单（工具面板 / 成就 / 公告）；与左键拖动/单击互不干扰。
-          // 词库助手未启用，或工具/公告/成就入口全部关闭时不弹菜单。
-          e.preventDefault();
-          if (!ctxMenuEnabled) return;
-          setCtxMenu({ x: e.clientX, y: e.clientY });
-        }}
-        onMouseEnter={() => { hoverRef.current = true; setHovering(true); setBubble(true); }}
-        onMouseLeave={() => { hoverRef.current = false; setHovering(false); setBubble(false); setEggMode(false); }}
-        style={{
-          position: "fixed",
-          left: view.px,
-          top: view.py,
-          zIndex: 2147483647,
-          width: PERSON_SIZE,
-          height: PERSON_SIZE,
-          cursor: "grab",
-          animation: "pl-pop-in .3s cubic-bezier(.22,1,.36,1)",
-          // 拖拽中跟手无动画，其余（贴边/恢复）平滑过渡
-          transition: dragging ? "none" : "left .35s cubic-bezier(.22,1,.36,1), top .35s cubic-bezier(.22,1,.36,1)",
-          userSelect: "none",
-        }}
-      >
-        {/* 统一气泡框：toast（成就/互动，优先级最高）> 阶段气泡 > 简介轮播，共用同一圆弧气泡样式与定位 */}
-        {(phaseActive || bubble || toast) && bubblePos && (
-          <div
-            ref={bubbleRef}
-            style={{
-              position: "fixed",
-              left: bubblePos.left,
-              top: bubblePos.top,
-              zIndex: 2147483646, // 建立层叠上下文，使尾巴 zIndex:-1 相对本气泡生效（否则会逃逸层级）
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              gap: 5,
-              width: "max-content", // 宽随文字尺寸自适应（短文案贴合、长文案展开）
-              maxWidth: 288, // 仅保留最大宽度，避免超长文案撑出屏幕
-              padding: "8px 14px",
-              background: TONE.panel,
-              color: TONE.text,
-              border: `1px solid ${TONE.border}`,
-              borderRadius: 16, // 圆弧气泡：大圆角圆润风格
-              fontSize: 10.5,
-              lineHeight: 1.45,
-              textAlign: "center",
-              boxShadow: "0 3px 12px rgba(17, 24, 39, .1)",
-              animation: "pl-bubble-in .2s cubic-bezier(.22,1,.36,1)",
-              pointerEvents: "none", // 气泡仅展示，穿透不挡页面点击
-            }}
-          >
-            {toast ? (
-              <>
-                {/* 临时提示：成就解锁 / 点击互动 */}
-                {toast.title && (
-                  <div style={{ fontWeight: 600, letterSpacing: 1, color: TONE.accent }}>{toast.title}</div>
-                )}
-                <span
-                  style={{
-                    color: TONE.muted,
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                    textAlign: "center",
-                  }}
-                >
-                  {toast.text}
-                </span>
-              </>
-            ) : phaseActive ? (
-              <>
-                {/* 阶段内容：三个依次弹跳的思考小点 + 状态文字 */}
-                <div style={{ display: "flex", gap: 4, alignItems: "center", justifyContent: "center", height: 7 }}>
-                  {[0, 1, 2].map((i) => (
-                    <span
-                      key={i}
-                      className="pl-think-dot"
-                      style={{
-                        width: 5,
-                        height: 5,
-                        background: TONE.accent,
-                        animationDelay: `${i * 0.18}s`,
-                      }}
-                    />
-                  ))}
-                </div>
-                {/* 阶段内容：优先用 host 按聊天主题推送的文案，缺失时回退到 i18n 内置文案 */}
-                <span style={{ color: TONE.muted, whiteSpace: "nowrap" }}>
-                  {activity.text || T(PHASE_KEY[activity.phase])}
-                </span>
-              </>
-            ) : (
-              <>
-                {/* 简介内容：心情气泡 + 标题 + 轮播正文 + 指示点（彩蛋模式展示应景文案、隐藏指示点） */}
-                {/* 心情气泡：非平常情绪时在简介顶部展示当日情绪小结（气泡表情） */}
-                {mood !== "neutral" && (
-                  <div
-                    style={{
-                      fontWeight: 600,
-                      fontSize: 10.5,
-                      letterSpacing: 0.5,
-                      color: mood === "happy" ? "var(--dsw-alias-state-success-primary, #16a34a)" : TONE.red,
-                    }}
-                  >
-                    {mood === "happy" ? T("pl.mood.happy") : T("pl.mood.sad")}
-                  </div>
-                )}
-                <div style={{ fontWeight: 600, letterSpacing: 2 }}>{T("pl.floating.title")}</div>
-                <div
-                  key={introIdx}
-                  style={{
-                    color: TONE.muted,
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                    animation: "pl-bubble-intro .45s ease",
-                  }}
-                >
-                  {eggMode && status?.easterEgg ? status.easterEgg.text : intros[introIdx % intros.length]}
-                </div>
-                {/* 轮询指示点（彩蛋模式单条展示，不轮播故隐藏） */}
-                {!eggMode && (
-                  <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
-                    {intros.map((_, i) => {
-                      const active = i === introIdx % intros.length;
-                      return (
-                        <span
-                          key={i}
-                          style={{
-                            width: 5,
-                            height: 5,
-                            borderRadius: "50%",
-                            background: active ? TONE.accent : TONE.quiet,
-                            transition: "background .2s, transform .2s",
-                            transform: active ? "scale(1.35)" : "scale(1)",
-                          }}
-                        />
-                      );
-                    })}
-                  </div>
-                )}
-              </>
-            )}
-            {/* 气泡小尾巴：始终指向小人中心（上→朝下、下→朝上、左→朝右、右→朝左）。
-                方块边长 10，旋转 45° 后三角底线（两平角连线）位于方块中心，悬出量取半宽 5，
-                使底线恰好落在卡片边界上，与卡片边无缝连接，消除「三角飘在卡片外、中间留空隙」。 */}
-            <span
-              style={{
-                position: "absolute",
-                // 上/下方向：尖角在气泡水平居中（相对小人中心）；左/右方向：垂直居中
-                ...(bubblePos.dir === "above"
-                  ? { left: bubblePos.tailX, bottom: -5 }
-                  : bubblePos.dir === "below"
-                    ? { left: bubblePos.tailX, top: -5 }
-                    : bubblePos.dir === "left"
-                      ? { top: bubblePos.tailY, right: -5 }
-                      : { top: bubblePos.tailY, left: -5 }),
-                width: 10,
-                height: 10,
-                background: "inherit",
-                zIndex: -1, // 让伸入气泡内的部分沉到背景之下，避免压盖内容
-                // 朝向决定用哪对邻边；四种朝向均旋转 45°，尖角指各方向
-                borderTop:
-                  bubblePos.dir === "below" || bubblePos.dir === "left"
-                    ? `1px solid ${TONE.border}`
-                    : "none",
-                borderRight:
-                  bubblePos.dir === "above" || bubblePos.dir === "left"
-                    ? `1px solid ${TONE.border}`
-                    : "none",
-                borderBottom:
-                  bubblePos.dir === "above" || bubblePos.dir === "right"
-                    ? `1px solid ${TONE.border}`
-                    : "none",
-                borderLeft:
-                  bubblePos.dir === "below" || bubblePos.dir === "right"
-                    ? `1px solid ${TONE.border}`
-                    : "none",
-                transform: "rotate(45deg)",
-              }}
-            />
-          </div>
-        )}
-        {/* 小人本体：雪碧图就绪时用 background-position 帧播放；生成失败回退到 SVG 角色 */}
-        <div style={{ position: "relative", width: "100%", height: "100%", pointerEvents: "none" }}>
-          {sheet ? (
-          <div
-            ref={spriteRef}
-            style={{
-              position: "absolute",
-              inset: 0,
-              width: PERSON_SIZE,
-              height: PERSON_SIZE,
-              backgroundImage: `url(${sheet.url})`,
-              backgroundSize: `${SPRITE_CELL * SPRITE_COLUMNS}px ${SPRITE_CELL * SPRITE_ROWS}px`,
-              backgroundRepeat: "no-repeat",
-              // 心情/阶段动作动画与 SVG 回退保持一致（背景帧播放与 transform 互不冲突）
-              animation: personAnim,
-              filter: "drop-shadow(0 2px 7px color-mix(in srgb, var(--dsw-alias-label-primary, #1f2937) 45%, transparent))",
-            }}
-          />
-          ) : (
-          <svg width={PERSON_SIZE} height={PERSON_SIZE} viewBox="0 0 72 72" fill="none" style={{ position: "absolute", inset: 0, animation: personAnim, pointerEvents: "none", filter: "drop-shadow(0 2px 7px color-mix(in srgb, var(--dsw-alias-label-primary, #1f2937) 45%, transparent))" }}>
-            <title>{T("pl.title")}</title>
-            {/* 身体 */}
-            <path d="M22 47 C18 47 14 42 13 34 C12 26 18 21 25 20 C22 15 26 11 33 12 C40 11 44 15 41 20 C48 21 54 26 53 34 C52 42 48 47 44 47 Z" fill="var(--dsw-alias-label-primary, #1f2937)" opacity=".16" />
-            {/* 小手 */}
-            <g className="pl-person-arm">
-              <ellipse cx="36" cy="52" rx="12" ry="9" fill="var(--dsw-alias-label-primary, #1f2937)" opacity="0.85" />
-              <ellipse cx="26" cy="50" rx="5" ry="4" fill="var(--dsw-alias-interactive-bg-hover, rgba(100,116,139,.4))" />
-            </g>
-            {/* 脸 */}
-            <circle cx="36" cy="34" r="15" fill="var(--dsw-alias-label-primary, #1f2937)" />
-            {/* 腮红 */}
-            <circle cx="29" cy="37" r="2.4" fill="#fff" opacity=".55" />
-            <circle cx="43" cy="37" r="2.4" fill="#fff" opacity=".55" />
-            {/* 眼睛（含眨动） */}
-            <g style={{ animation: "pl-person-blink 4s ease-in-out infinite", transformOrigin: "32px 34px" }}>
-              <circle cx="31" cy="33" r="2.6" fill="#fff" />
-              <circle cx="41" cy="33" r="2.6" fill="#fff" />
-              <circle cx="32" cy="33.6" r="1.2" fill="#10141c" />
-              <circle cx="42" cy="33.6" r="1.2" fill="#10141c" />
-            </g>
-            {/* 微笑 */}
-            <path d="M30 39.5 Q36 43.5 42 39.5" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" />
-          </svg>
-          )}
-          {/* 地面影子 */}
-          <div
-            style={{
-              position: "absolute",
-              left: "50%",
-              bottom: 2,
-              width: 34,
-              height: 8,
-              borderRadius: "50%",
-              background: "color-mix(in srgb, var(--dsw-alias-brand-primary, #2563eb) 45%, rgba(2, 6, 23, .55))",
-              opacity: 0.34,
-              transform: "translateX(-50%)",
-              filter: "blur(1px)",
-              boxShadow: "0 0 6px color-mix(in srgb, var(--dsw-alias-brand-primary, #2563eb) 30%, transparent)",
-              animation: "pl-person-shadow 2.6s ease-in-out infinite",
-            }}
-          />
-          {/* 等级徽章：显示当前 Lv 与称号；悬停 title 提示升级进度（满级不显示进度）。
-              受「显示等级助手」设置控制，关闭后不显示等级。 */}
-          {status && levelEnabled && (
+        <div
+          aria-label={T("pl.title")}
+          onMouseDown={startPersonDrag}
+          onContextMenu={(e) => {
+            // 右键：弹出迷你菜单（工具面板 / 成就 / 公告）；与左键拖动/单击互不干扰。
+            // 词库助手未启用，或工具/公告/成就入口全部关闭时不弹菜单。
+            e.preventDefault();
+            if (!ctxMenuEnabled) return;
+            setCtxMenu({ x: e.clientX, y: e.clientY });
+          }}
+          onMouseEnter={() => {
+            hoverRef.current = true;
+            setHovering(true);
+            setBubble(true);
+          }}
+          onMouseLeave={() => {
+            hoverRef.current = false;
+            setHovering(false);
+            setBubble(false);
+            setEggMode(false);
+          }}
+          style={{
+            position: "fixed",
+            left: view.px,
+            top: view.py,
+            zIndex: 2147483647,
+            width: PERSON_SIZE,
+            height: PERSON_SIZE,
+            cursor: "grab",
+            animation: "pl-pop-in .3s cubic-bezier(.22,1,.36,1)",
+            // 拖拽中跟手无动画，其余（贴边/恢复）平滑过渡
+            transition: dragging
+              ? "none"
+              : "left .35s cubic-bezier(.22,1,.36,1), top .35s cubic-bezier(.22,1,.36,1)",
+            userSelect: "none",
+          }}
+        >
+          {/* 统一气泡框：toast（成就/互动，优先级最高）> 阶段气泡 > 简介轮播，共用同一圆弧气泡样式与定位 */}
+          {(phaseActive || bubble || toast) && bubblePos && (
             <div
-              title={
-                status.level.next > status.level.current
-                  ? `${status.level.title} · ${T("pl.gamification.progress").replace("{n}", String(status.level.next - status.level.current))}`
-                  : `${status.level.title} · ${T("pl.gamification.maxed")}`
-              }
+              ref={bubbleRef}
               style={{
-                position: "absolute",
-                right: -4,
-                bottom: -2,
-                minWidth: 22,
-                height: 16,
-                padding: "0 4px",
-                borderRadius: 8,
-                background: TONE.accent,
-                // 黑夜模式下品牌色偏浅（浅蓝），文字需用深色；白天品牌色偏深（深蓝），文字用白色
-                color: dark ? "#10141c" : "#fff",
-                fontSize: 9,
-                fontWeight: 600,
-                lineHeight: "16px",
+                position: "fixed",
+                left: bubblePos.left,
+                top: bubblePos.top,
+                zIndex: 2147483646, // 建立层叠上下文，使尾巴 zIndex:-1 相对本气泡生效（否则会逃逸层级）
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 5,
+                width: "max-content", // 宽随文字尺寸自适应（短文案贴合、长文案展开）
+                maxWidth: 288, // 仅保留最大宽度，避免超长文案撑出屏幕
+                padding: "8px 14px",
+                background: TONE.panel,
+                color: TONE.text,
+                border: `1px solid ${TONE.border}`,
+                borderRadius: 16, // 圆弧气泡：大圆角圆润风格
+                fontSize: 10.5,
+                lineHeight: 1.45,
                 textAlign: "center",
-                boxShadow: "0 1px 4px rgba(2, 6, 23, .25)",
-                pointerEvents: "none",
+                boxShadow: "0 3px 12px rgba(17, 24, 39, .1)",
+                animation: "pl-bubble-in .2s cubic-bezier(.22,1,.36,1)",
+                pointerEvents: "none", // 气泡仅展示，穿透不挡页面点击
               }}
             >
-              Lv.{status.level.level}
+              {toast ? (
+                <>
+                  {/* 临时提示：成就解锁 / 点击互动 */}
+                  {toast.title && (
+                    <div
+                      style={{
+                        fontWeight: 600,
+                        letterSpacing: 1,
+                        color: TONE.accent,
+                      }}
+                    >
+                      {toast.title}
+                    </div>
+                  )}
+                  <span
+                    style={{
+                      color: TONE.muted,
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                      textAlign: "center",
+                    }}
+                  >
+                    {toast.text}
+                  </span>
+                </>
+              ) : phaseActive ? (
+                <>
+                  {/* 阶段内容：三个依次弹跳的思考小点 + 状态文字 */}
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 4,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      height: 7,
+                    }}
+                  >
+                    {[0, 1, 2].map((i) => (
+                      <span
+                        key={i}
+                        className="pl-think-dot"
+                        style={{
+                          width: 5,
+                          height: 5,
+                          background: TONE.accent,
+                          animationDelay: `${i * 0.18}s`,
+                        }}
+                      />
+                    ))}
+                  </div>
+                  {/* 阶段内容：优先用 host 按聊天主题推送的文案，缺失时回退到 i18n 内置文案 */}
+                  <span style={{ color: TONE.muted, whiteSpace: "nowrap" }}>
+                    {activity.text || T(PHASE_KEY[activity.phase])}
+                  </span>
+                </>
+              ) : (
+                <>
+                  {/* 简介内容：心情气泡 + 标题 + 轮播正文 + 指示点（彩蛋模式展示应景文案、隐藏指示点） */}
+                  {/* 心情气泡：非平常情绪时在简介顶部展示当日情绪小结（气泡表情） */}
+                  {mood !== "neutral" && (
+                    <div
+                      style={{
+                        fontWeight: 600,
+                        fontSize: 10.5,
+                        letterSpacing: 0.5,
+                        color:
+                          mood === "happy"
+                            ? "var(--dsw-alias-state-success-primary, #16a34a)"
+                            : TONE.red,
+                      }}
+                    >
+                      {mood === "happy" ? T("pl.mood.happy") : T("pl.mood.sad")}
+                    </div>
+                  )}
+                  <div style={{ fontWeight: 600, letterSpacing: 2 }}>
+                    {T("pl.floating.title")}
+                  </div>
+                  <div
+                    key={introIdx}
+                    style={{
+                      color: TONE.muted,
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                      animation: "pl-bubble-intro .45s ease",
+                    }}
+                  >
+                    {eggMode && status?.easterEgg
+                      ? status.easterEgg.text
+                      : intros[introIdx % intros.length]}
+                  </div>
+                  {/* 轮询指示点（彩蛋模式单条展示，不轮播故隐藏） */}
+                  {!eggMode && (
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 4,
+                        justifyContent: "center",
+                      }}
+                    >
+                      {intros.map((_, i) => {
+                        const active = i === introIdx % intros.length;
+                        return (
+                          <span
+                            key={i}
+                            style={{
+                              width: 5,
+                              height: 5,
+                              borderRadius: "50%",
+                              background: active ? TONE.accent : TONE.quiet,
+                              transition: "background .2s, transform .2s",
+                              transform: active ? "scale(1.35)" : "scale(1)",
+                            }}
+                          />
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              )}
+              {/* 气泡小尾巴：始终指向助手中心（上→朝下、下→朝上、左→朝右、右→朝左）。
+                方块边长 10，旋转 45° 后三角底线（两平角连线）位于方块中心，悬出量取半宽 5，
+                使底线恰好落在卡片边界上，与卡片边无缝连接，消除「三角飘在卡片外、中间留空隙」。 */}
+              <span
+                style={{
+                  position: "absolute",
+                  // 上/下方向：尖角在气泡水平居中（相对助手中心）；左/右方向：垂直居中
+                  ...(bubblePos.dir === "above"
+                    ? { left: bubblePos.tailX, bottom: -5 }
+                    : bubblePos.dir === "below"
+                      ? { left: bubblePos.tailX, top: -5 }
+                      : bubblePos.dir === "left"
+                        ? { top: bubblePos.tailY, right: -5 }
+                        : { top: bubblePos.tailY, left: -5 }),
+                  width: 10,
+                  height: 10,
+                  background: "inherit",
+                  zIndex: -1, // 让伸入气泡内的部分沉到背景之下，避免压盖内容
+                  // 朝向决定用哪对邻边；四种朝向均旋转 45°，尖角指各方向
+                  borderTop:
+                    bubblePos.dir === "below" || bubblePos.dir === "left"
+                      ? `1px solid ${TONE.border}`
+                      : "none",
+                  borderRight:
+                    bubblePos.dir === "above" || bubblePos.dir === "left"
+                      ? `1px solid ${TONE.border}`
+                      : "none",
+                  borderBottom:
+                    bubblePos.dir === "above" || bubblePos.dir === "right"
+                      ? `1px solid ${TONE.border}`
+                      : "none",
+                  borderLeft:
+                    bubblePos.dir === "below" || bubblePos.dir === "right"
+                      ? `1px solid ${TONE.border}`
+                      : "none",
+                  transform: "rotate(45deg)",
+                }}
+              />
             </div>
           )}
-        </div>
+          {/* 助手本体：雪碧图就绪时用 background-position 帧播放；生成失败回退到 SVG 角色 */}
+          <div
+            style={{
+              position: "relative",
+              width: "100%",
+              height: "100%",
+              pointerEvents: "none",
+            }}
+          >
+            {sheet ? (
+              <div
+                ref={spriteRef}
+                style={{
+                  position: "absolute",
+                  // 按每帧几何等比缩放到 PERSON_SIZE 内居中：经典款为满框正方形，
+                  // 鲸鱼款 192×208 等比缩放保留比例，避免纵向压扁。
+                  left: (PERSON_SIZE - sheet.cellW * Math.min(1, PERSON_SIZE / sheet.cellW, PERSON_SIZE / sheet.cellH)) / 2,
+                  top: (PERSON_SIZE - sheet.cellH * Math.min(1, PERSON_SIZE / sheet.cellW, PERSON_SIZE / sheet.cellH)) / 2,
+                  width: sheet.cellW * Math.min(1, PERSON_SIZE / sheet.cellW, PERSON_SIZE / sheet.cellH),
+                  height: sheet.cellH * Math.min(1, PERSON_SIZE / sheet.cellW, PERSON_SIZE / sheet.cellH),
+                  backgroundImage: `url(${sheet.url})`,
+                  backgroundSize: `${sheet.cellW * sheet.columns * Math.min(1, PERSON_SIZE / sheet.cellW, PERSON_SIZE / sheet.cellH)}px ${sheet.cellH * sheet.rows * Math.min(1, PERSON_SIZE / sheet.cellW, PERSON_SIZE / sheet.cellH)}px`,
+                  backgroundRepeat: "no-repeat",
+                  // 心情/阶段动作动画与 SVG 回退保持一致（背景帧播放与 transform 互不冲突）
+                  animation: personAnim,
+                  filter:
+                    "drop-shadow(0 2px 7px color-mix(in srgb, var(--dsw-alias-label-primary, #1f2937) 45%, transparent))",
+                }}
+              />
+            ) : character === "husky" ? (
+              <svg
+                width={PERSON_SIZE}
+                height={PERSON_SIZE}
+                viewBox="0 0 72 72"
+                fill="none"
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  animation: personAnim,
+                  pointerEvents: "none",
+                  filter:
+                    "drop-shadow(0 2px 7px color-mix(in srgb, var(--dsw-alias-label-primary, #1f2937) 45%, transparent))",
+                }}
+              >
+                <title>{T("pl.title")}</title>
+                {/* 尾巴 */}
+                <ellipse cx="22" cy="50" rx="4.6" ry="3" fill="#c7cdd3" stroke="#c9c2b4" strokeWidth="0.8" />
+                {/* 四只脚 */}
+                <ellipse cx="33" cy="49" rx="3.4" ry="2.7" fill="#c7cdd3" stroke="#c9c2b4" strokeWidth="0.8" />
+                <ellipse cx="39" cy="49" rx="3.4" ry="2.7" fill="#c7cdd3" stroke="#c9c2b4" strokeWidth="0.8" />
+                <ellipse cx="29" cy="52" rx="4.2" ry="3.4" fill="#c7cdd3" stroke="#c9c2b4" strokeWidth="0.8" />
+                <ellipse cx="43" cy="52" rx="4.2" ry="3.4" fill="#c7cdd3" stroke="#c9c2b4" strokeWidth="0.8" />
+                {/* 身体 + 米白胸腹 */}
+                <ellipse cx="36" cy="42" rx="12.5" ry="9.5" fill="#c7cdd3" stroke="#c9c2b4" strokeWidth="0.9" />
+                <ellipse cx="36" cy="45" rx="7.5" ry="5.5" fill="#f4f0ea" />
+                {/* 小手 */}
+                <g className="pl-person-arm">
+                  <ellipse cx="36" cy="52" rx="12" ry="9" fill="#c7cdd3" stroke="#c9c2b4" strokeWidth="0.8" />
+                  <ellipse cx="26" cy="50" rx="5" ry="4" fill="#2f3540" />
+                </g>
+                {/* 双耳（尖立三角耳：深色外耳 + 粉芯内耳） */}
+                <path d="M23.5,10.5 Q19.5,24 29.5,22.8 Z" fill="#434a54" stroke="#c9c2b4" strokeWidth="0.9" />
+                <path d="M48.5,10.5 Q52.5,24 42.5,22.8 Z" fill="#434a54" stroke="#c9c2b4" strokeWidth="0.9" />
+                <path d="M25.6,12.5 Q22.6,22 28.6,21.6 Z" fill="#f2a0b0" opacity=".85" />
+                <path d="M46.4,12.5 Q49.4,22 43.4,21.6 Z" fill="#f2a0b0" opacity=".85" />
+                {/* 头 */}
+                <circle cx="36" cy="34" r="15" fill="#f4f0ea" stroke="#c9c2b4" strokeWidth="1" />
+                {/* 额头倒三角深色斑纹（哈士奇标志性黑额斑） */}
+                <path d="M22.8,20 Q36,14.6 49.2,20 L45.2,25.8 Q36,29.2 26.8,25.8 Z" fill="#434a54" />
+                {/* 白眉心纹 */}
+                <ellipse cx="30.4" cy="29.4" rx="3" ry="1.8" transform="rotate(14 30.4 29.4)" fill="#fbfaf6" />
+                <ellipse cx="41.6" cy="29.4" rx="3" ry="1.8" transform="rotate(-14 41.6 29.4)" fill="#fbfaf6" />
+                {/* 吻部 */}
+                <ellipse cx="36" cy="40" rx="8.4" ry="6.4" fill="#f4f0ea" />
+                {/* 冰蓝眼睛 */}
+                <ellipse cx="31" cy="33" rx="3" ry="3.1" fill="#7fb3d8" stroke="#434a54" strokeWidth="1.1" />
+                <ellipse cx="41" cy="33" rx="3" ry="3.1" fill="#7fb3d8" stroke="#434a54" strokeWidth="1.1" />
+                <circle cx="32" cy="31.6" r="1.1" fill="#ffffff" />
+                <circle cx="42" cy="31.6" r="1.1" fill="#ffffff" />
+                {/* 鼻头 */}
+                <ellipse cx="36" cy="38.6" rx="2.4" ry="1.9" fill="#2f3540" />
+                {/* 嘴 */}
+                <path d="M32.5,41.8 Q36,44.2 39.5,41.8" stroke="#2f3540" strokeWidth="1.4" strokeLinecap="round" />
+                {/* 腮红 */}
+                <circle cx="28.5" cy="37.5" r="2.4" fill="#f2a0b0" opacity=".45" />
+                <circle cx="43.5" cy="37.5" r="2.4" fill="#f2a0b0" opacity=".45" />
+              </svg>
+            ) : (
+              <svg
+                width={PERSON_SIZE}
+                height={PERSON_SIZE}
+                viewBox="0 0 72 72"
+                fill="none"
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  animation: personAnim,
+                  pointerEvents: "none",
+                  filter:
+                    "drop-shadow(0 2px 7px color-mix(in srgb, var(--dsw-alias-label-primary, #1f2937) 45%, transparent))",
+                }}
+              >
+                <title>{T("pl.title")}</title>
+                {/* 身体（米兔暖白小身子 + 描边） */}
+                <ellipse
+                  cx="36"
+                  cy="42"
+                  rx="12"
+                  ry="9"
+                  fill="#f9f5ec"
+                  stroke="#c9c2b4"
+                  strokeWidth="0.9"
+                />
+                {/* 四只脚（前后各一对，靠后一对略小略高形成纵深感） */}
+                <ellipse cx="33" cy="49" rx="3.4" ry="2.7" fill="#f9f5ec" stroke="#c9c2b4" strokeWidth="0.8" />
+                <ellipse cx="39" cy="49" rx="3.4" ry="2.7" fill="#f9f5ec" stroke="#c9c2b4" strokeWidth="0.8" />
+                <ellipse cx="29" cy="52" rx="4.2" ry="3.4" fill="#f9f5ec" stroke="#c9c2b4" strokeWidth="0.8" />
+                <ellipse cx="43" cy="52" rx="4.2" ry="3.4" fill="#f9f5ec" stroke="#c9c2b4" strokeWidth="0.8" />
+                {/* 小手 */}
+                <g className="pl-person-arm">
+                  <ellipse cx="36" cy="52" rx="12" ry="9" fill="#f9f5ec" stroke="#c9c2b4" strokeWidth="0.8" />
+                  <ellipse cx="26" cy="50" rx="5" ry="4" fill="#1f2937" />
+                </g>
+                {/* 米兔双耳（在脸之下，耳根被脸盖住） */}
+                <g>
+                  <ellipse cx="27.5" cy="14.5" rx="4.6" ry="9" transform="rotate(7 27.5 14.5)" fill="#f9f5ec" stroke="#c9c2b4" strokeWidth="0.9" opacity="0.92" />
+                  <ellipse cx="44.5" cy="14.5" rx="4.6" ry="9" transform="rotate(-7 44.5 14.5)" fill="#f9f5ec" stroke="#c9c2b4" strokeWidth="0.9" opacity="0.92" />
+                  <ellipse cx="27.5" cy="14.5" rx="2" ry="6" transform="rotate(7 27.5 14.5)" fill="#f6a9c4" opacity="0.85" />
+                  <ellipse cx="44.5" cy="14.5" rx="2" ry="6" transform="rotate(-7 44.5 14.5)" fill="#f6a9c4" opacity="0.85" />
+                </g>
+                {/* 脸（米兔暖白圆脸 + 描边） */}
+                <circle
+                  cx="36"
+                  cy="34"
+                  r="15"
+                  fill="#f9f5ec"
+                  stroke="#c9c2b4"
+                  strokeWidth="1"
+                />
+                {/* 腮红（米兔经典粉） */}
+                <circle cx="29" cy="37" r="2.6" fill="#f6a9c4" opacity=".5" />
+                <circle cx="43" cy="37" r="2.6" fill="#f6a9c4" opacity=".5" />
+                {/* 眼睛（含眨动） */}
+                <g
+                  style={{
+                    animation: "pl-person-blink 4s ease-in-out infinite",
+                    transformOrigin: "32px 34px",
+                  }}
+                >
+                  <circle cx="31" cy="33" r="2.6" fill="#1f2937" />
+                  <circle cx="41" cy="33" r="2.6" fill="#1f2937" />
+                  <circle cx="32" cy="33.2" r="1" fill="#ffffff" />
+                  <circle cx="42" cy="33.2" r="1" fill="#ffffff" />
+                </g>
+                {/* 微笑 */}
+                <path
+                  d="M30 39.5 Q36 43.5 42 39.5"
+                  stroke="#e5444b"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                />
+              </svg>
+            )}
+            {/* 地面影子 */}
+            <div
+              style={{
+                position: "absolute",
+                left: "50%",
+                bottom: 2,
+                width: 34,
+                height: 8,
+                borderRadius: "50%",
+                background:
+                  "color-mix(in srgb, var(--dsw-alias-brand-primary, #2563eb) 45%, rgba(2, 6, 23, .55))",
+                opacity: 0.34,
+                transform: "translateX(-50%)",
+                filter: "blur(1px)",
+                boxShadow:
+                  "0 0 6px color-mix(in srgb, var(--dsw-alias-brand-primary, #2563eb) 30%, transparent)",
+                animation: "pl-person-shadow 2.6s ease-in-out infinite",
+              }}
+            />
+            {/* 等级徽章：显示当前 Lv 与称号；悬停 title 提示升级进度（满级不显示进度）。
+              受「显示等级助手」设置控制，关闭后不显示等级。 */}
+            {status && levelEnabled && (
+              <div
+                title={
+                  status.level.next > status.level.current
+                    ? `${status.level.title} · ${T("pl.gamification.progress").replace("{n}", String(status.level.next - status.level.current))}`
+                    : `${status.level.title} · ${T("pl.gamification.maxed")}`
+                }
+                style={{
+                  position: "absolute",
+                  right: -4,
+                  bottom: -2,
+                  minWidth: 22,
+                  height: 16,
+                  padding: "0 4px",
+                  borderRadius: 8,
+                  background: TONE.accent,
+                  // 黑夜模式下品牌色偏浅（浅蓝），文字需用深色；白天品牌色偏深（深蓝），文字用白色
+                  color: dark ? "#10141c" : "#fff",
+                  fontSize: 9,
+                  fontWeight: 600,
+                  lineHeight: "16px",
+                  textAlign: "center",
+                  boxShadow: "0 1px 4px rgba(2, 6, 23, .25)",
+                  pointerEvents: "none",
+                }}
+              >
+                Lv.{status.level.level}
+              </div>
+            )}
+          </div>
         </div>,
         document.body,
       )}
@@ -1143,8 +1497,8 @@ export function PromptAssistant(props: Props): ReactNode {
       {ctxMenu && ctxMenuEnabled && (
         <>
           {createPortal(
-            // 透明遮罩：与菜单同为最高层级且渲染在小人 portal 之后（DOM 靠后），
-            // 因此能盖住小人/等级徽章，点击任意位置即关闭菜单（也阻止误拖小人）
+            // 透明遮罩：与菜单同为最高层级且渲染在助手 portal 之后（DOM 靠后），
+            // 因此能盖住助手/等级徽章，点击任意位置即关闭菜单（也阻止误拖助手）
             <div
               style={{ position: "fixed", inset: 0, zIndex: 2147483647 }}
               onMouseDown={() => setCtxMenu(null)}
@@ -1157,25 +1511,36 @@ export function PromptAssistant(props: Props): ReactNode {
           )}
           {createPortal(
             <div
+              ref={ctxMenuRef}
               className="pl-ctx-menu"
               style={{
                 position: "fixed",
-                // 贴近屏幕右/下边缘时翻转到指针另一侧，保证菜单完整可见
-                left: ctxMenu.x + 156 > window.innerWidth ? Math.max(8, ctxMenu.x - 156) : ctxMenu.x,
-                top: ctxMenu.y + 152 > window.innerHeight ? Math.max(8, ctxMenu.y - 152) : ctxMenu.y,
+                left: ctxPos.left,
+                top: ctxPos.top,
                 zIndex: 2147483647,
                 minWidth: 150,
+                maxHeight: "calc(100vh - 24px)",
+                overflowY: "auto",
+                overscrollBehavior: "contain",
+                boxSizing: "border-box",
                 fontFamily: MONO,
               }}
             >
               <div className="pl-ctx-head">
-                <svg width="13" height="13" viewBox="0 0 16 16" fill="var(--dsw-alias-brand-primary, #2563eb)" aria-hidden="true">
+                <svg
+                  width="13"
+                  height="13"
+                  viewBox="0 0 16 16"
+                  fill="var(--dsw-alias-brand-primary, #2563eb)"
+                  aria-hidden="true"
+                >
                   <path d="M8 2.2l1.1 3.7 3.7 1.1-3.7 1.1L8 11.8 6.9 8.1 3.2 7l3.7-1.1L8 2.2z" />
                 </svg>
                 {T("pl.floating.title")}
               </div>
               {/* 打开工具面板：仅当「显示词库工具面板」开关开启时显示 */}
-              {(settings?.rightPanelEnabled ?? DEFAULT_SETTINGS.rightPanelEnabled) && (
+              {(settings?.rightPanelEnabled ??
+                DEFAULT_SETTINGS.rightPanelEnabled) && (
                 <div
                   className="pl-ctx-item"
                   onClick={() => {
@@ -1183,13 +1548,138 @@ export function PromptAssistant(props: Props): ReactNode {
                     onTogglePanel?.();
                   }}
                 >
-                  <CtxIcon bg="rgba(37, 99, 235, .12)" color="var(--dsw-alias-brand-primary, #2563eb)">
+                  <CtxIcon
+                    bg="rgba(37, 99, 235, .12)"
+                    color="var(--dsw-alias-brand-primary, #2563eb)"
+                  >
                     <rect x="2.5" y="2.5" width="4.6" height="4.6" rx="1.1" />
                     <rect x="8.9" y="2.5" width="4.6" height="4.6" rx="1.1" />
                     <rect x="2.5" y="8.9" width="4.6" height="4.6" rx="1.1" />
                     <rect x="8.9" y="8.9" width="4.6" height="4.6" rx="1.1" />
                   </CtxIcon>
                   {T("pl.ctx.openPanel")}
+                </div>
+              )}
+              {/* 数据管理入口：导入导出 / 标签 / 回收站；仅当「数据管理」开关开启时显示 */}
+              {(settings?.dataManagementEnabled ??
+                DEFAULT_SETTINGS.dataManagementEnabled) && (
+                <>
+                  <div
+                    className="pl-ctx-item"
+                    onClick={() => setDataMenuOpen((v) => !v)}
+                    aria-expanded={dataMenuOpen}
+                  >
+                    <CtxIcon bg="rgba(16, 185, 129, .12)" color="#10b981">
+                      <path d="M8 3.5v9M4.8 5.7l3.2-3.2 3.2 3.2" />
+                      <path d="M12.5 11l2.2 1.4a1 1 0 0 0 1-.1L15.8 12" />
+                      <path d="M13 14H5.2a.8.8 0 0 1-.8-.8V13" />
+                    </CtxIcon>
+                    {T("pl.ctx.dataManagement")}
+                    <svg
+                      width="12"
+                      height="12"
+                      viewBox="0 0 16 16"
+                      style={{
+                        flexShrink: 0,
+                        color: TONE.muted,
+                        transform: dataMenuOpen
+                          ? "rotate(180deg)"
+                          : "rotate(0deg)",
+                        transition: "transform .2s ease",
+                      }}
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M4 6l4 4 4-4"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </div>
+                  {dataMenuOpen && (
+                    <>
+                      <div
+                        className="pl-ctx-sub"
+                        onClick={() => {
+                          setCtxMenu(null);
+                          setDataMenuOpen(false);
+                          setImportExportOpen(true);
+                        }}
+                      >
+                        <CtxIcon
+                          bg="rgba(37, 99, 235, .12)"
+                          color="var(--dsw-alias-brand-primary, #2563eb)"
+                        >
+                          <path d="M8 12V4M8 4L5 7M8 4l3 3M8 12l-3-3M8 12l3-3" />
+                        </CtxIcon>
+                        {T("pl.moduleImportExport")}
+                      </div>
+                      <div
+                        className="pl-ctx-sub"
+                        onClick={() => {
+                          setCtxMenu(null);
+                          setDataMenuOpen(false);
+                          setTagsOpen(true);
+                        }}
+                      >
+                        <CtxIcon bg="rgba(139, 92, 246, .12)" color="#8b5cf6">
+                          <path d="M3 4.5A1.5 1.5 0 0 1 4.5 3h3l5 5-4.5 4.5-5-5v-3Z" />
+                          <circle cx="6.4" cy="6.4" r=".4" strokeWidth="2" />
+                        </CtxIcon>
+                        {T("pl.moduleTags")}
+                      </div>
+                      <div
+                        className="pl-ctx-sub"
+                        onClick={() => {
+                          setCtxMenu(null);
+                          setDataMenuOpen(false);
+                          setTrashOpen(true);
+                        }}
+                      >
+                        <CtxIcon
+                          bg="rgba(220, 38, 38, .1)"
+                          color="var(--dsw-alias-state-error-primary, #dc2626)"
+                        >
+                          <path d="M5 4.5h6v8.5a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 5 13V4.5Z" />
+                          <path d="M4 4.5h8M6.7 2.5h2.6" />
+                        </CtxIcon>
+                        {T("pl.moduleTrash")}
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+              {/* 人格管理入口：多人格 CRUD + 按会话切换；仅当「人格管理」开关开启时显示 */}
+              {(settings?.personaEnabled ??
+                DEFAULT_SETTINGS.personaEnabled) && (
+                <div
+                  className="pl-ctx-item"
+                  onClick={() => {
+                    setCtxMenu(null);
+                    setPersonaOpen(true);
+                  }}
+                >
+                  <CtxIcon bg="rgba(139, 92, 246, .12)" color="#8b5cf6">
+                    <path d="M4 5.5C4 4.7 4.7 4 5.5 4H11v15H5.5C4.7 19 4 18.3 4 17.5v-12Z" />
+                    <path d="M20 5.5C20 4.7 19.3 4 18.5 4H13v15h5.5c.8 0 1.5-.7 1.5-1.5v-12Z" />
+                  </CtxIcon>
+                  {T("pl.ctx.personas")}
+                </div>
+              )}
+              {/* 看板入口：统计可视化；仅当「看板」开关开启时显示 */}
+              {(settings?.dashboardEnabled ??
+                DEFAULT_SETTINGS.dashboardEnabled) && (
+                <div className="pl-ctx-item" onClick={openMenuDashboard}>
+                  <CtxIcon
+                    bg="rgba(37, 99, 235, .12)"
+                    color="var(--dsw-alias-brand-primary, #2563eb)"
+                  >
+                    <path d="M7 13V7M11 13V9M15 13V4M4 13h15" />
+                  </CtxIcon>
+                  {T("pl.ctx.dashboard")}
                 </div>
               )}
               {/* 成就入口：仅当「显示等级助手」开关开启时显示，保持等级助手关闭时菜单无「成就」 */}
@@ -1205,9 +1695,13 @@ export function PromptAssistant(props: Props): ReactNode {
                 </div>
               )}
               {/* 公告入口：仅当「显示公告」开关开启时显示，保持原右键打开公告的开关语义 */}
-              {(settings?.announcementEnabled ?? DEFAULT_SETTINGS.announcementEnabled) && (
+              {(settings?.announcementEnabled ??
+                DEFAULT_SETTINGS.announcementEnabled) && (
                 <div className="pl-ctx-item" onClick={openMenuAnnounce}>
-                  <CtxIcon bg="rgba(220, 38, 38, .1)" color="var(--dsw-alias-state-error-primary, #dc2626)">
+                  <CtxIcon
+                    bg="rgba(220, 38, 38, .1)"
+                    color="var(--dsw-alias-state-error-primary, #dc2626)"
+                  >
                     <path d="M3 8.5V7a1.5 1.5 0 0 1 1.5-1.5h1L10 3.5v9l-4.5-2H4.5A1.5 1.5 0 0 1 3 9v-.5Z" />
                     <path d="M11 6.5a2.6 2.6 0 0 1 0 3" />
                   </CtxIcon>
@@ -1220,9 +1714,37 @@ export function PromptAssistant(props: Props): ReactNode {
         </>
       )}
       {/* 公告弹窗：右键菜单「公告」打开（使用手册 + 通告） */}
-      <AnnouncementModal open={announceOpen} onClose={() => setAnnounceOpen(false)} t={T} />
+      <AnnouncementModal
+        open={announceOpen}
+        onClose={() => setAnnounceOpen(false)}
+        t={T}
+      />
       {/* 成就弹窗：右键菜单「成就」打开（等级 + 成就列表） */}
-      <AchievementModal open={achievementOpen} onClose={() => setAchievementOpen(false)} t={T} />
+      <AchievementModal
+        open={achievementOpen}
+        onClose={() => setAchievementOpen(false)}
+        t={T}
+      />
+      {/* 人格管理弹窗：右键菜单「人格管理」打开（多人格 CRUD + 会话绑定说明） */}
+      <PersonaManagerModal
+        open={personaOpen}
+        onClose={() => setPersonaOpen(false)}
+        t={T}
+      />
+      {/* 看板弹窗：右键菜单「看板」打开（统计可视化） */}
+      <DashboardModal
+        open={dashboardOpen}
+        onClose={() => setDashboardOpen(false)}
+        t={T}
+      />
+      {/* 数据管理：右键菜单「数据管理」→ 导入导出 / 标签 / 回收站 三个独立弹窗 */}
+      <ImportExportModal
+        open={importExportOpen}
+        onClose={() => setImportExportOpen(false)}
+        t={T}
+      />
+      <TagsModal open={tagsOpen} onClose={() => setTagsOpen(false)} t={T} />
+      <TrashModal open={trashOpen} onClose={() => setTrashOpen(false)} t={T} />
     </>
   );
 }

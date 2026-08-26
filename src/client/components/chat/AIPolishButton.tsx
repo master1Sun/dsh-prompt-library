@@ -203,20 +203,22 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
   return (
     <span data-prompt-library-ai-polish style={containerStyle}>
       <style>{PL_BUTTON_CSS}</style>
+      {/* 聊天栏按钮无边框（与词库按钮一致）：去掉 .pl-btn--sm 的边框，保留投影取消 */}
+      <style>{`.pl-btn.pl-cbn-btn{border:none;box-shadow:none}`}</style>
       <style>{`@keyframes pl-polish-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
 
       <Button
         type="button"
         variant="ghost"
         size="sm"
-        className={plBtn("ghost", "sm")}
+        className={`${plBtn("ghost", "sm")} pl-cbn-btn`}
         onClick={handlePolish}
         disabled={status === "polishing" || !draft.trim()}
         data-tip={status === "polishing" ? T("pl.polishLoadingTitle") : draft.trim() ? T("pl.polishHoverContent") : T("pl.polishEmpty")}
         aria-label={T("pl.polish")}
         icon={<SparkleIcon spinning={status === "polishing"} />}
       >
-        {status === "polishing" ? T("pl.polishing") : T("pl.polish")}
+        {!settings.aiPolishButtonIconOnly && (status === "polishing" ? T("pl.polishing") : T("pl.polish"))}
       </Button>
 
       {/* 状态提示 */}

@@ -31,7 +31,8 @@ import {
   polishPromptBody,
   registerLlm,
 } from "./host/services/ai/ai.js";
-import { soulSystemSync, ensureSoulFile, shouldInjectChatCharacter } from "./host/services/assistant/character.js";
+import { soulSystemSync, ensureSoulFile } from "./host/services/assistant/character.js";
+import { resolvePersonaForPath } from "./host/services/persona/persona-service.js";
 import { ensureHarnessFile, harnessSystemSync } from "./host/services/harness/harness.js";
 import { autoUpdateDaily } from "./host/services/update/update.js";
 import { autoBackup } from "./host/services/data/backup.js";
@@ -274,7 +275,7 @@ function buildCopy(lang: "zh" | "en"): Copy {
 
 export function apply(ctx: Context) {
   const routes = makePromptRoutes();
-  // 注册词库助手活动状态机：监听官方会话事件，投影为驱动小人动画的 phase。
+  // 注册词库助手活动状态机：监听官方会话事件，投影为驱动助手动画的 phase。
   const disposeActivity = registerActivity(ctx);
 
   // 数据库懒初始化：首次访问数据时自动创建 prompts.db 表，
@@ -305,10 +306,15 @@ export function apply(ctx: Context) {
       order: 50,
       text: (context) => {
         const scope = (context as { scope?: unknown } | undefined)?.scope;
-        // HARNESS 会话上下文（每次发送注入）+ 人格（实验室开关控制，仅新会话）+ 简短欢迎（仅首次）
+        // 工作目录 = 会话选中的工作区路径（agent.session.header.cwd），是多人格「按工作区/项目」绑定的解析键。
+        // 组装 assign 不到 cwd 时回退为空，走全局默认人格。
+        const agent = (context as { agent?: { session?: { header?: { cwd?: unknown } } } } | undefined)?.agent;
+        const cwd = typeof agent?.session?.header?.cwd === "string" ? agent.session.header.cwd : "";
+        // HARNESS 会话上下文（每次发送注入）+ 人格（按工作区/项目选对应 SOUL）+ 简短欢迎（仅首次）
         const parts: string[] = [];
         parts.push(harnessSystemSync());
-        if (shouldInjectChatCharacter(scope)) parts.push(soulSystemSync());
+        const personaId = resolvePersonaForPath(cwd || null);
+        parts.push(soulSystemSync(personaId));
         const welcome = welcomePromptOnce(scope);
         if (welcome) parts.push(welcome);
         return parts.filter((p) => p.trim()).join("\n\n");

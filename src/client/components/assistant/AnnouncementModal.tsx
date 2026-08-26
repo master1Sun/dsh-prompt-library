@@ -8,8 +8,6 @@
  */
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
-import { plBtn } from "../../utils/button-style.js";
 import { type PLT } from "../../i18n/i18n.js";
 import {
   getAnnouncement,
@@ -17,9 +15,8 @@ import {
   type VersionEntry,
 } from "../../services/api.js";
 import { getTone, useThemeSync } from "../../utils/theme.js";
-
-const MONO =
-  'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif)';
+import { DialogCloseButton } from "../common/DialogCloseButton.js";
+import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../../utils/dialog-style.js";
 
 /** 手册条目图标：小型对勾。 */
 function CheckIcon(): ReactNode {
@@ -143,31 +140,16 @@ export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
       role="dialog"
       aria-modal="true"
       aria-label={t("pl.announce.title")}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 2147483647,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "rgba(0,0,0,0.35)",
-      }}
+      className={PL_DIALOG_OVERLAY}
     >
+      <style>{PL_DIALOG_CSS}</style>
       <div
         onClick={(e) => e.stopPropagation()}
+        className={PL_DIALOG}
         style={{
           width: 600,
           maxWidth: "calc(100vw - 40px)",
           maxHeight: "min(680px, calc(100vh - 40px))",
-          boxSizing: "border-box",
-          display: "flex",
-          flexDirection: "column",
-          background: TONE.panel,
-          border: `1px solid ${TONE.borderStrong}`,
-          borderRadius: 12,
-          padding: "18px 20px",
-          color: TONE.text,
-          fontFamily: MONO,
         }}
       >
         {/* 标题行 + 右上角关闭按钮 */}
@@ -175,17 +157,7 @@ export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
           <strong style={{ flex: 1, fontSize: 15, fontWeight: 600, color: TONE.text }}>
             {t("pl.announce.title")}
           </strong>
-          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={onClose}>
-            <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
-              <path
-                d="M4 4l8 8M12 4l-8 8"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-              />
-            </svg>
-          </Button>
+          <DialogCloseButton onClick={onClose} label={t("pl.close")} />
         </div>
 
         {/* 内容区：超出最大高度时独立滚动 */}
@@ -194,6 +166,8 @@ export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
             flex: 1,
             minHeight: 0,
             overflow: "auto",
+            /* 内容与滚动条之间预留 10px 间距（与官方一致） */
+            paddingRight: 10,
             display: "flex",
             flexDirection: "column",
             gap: 16,
@@ -339,13 +313,6 @@ export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
               )}
             </section>
           </>
-        </div>
-
-        {/* 底部按钮：仅「知道了」可关闭 */}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, paddingTop: 12, flexShrink: 0 }}>
-          <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={onClose}>
-            {t("pl.announce.dismiss")}
-          </Button>
         </div>
       </div>
     </div>,

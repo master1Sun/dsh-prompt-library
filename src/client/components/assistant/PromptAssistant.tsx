@@ -3,7 +3,8 @@
  *
  * 以一个小人形象常驻屏幕，可独立拖动；悬停时展示功能简介气泡，未悬停时也会
  * 按设置的频率自动冒气泡提示。与右侧面板解耦：本组件自管理位置/冒泡/简介，
- * 不再内嵌于面板状态。需要与面板联动时，父级通过 onTogglePanel 回调接收「点击小人」事件。
+ * 不再内嵌于面板状态。左键不联动面板，面板开合统一由右键菜单「打开工具面板」
+ * 通过 onTogglePanel 回调通知父级。
  */
 import {
   useCallback,
@@ -17,9 +18,18 @@ import {
 import { createPortal } from "react-dom";
 import type { PluginSettings } from "../../../types.js";
 import { DEFAULT_SETTINGS } from "../../../types.js";
-import { genIntro, getActivity, type ActivityPhase, type ActivitySnapshot } from "../../services/api.js";
+import {
+  genIntro,
+  getActivity,
+  getAssistantStatus,
+  type ActivityPhase,
+  type ActivitySnapshot,
+  type AssistantStatus,
+} from "../../services/api.js";
 import { type PLTranslate, usePLT } from "../../i18n/i18n.js";
+import { useThemeSync } from "../../utils/theme.js";
 import { AnnouncementModal } from "./AnnouncementModal.js";
+import { AchievementModal } from "./AchievementModal.js";
 import {
   HOVER_SEQUENCE,
   SEQUENCES,
@@ -29,9 +39,15 @@ import {
   TRACK_ROW,
   getSpriteSheet,
   sequenceFrame,
+  type SpriteMood,
+  type SpriteOptions,
   type SpriteSheet,
+  type SpriteTopic,
   type SpriteTrack,
 } from "../../utils/sprite.js";
+
+const MONO =
+  'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif)';
 
 const TONE = {
   text: "var(--dsw-alias-label-primary, #1f2937)",
@@ -43,6 +59,26 @@ const TONE = {
   red: "var(--dsw-alias-state-error-primary, #dc2626)",
 } as const;
 
+/** 右键菜单项图标：统一 15x15 描边风格，底色/颜色由调用方传入。 */
+function CtxIcon({ bg, color, children }: { bg: string; color: string; children: ReactNode }): ReactNode {
+  return (
+    <span className="pl-ctx-ic" style={{ background: bg, color }} aria-hidden="true">
+      <svg
+        width="15"
+        height="15"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        {children}
+      </svg>
+    </span>
+  );
+}
+
 /** 小人尺寸。 */
 const PERSON_SIZE = 72;
 /** 屏幕四周最小边距（含顶部落差给宿主 header）。 */
@@ -50,11 +86,48 @@ const FLOAT_MARGIN = 8;
 /** 词库助手位置在 localStorage 中的存储键。 */
 const POS_KEY = "pl:assistant-pos";
 
+// ── 心情系统：按「本地日期」记录当天会话成功/失败次数 ─────────────────────
+/** 当天心情记录的 localStorage 键前缀（后接 YYYY-MM-DD）。 */
+const MOOD_KEY_PREFIX = "pl:mood:";
+
+/** 当天日期键（本地时区，跨天自动换键归零）。 */
+function moodDayKey(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** 读取当天心情记录；解析失败返回空记录。 */
+function loadMood(): { happy: number; sad: number } {
+  try {
+    const raw = localStorage.getItem(MOOD_KEY_PREFIX + moodDayKey());
+    if (!raw) return { happy: 0, sad: 0 };
+    const p = JSON.parse(raw) as Partial<{ happy: number; sad: number }>;
+    return { happy: Math.max(0, p.happy ?? 0), sad: Math.max(0, p.sad ?? 0) };
+  } catch {
+    return { happy: 0, sad: 0 };
+  }
+}
+
+/** 写回当天心情记录，并顺手清理更早日期键，避免 localStorage 无限累积。 */
+function saveMood(m: { happy: number; sad: number }): void {
+  try {
+    const key = MOOD_KEY_PREFIX + moodDayKey();
+    localStorage.setItem(key, JSON.stringify(m));
+    // 只保留当天记录，移除历史日期键
+    const allKeys = localStorage.keys?.() ?? [];
+    for (const k of allKeys) {
+      if (k.startsWith(MOOD_KEY_PREFIX) && k !== key) localStorage.removeItem(k);
+    }
+  } catch {
+    /* 忽略存储失败 */
+  }
+}
+
 interface Props {
   t?: PLTranslate;
   /** 冒泡频率/时长设置；缺省时用默认值。 */
   settings?: PluginSettings;
-  /** 点击小人时的回调（由父级决定是否联动右侧面板开合）；缺省则点击仅聚焦气泡。 */
+  /** 打开/收起右侧面板的回调（仅右键菜单「打开工具面板」触发；左键不联动面板）。 */
   onTogglePanel?: () => void;
 }
 
@@ -105,6 +178,8 @@ function loadPos(): Pos {
 export function PromptAssistant(props: Props): ReactNode {
   const { t, settings, onTogglePanel } = props;
   const T = usePLT(t);
+  // 当前是否黑夜模式：等级徽章等硬编码高对比色需随主题切换
+  const dark = useThemeSync();
 
   // 小人位置：独立持久化，与右侧面板互不影响
   const [pos, setPos] = useState<Pos>(loadPos);
@@ -157,19 +232,6 @@ export function PromptAssistant(props: Props): ReactNode {
   const [bubbleW, setBubbleW] = useState(176);
   const [bubbleH, setBubbleH] = useState(56);
 
-  // 气泡显示时测量实际宽高；内容变化（简介轮播）时同步更新
-  useEffect(() => {
-    if (!bubble || !bubbleRef.current) return;
-    const el = bubbleRef.current;
-    const update = () => {
-      setBubbleW(el.offsetWidth || 176);
-      setBubbleH(el.offsetHeight || 56);
-    };
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [bubble]);
   // 鼠标是否悬停在小人上（供「自动冒泡」判断是否打扰用户）
   const hoverRef = useRef(false);
 
@@ -231,6 +293,7 @@ export function PromptAssistant(props: Props): ReactNode {
     preDockRef.current = { px: pos.px, py: pos.py };
     // 贴边瞬间收起气泡、清除悬停标记，避免贴边后气泡仍悬在旁边
     setBubble(false);
+    setEggMode(false);
     hoverRef.current = false;
   }, [docked]);
 
@@ -262,8 +325,13 @@ export function PromptAssistant(props: Props): ReactNode {
   const [activity, setActivity] = useState<ActivitySnapshot>({ phase: "idle", sessionActive: false });
   useEffect(() => {
     let cancelled = false;
+    // 按当前系统语言请求，host 端返回匹配主题+阶段的文案
+    const lang: "zh" | "en" =
+      (document.documentElement.lang || navigator.language || "zh").toLowerCase().startsWith("en")
+        ? "en"
+        : "zh";
     const tick = () => {
-      getActivity()
+      getActivity(lang)
         .then((snap) => {
           if (!cancelled) setActivity(snap);
         })
@@ -279,21 +347,191 @@ export function PromptAssistant(props: Props): ReactNode {
     };
   }, []);
 
+  // ── 心情系统：按天记录会话成功/失败，驱动小人表情、动作与气泡 ──
+  // 每次轮询到的阶段从其他阶段跳转到 done/failed 时计一次成功/失败（首次挂载不计）。
+  const [moodCounts, setMoodCounts] = useState<{ happy: number; sad: number }>(loadMood);
+  const prevPhaseRef = useRef<ActivityPhase | null>(null);
+  useEffect(() => {
+    const phase = activity.phase;
+    const prev = prevPhaseRef.current;
+    prevPhaseRef.current = phase;
+    // 首次快照或无活跃会话时只记录基线，不计数
+    if (prev === null || !activity.sessionActive) return;
+    if (phase === "done" && prev !== "done") {
+      setMoodCounts((m) => {
+        const next = { ...m, happy: m.happy + 1 };
+        saveMood(next);
+        return next;
+      });
+    } else if (phase === "failed" && prev !== "failed") {
+      setMoodCounts((m) => {
+        const next = { ...m, sad: m.sad + 1 };
+        saveMood(next);
+        return next;
+      });
+    }
+  }, [activity.phase, activity.sessionActive]);
+
+  // 今日情绪：成功多于失败 → 开心；失败多于成功 → 低落；持平/无记录 → 平常
+  const mood: SpriteMood =
+    moodCounts.happy > moodCounts.sad ? "happy"
+    : moodCounts.sad > moodCounts.happy ? "sad"
+    : "neutral";
+
+  // ── 游戏化：等级徽章 / 成就解锁播报 / 时间彩蛋 / 点击互动 ──
+  // toast 为临时气泡（成就 / 互动），优先级高于阶段气泡与简介轮播
+  interface Toast {
+    kind: "achievement" | "tap";
+    title?: string;
+    text: string;
+  }
+  const [status, setStatus] = useState<AssistantStatus | null>(null);
+  const [toast, setToast] = useState<Toast | null>(null);
+  // 彩蛋模式：自动冒泡时以较小概率展示 host 推送的应景彩蛋文案
+  const [eggMode, setEggMode] = useState(false);
+  // 已播报过的成就 id（localStorage 记忆，避免重复弹）
+  const [announced] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem("pl:achievements-announced");
+      return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+    } catch {
+      return new Set();
+    }
+  });
+  const announcedRef = useRef(announced);
+  const statusRef = useRef<AssistantStatus | null>(null);
+  // 设置引用：轮询 effect 等挂载期逻辑读取最新开关，避免因 settings 变化重跑 effect
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  // 首次进入标记：只播报「之后新增解锁」的成就，避免历史成就一次性轰炸
+  const statusInitedRef = useRef(false);
+  const toastTimerRef = useRef<number | undefined>(undefined);
+  // 连续点击时间戳（2 秒内 5 次触发「晕」效果）
+  const tapTimesRef = useRef<number[]>([]);
+
+  const showToast = useCallback((t: Toast) => {
+    setToast(t);
+    if (toastTimerRef.current !== undefined) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(
+      () => setToast(null),
+      t.kind === "achievement" ? 4000 : 2200,
+    );
+  }, []);
+
+  // T 引用每次 render 都会变化（usePLT 返回新函数），用 ref 固定，供挂载期 effect 使用，
+  // 避免 effect 依赖 T 导致每次 render 重跑、误杀 toast 计时器
+  const tRef = useRef(T);
+  tRef.current = T;
+
+  // toast 计时器仅在组件卸载时清理；运行期由 showToast 自行覆盖管理
+  useEffect(
+    () => () => {
+      if (toastTimerRef.current !== undefined) window.clearTimeout(toastTimerRef.current);
+    },
+    [],
+  );
+
+  // 轮询游戏化快照：等级 + 成就 + 彩蛋；间隔较长，避免频繁统计查询
+  useEffect(() => {
+    let cancelled = false;
+    const lang: "zh" | "en" =
+      (document.documentElement.lang || navigator.language || "zh").toLowerCase().startsWith("en")
+        ? "en"
+        : "zh";
+    const tick = () => {
+      getAssistantStatus(lang)
+        .then((s) => {
+          if (cancelled) return;
+          setStatus(s);
+          statusRef.current = s;
+          // 首次进入：把当前已解锁成就全部标记为已播报，避免历史成就一次性弹窗
+          if (!statusInitedRef.current) {
+            statusInitedRef.current = true;
+            for (const a of s.achievements) if (a.achieved) announcedRef.current.add(a.id);
+            try {
+              localStorage.setItem("pl:achievements-announced", JSON.stringify([...announcedRef.current]));
+            } catch {
+              /* 忽略存储失败 */
+            }
+            return;
+          }
+          // 新解锁的成就：只播报第一条，避免多条连发；
+          // 无论「我的等级公告」是否开启都标记已播报，避免日后开启时补发历史播报
+          const fresh = s.achievements.find((a) => a.achieved && !announcedRef.current.has(a.id));
+          if (fresh) {
+            announcedRef.current.add(fresh.id);
+            try {
+              localStorage.setItem("pl:achievements-announced", JSON.stringify([...announcedRef.current]));
+            } catch {
+              /* 忽略存储失败 */
+            }
+            const levelAnnouncement =
+              settingsRef.current?.levelAnnouncementEnabled ?? DEFAULT_SETTINGS.levelAnnouncementEnabled;
+            if (levelAnnouncement) {
+              showToast({
+                kind: "achievement",
+                title: tRef.current("pl.gamification.unlockTitle"),
+                text: `${fresh.title}：${fresh.desc}`,
+              });
+            }
+          }
+        })
+        .catch(() => {
+          /* 轮询失败忽略，保持上次状态 */
+        });
+    };
+    tick();
+    const iv = window.setInterval(tick, 8000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(iv);
+    };
+  }, [showToast]);
+
+  // 点击小人的互动反馈：随机俏皮话；2 秒内连点 5 次触发「晕」
+  const triggerTap = useCallback(() => {
+    const now = Date.now();
+    const recent = tapTimesRef.current.filter((t) => now - t < 2000);
+    recent.push(now);
+    tapTimesRef.current = recent;
+    if (recent.length >= 5) {
+      tapTimesRef.current = [];
+      showToast({ kind: "tap", text: tRef.current("pl.tap.dizzy") });
+      return;
+    }
+    const msgs = [
+      tRef.current("pl.tap.0"),
+      tRef.current("pl.tap.1"),
+      tRef.current("pl.tap.2"),
+      tRef.current("pl.tap.3"),
+    ];
+    showToast({ kind: "tap", text: msgs[Math.floor(Math.random() * msgs.length)] });
+  }, [showToast]);
+
   // ── 雪碧图小人：把蓝脸小人渲染成运行时生成的雪碧图，用 background-position 帧播放 ──
   // 轨道 = 行、帧 = 列，配合每轨道时长与阶段序列实现帧播放；鼠标移入播放打招呼小动画。
+  // 差异化按「等级-主题-心情」组合生成，任一变化时重新取对应雪碧图（内部按组合缓存）。
   const [sheet, setSheet] = useState<SpriteSheet | null>(null);
   const spriteRef = useRef<HTMLDivElement | null>(null);
   // 鼠标是否悬停在小人上：悬停时播放打招呼序列（小动画）
   const [hovering, setHovering] = useState(false);
+  const spriteTopic: SpriteTopic = (activity.topic as SpriteTopic | undefined) ?? "general";
+  // 等级助手关闭时不展示任何等级差异化（身体回到底色、无星章、无 Lv 徽章）
+  const levelEnabled = settings?.levelEnabled ?? DEFAULT_SETTINGS.levelEnabled;
+  const spriteLevel = levelEnabled ? status?.level?.level : undefined;
+  const spriteOpts = useMemo<SpriteOptions>(
+    () => ({ level: spriteLevel, topic: spriteTopic, mood }),
+    [spriteLevel, spriteTopic, mood],
+  );
   useEffect(() => {
     let alive = true;
-    getSpriteSheet().then((s) => {
+    getSpriteSheet(spriteOpts).then((s) => {
       if (alive) setSheet(s);
     });
     return () => {
       alive = false;
     };
-  }, []);
+  }, [spriteOpts]);
   // 帧循环：按活动阶段（或悬停打招呼）序列，在每个动画帧上切换 background-position。
   // 生成失败（sheet 为 null）时保持 SVG 回退，不打断现有小人展示。
   useEffect(() => {
@@ -335,6 +573,7 @@ export function PromptAssistant(props: Props): ReactNode {
   };
 
   // 活动阶段 → 小人待机/动作动画（空闲/等待保持轻缓呼吸，活跃时切换动作）
+  // 心情融入空闲动画：今天开心时蹦跳更有弹性，低落时慢速微垂
   const personAnim = useMemo(() => {
     switch (activity.phase) {
       case "thinking": return "pl-person-fastbob .9s ease-in-out infinite";
@@ -342,23 +581,65 @@ export function PromptAssistant(props: Props): ReactNode {
       case "done": return "pl-person-jump .7s cubic-bezier(.3,1.4,.4,1) 2";
       case "failed": return "pl-person-shake .5s ease-in-out 2";
       case "waiting": return "pl-person-bob 2s ease-in-out infinite";
-      default: return "pl-person-bob 2.6s ease-in-out infinite";
+      default:
+        if (mood === "happy") return "pl-person-happybob 1.8s ease-in-out infinite";
+        if (mood === "sad") return "pl-person-sadbob 2.8s ease-in-out infinite";
+        return "pl-person-bob 2.6s ease-in-out infinite";
     }
-  }, [activity.phase]);
+  }, [activity.phase, mood]);
 
-  // 是否展示阶段气泡：会话进行中（思考/调工具/回话/完成/失败）才展示；空闲不打扰
+  // 是否展示阶段气泡：会话进行中（思考/调工具/整理/回话/完成/失败）都展示思考气泡框；空闲不打扰
   const phaseActive = activity.sessionActive && activity.phase !== "idle";
-  const phasePulsing = activity.phase === "thinking" || activity.phase === "tool";
+  // 阶段气泡激活标记：供自动冒泡循环判断优先级（阶段气泡 > 悬停/自动冒泡简介）
+  const phaseActiveRef = useRef(phaseActive);
+  useEffect(() => {
+    phaseActiveRef.current = phaseActive;
+  }, [phaseActive]);
 
-  // 公告弹窗：双击小人打开（使用手册 + 通告）
+  // 气泡显示时测量实际宽高；内容变化（简介轮播 / 阶段内容 / toast）时同步更新
+  useEffect(() => {
+    if ((!bubble && !phaseActive && !toast) || !bubbleRef.current) return;
+    const el = bubbleRef.current;
+    const update = () => {
+      setBubbleW(el.offsetWidth || 176);
+      setBubbleH(el.offsetHeight || 56);
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [bubble, phaseActive, toast]);
+
+  // 公告弹窗：右键菜单入口打开（使用手册 + 通告 / 看板）
   const [announceOpen, setAnnounceOpen] = useState(false);
-  // 单击/双击判定：单击延迟执行面板开合；双击取消本次单击并打开公告
-  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingClickRef = useRef(false);
+  // 成就弹窗：右键菜单入口打开（等级 + 成就列表）
+  const [achievementOpen, setAchievementOpen] = useState(false);
+  // 右键迷你菜单：记录弹出位置（clientX/Y）；点击外部或菜单项后关闭
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const openMenuAnnounce = () => {
+    setCtxMenu(null);
+    setAnnounceOpen(true);
+  };
+  const openMenuAchievements = () => {
+    setCtxMenu(null);
+    setAchievementOpen(true);
+  };
+
+  // 右键菜单显隐规则：词库助手未启用时不显示；工具面板 / 公告 / 成就三个入口
+  // 全部关闭时同样不显示（菜单里没有任何可点项）。
+  const ctxMenuEnabled =
+    (settings?.assistantEnabled ?? DEFAULT_SETTINGS.assistantEnabled) &&
+    ((settings?.rightPanelEnabled ?? DEFAULT_SETTINGS.rightPanelEnabled) ||
+      (settings?.announcementEnabled ?? DEFAULT_SETTINGS.announcementEnabled) ||
+      levelEnabled);
 
   // 拖动小人：仅移动小人独立坐标；松手时若未明显移动视为「点击 → 通知父级」
   const personDragRef = useRef<{ startX: number; startY: number; ox: number; oy: number; moved: boolean } | null>(null);
   const startPersonDrag = (e: ReactMouseEvent<HTMLElement>) => {
+    // 仅左键支持拖动与单击开合；右键/中键不启动拖拽，交由 onContextMenu 打开公告
+    if (e.button !== 0) return;
+    // 左键开始拖动时关闭右键菜单，避免菜单残留遮挡
+    setCtxMenu(null);
     e.preventDefault();
     setDragging(true); // 拖拽中禁用位移动画，保证实时跟手
     personDragRef.current = { startX: e.clientX, startY: e.clientY, ox: pos.px, oy: pos.py, moved: false };
@@ -381,21 +662,10 @@ export function PromptAssistant(props: Props): ReactNode {
       setDragging(false); // 恢复位移动画
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
-      if (!clicked) return;
-      // 单击延迟判定：等待可能的第二次点击（双击）。若是双击则取消本次单击，
-      // 避免面板被连续开合两次；双击最终交给 onDoubleClick 打开公告。
-      if (pendingClickRef.current) {
-        pendingClickRef.current = false;
-        if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
-        clickTimerRef.current = null;
-        return;
+      // 左键单击（未拖动）：不联动面板，只触发互动反馈（面板开合统一走右键菜单「打开工具面板」）
+      if (clicked) {
+        triggerTap();
       }
-      pendingClickRef.current = true;
-      clickTimerRef.current = setTimeout(() => {
-        pendingClickRef.current = false;
-        clickTimerRef.current = null;
-        onTogglePanel?.();
-      }, 240);
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -417,7 +687,7 @@ export function PromptAssistant(props: Props): ReactNode {
   // 并保证气泡整体落在视口内，避免小人拖到屏幕边缘时气泡被遮挡「显示没了」。
   // 优先级：上方 → 下方 → 左侧 → 右侧。
   const bubblePos = useMemo(() => {
-    if (!bubble) return null;
+    if (!bubble && !phaseActive && !toast) return null;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
     const W = bubbleW;
@@ -458,7 +728,7 @@ export function PromptAssistant(props: Props): ReactNode {
     const tailX = cx - left - 5; // 尖角在气泡水平方向上的偏移（above/below）
     const tailY = cy - top - 5; // 尖角在气泡垂直方向上的偏移（left/right）
     return { left, top, dir, tailX, tailY };
-  }, [bubble, bubbleW, bubbleH, view.px, view.py, viewVersion]);
+  }, [bubble, phaseActive, toast, bubbleW, bubbleH, view.px, view.py, viewVersion]);
 
   // 首次加载：请求 AI 生成词库功能简介；AI 不可用或失败时保持 i18n 内置词。
   // 按「语言 + 当天日期」缓存到 localStorage：每天换新键重新请求一次，让 AI 每天出新的文案。
@@ -518,6 +788,11 @@ export function PromptAssistant(props: Props): ReactNode {
     let hideT: ReturnType<typeof setTimeout> | undefined;
     const loop = () => {
       showT = setTimeout(() => {
+        // 阶段气泡显示中优先级更高，跳过本轮自动冒泡，避免结束后残留简介气泡
+        if (phaseActiveRef.current) {
+          loop();
+          return;
+        }
         // 到点要弹气泡：若当前处于贴边状态，先取消贴边回到原位再弹，保证提示正常展示
         if (dockedRef.current) {
           dockedRef.current = false;
@@ -530,10 +805,15 @@ export function PromptAssistant(props: Props): ReactNode {
           loop();
           return;
         }
+        // 自动冒泡：以较小概率展示 host 推送的应景彩蛋，否则走简介轮播
+        setEggMode(statusRef.current?.easterEgg != null && Math.random() < 0.3);
         setIntroIdx((i) => i + 1);
         setBubble(true);
         hideT = setTimeout(() => {
-          if (!hoverRef.current && !dockedRef.current) setBubble(false);
+          if (!hoverRef.current && !dockedRef.current) {
+            setBubble(false);
+            setEggMode(false);
+          }
           loop();
         }, hideDuration);
       }, intervalMs + Math.random() * intervalMs);
@@ -563,9 +843,17 @@ export function PromptAssistant(props: Props): ReactNode {
 @keyframes pl-person-tilt { 0%,100% { transform: rotate(0deg); } 25% { transform: rotate(-6deg); } 75% { transform: rotate(6deg); } }
 @keyframes pl-person-jump { 0% { transform: translateY(0); } 30% { transform: translateY(-14px); } 50% { transform: translateY(0); } 70% { transform: translateY(-7px); } 100% { transform: translateY(0); } }
 @keyframes pl-person-shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
-.pl-phase-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
-.pl-phase-pulse { animation: pl-fade-pulse 1s ease-in-out infinite; }
-@keyframes pl-fade-pulse { 0%,100% { opacity: .4; } 50% { opacity: 1; } }
+@keyframes pl-person-happybob { 0%,100% { transform: translateY(0) scale(1,1); } 40% { transform: translateY(-8px) scale(1.06,.94); } 70% { transform: translateY(-3px); } }
+@keyframes pl-person-sadbob { 0%,100% { transform: translateY(0) rotate(0deg) scale(1,1); } 50% { transform: translateY(2px) rotate(-3deg) scale(.99,1.02); } }
+.pl-think-dot { display: inline-block; border-radius: 50%; animation: pl-think-bounce 1.2s ease-in-out infinite; }
+@keyframes pl-think-bounce { 0%, 80%, 100% { transform: scale(.55); opacity: .45; } 40% { transform: scale(1); opacity: 1; } }
+@keyframes pl-ctx-in { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: scale(1); } }
+.pl-ctx-menu { padding: 6px; border-radius: 13px; background: var(--dsw-specific-sidebar-fill, #f5f6f7); border: 1px solid var(--dsw-alias-border-l2, rgba(17, 24, 39, .14)); box-shadow: 0 10px 32px rgba(2, 6, 23, .2), 0 2px 8px rgba(2, 6, 23, .1), inset 0 1px 0 rgba(255, 255, 255, .55); animation: pl-ctx-in .16s cubic-bezier(.22, 1, .36, 1); transform-origin: top left; }
+.pl-ctx-head { display: flex; align-items: center; gap: 6px; padding: 6px 10px 8px; font-size: 12px; font-weight: 600; letter-spacing: .2px; color: var(--dsw-alias-label-secondary, #6b7280); border-bottom: 1px solid var(--dsw-alias-border-l2, rgba(17, 24, 39, .08)); margin-bottom: 4px; }
+.pl-ctx-item { display: flex; align-items: center; gap: 9px; padding: 6px 9px; font-size: 12.5px; border-radius: 9px; cursor: pointer; user-select: none; color: var(--dsw-alias-label-primary, #1f2937); transition: background .16s ease, transform .12s ease; }
+.pl-ctx-item:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, .12)); }
+.pl-ctx-item:active { background: var(--dsw-alias-interactive-bg-active, rgba(127, 127, 127, .2)); transform: scale(.97); }
+.pl-ctx-ic { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 7px; flex-shrink: 0; }
 `}</style>
       {/* 小人：始终显示，可独立拖动，悬停显示气泡；点击回调由父级决定是否联动面板 */}
       {/* 用 React Portal 渲染到 document.body：既突破祖先层叠/transform 容器显示在最上层，
@@ -574,18 +862,15 @@ export function PromptAssistant(props: Props): ReactNode {
       <div
         aria-label={T("pl.title")}
         onMouseDown={startPersonDrag}
-        onDoubleClick={() => {
-          // 双击：仅当「显示公告」开关开启时才打开公告；
-          // 开启时取消未决的单击（避免先开合面板一次）。
-          const enabled = (settings?.announcementEnabled ?? DEFAULT_SETTINGS.announcementEnabled);
-          if (!enabled) return;
-          pendingClickRef.current = false;
-          if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
-          clickTimerRef.current = null;
-          setAnnounceOpen(true);
+        onContextMenu={(e) => {
+          // 右键：弹出迷你菜单（工具面板 / 成就 / 公告）；与左键拖动/单击互不干扰。
+          // 词库助手未启用，或工具/公告/成就入口全部关闭时不弹菜单。
+          e.preventDefault();
+          if (!ctxMenuEnabled) return;
+          setCtxMenu({ x: e.clientX, y: e.clientY });
         }}
         onMouseEnter={() => { hoverRef.current = true; setHovering(true); setBubble(true); }}
-        onMouseLeave={() => { hoverRef.current = false; setHovering(false); setBubble(false); }}
+        onMouseLeave={() => { hoverRef.current = false; setHovering(false); setBubble(false); setEggMode(false); }}
         style={{
           position: "fixed",
           left: view.px,
@@ -600,8 +885,8 @@ export function PromptAssistant(props: Props): ReactNode {
           userSelect: "none",
         }}
       >
-        {/* 气泡：悬停 / 自动冒泡时显示，固定定位随小人位置避让屏幕边缘 */}
-        {bubble && bubblePos && (
+        {/* 统一气泡框：toast（成就/互动，优先级最高）> 阶段气泡 > 简介轮播，共用同一圆弧气泡样式与定位 */}
+        {(phaseActive || bubble || toast) && bubblePos && (
           <div
             ref={bubbleRef}
             style={{
@@ -609,53 +894,115 @@ export function PromptAssistant(props: Props): ReactNode {
               left: bubblePos.left,
               top: bubblePos.top,
               zIndex: 2147483646, // 建立层叠上下文，使尾巴 zIndex:-1 相对本气泡生效（否则会逃逸层级）
-              width: "max-content", // 宽随内容动态伸缩
-              minWidth: 160,
-              maxWidth: 288,
-              padding: "6px 10px",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 5,
+              width: "max-content", // 宽随文字尺寸自适应（短文案贴合、长文案展开）
+              maxWidth: 288, // 仅保留最大宽度，避免超长文案撑出屏幕
+              padding: "8px 14px",
               background: TONE.panel,
               color: TONE.text,
               border: `1px solid ${TONE.border}`,
-              borderRadius: 8,
+              borderRadius: 16, // 圆弧气泡：大圆角圆润风格
               fontSize: 10.5,
               lineHeight: 1.45,
               textAlign: "center",
-              boxShadow: "none",
+              boxShadow: "0 3px 12px rgba(17, 24, 39, .1)",
               animation: "pl-bubble-in .2s cubic-bezier(.22,1,.36,1)",
               pointerEvents: "none", // 气泡仅展示，穿透不挡页面点击
             }}
           >
-            <div style={{ fontWeight: 600, letterSpacing: 2, marginBottom: 4 }}>{T("pl.floating.title")}</div>
-            <div
-              key={introIdx}
-              style={{
-                color: TONE.muted,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-                animation: "pl-bubble-intro .45s ease",
-              }}
-            >
-              {intros[introIdx % intros.length]}
-            </div>
-            {/* 轮询指示点 */}
-            <div style={{ display: "flex", gap: 4, justifyContent: "center", marginTop: 7 }}>
-              {intros.map((_, i) => {
-                const active = i === introIdx % intros.length;
-                return (
-                  <span
-                    key={i}
+            {toast ? (
+              <>
+                {/* 临时提示：成就解锁 / 点击互动 */}
+                {toast.title && (
+                  <div style={{ fontWeight: 600, letterSpacing: 1, color: TONE.accent }}>{toast.title}</div>
+                )}
+                <span
+                  style={{
+                    color: TONE.muted,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    textAlign: "center",
+                  }}
+                >
+                  {toast.text}
+                </span>
+              </>
+            ) : phaseActive ? (
+              <>
+                {/* 阶段内容：三个依次弹跳的思考小点 + 状态文字 */}
+                <div style={{ display: "flex", gap: 4, alignItems: "center", justifyContent: "center", height: 7 }}>
+                  {[0, 1, 2].map((i) => (
+                    <span
+                      key={i}
+                      className="pl-think-dot"
+                      style={{
+                        width: 5,
+                        height: 5,
+                        background: TONE.accent,
+                        animationDelay: `${i * 0.18}s`,
+                      }}
+                    />
+                  ))}
+                </div>
+                {/* 阶段内容：优先用 host 按聊天主题推送的文案，缺失时回退到 i18n 内置文案 */}
+                <span style={{ color: TONE.muted, whiteSpace: "nowrap" }}>
+                  {activity.text || T(PHASE_KEY[activity.phase])}
+                </span>
+              </>
+            ) : (
+              <>
+                {/* 简介内容：心情气泡 + 标题 + 轮播正文 + 指示点（彩蛋模式展示应景文案、隐藏指示点） */}
+                {/* 心情气泡：非平常情绪时在简介顶部展示当日情绪小结（气泡表情） */}
+                {mood !== "neutral" && (
+                  <div
                     style={{
-                      width: 5,
-                      height: 5,
-                      borderRadius: "50%",
-                      background: active ? TONE.accent : TONE.quiet,
-                      transition: "background .2s, transform .2s",
-                      transform: active ? "scale(1.35)" : "scale(1)",
+                      fontWeight: 600,
+                      fontSize: 10.5,
+                      letterSpacing: 0.5,
+                      color: mood === "happy" ? "var(--dsw-alias-state-success-primary, #16a34a)" : TONE.red,
                     }}
-                  />
-                );
-              })}
-            </div>
+                  >
+                    {mood === "happy" ? T("pl.mood.happy") : T("pl.mood.sad")}
+                  </div>
+                )}
+                <div style={{ fontWeight: 600, letterSpacing: 2 }}>{T("pl.floating.title")}</div>
+                <div
+                  key={introIdx}
+                  style={{
+                    color: TONE.muted,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    animation: "pl-bubble-intro .45s ease",
+                  }}
+                >
+                  {eggMode && status?.easterEgg ? status.easterEgg.text : intros[introIdx % intros.length]}
+                </div>
+                {/* 轮询指示点（彩蛋模式单条展示，不轮播故隐藏） */}
+                {!eggMode && (
+                  <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
+                    {intros.map((_, i) => {
+                      const active = i === introIdx % intros.length;
+                      return (
+                        <span
+                          key={i}
+                          style={{
+                            width: 5,
+                            height: 5,
+                            borderRadius: "50%",
+                            background: active ? TONE.accent : TONE.quiet,
+                            transition: "background .2s, transform .2s",
+                            transform: active ? "scale(1.35)" : "scale(1)",
+                          }}
+                        />
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            )}
             {/* 气泡小尾巴：始终指向小人中心（上→朝下、下→朝上、左→朝右、右→朝左）。
                 方块边长 10，旋转 45° 后三角底线（两平角连线）位于方块中心，悬出量取半宽 5，
                 使底线恰好落在卡片边界上，与卡片边无缝连接，消除「三角飘在卡片外、中间留空隙」。 */}
@@ -709,6 +1056,8 @@ export function PromptAssistant(props: Props): ReactNode {
               backgroundImage: `url(${sheet.url})`,
               backgroundSize: `${SPRITE_CELL * SPRITE_COLUMNS}px ${SPRITE_CELL * SPRITE_ROWS}px`,
               backgroundRepeat: "no-repeat",
+              // 心情/阶段动作动画与 SVG 回退保持一致（背景帧播放与 transform 互不冲突）
+              animation: personAnim,
               filter: "drop-shadow(0 2px 7px color-mix(in srgb, var(--dsw-alias-label-primary, #1f2937) 45%, transparent))",
             }}
           />
@@ -755,43 +1104,125 @@ export function PromptAssistant(props: Props): ReactNode {
               animation: "pl-person-shadow 2.6s ease-in-out infinite",
             }}
           />
+          {/* 等级徽章：显示当前 Lv 与称号；悬停 title 提示升级进度（满级不显示进度）。
+              受「显示等级助手」设置控制，关闭后不显示等级。 */}
+          {status && levelEnabled && (
+            <div
+              title={
+                status.level.next > status.level.current
+                  ? `${status.level.title} · ${T("pl.gamification.progress").replace("{n}", String(status.level.next - status.level.current))}`
+                  : `${status.level.title} · ${T("pl.gamification.maxed")}`
+              }
+              style={{
+                position: "absolute",
+                right: -4,
+                bottom: -2,
+                minWidth: 22,
+                height: 16,
+                padding: "0 4px",
+                borderRadius: 8,
+                background: TONE.accent,
+                // 黑夜模式下品牌色偏浅（浅蓝），文字需用深色；白天品牌色偏深（深蓝），文字用白色
+                color: dark ? "#10141c" : "#fff",
+                fontSize: 9,
+                fontWeight: 600,
+                lineHeight: "16px",
+                textAlign: "center",
+                boxShadow: "0 1px 4px rgba(2, 6, 23, .25)",
+                pointerEvents: "none",
+              }}
+            >
+              Lv.{status.level.level}
+            </div>
+          )}
         </div>
-        {/* 活动阶段气泡：会话进行中（思考/调工具/回话/完成/失败）在头顶展示状态；空闲不打扰 */}
-        {phaseActive && (
-          <div
-            key={activity.phase}
-            style={{
-              position: "absolute",
-              left: "50%",
-              bottom: "100%",
-              transform: "translateX(-50%)",
-              marginBottom: 6,
-              display: "flex",
-              alignItems: "center",
-              gap: 5,
-              maxWidth: 200,
-              padding: "3px 9px",
-              background: TONE.panel,
-              color: TONE.text,
-              border: `1px solid ${TONE.border}`,
-              borderRadius: 999,
-              fontSize: 10,
-              lineHeight: 1.4,
-              whiteSpace: "nowrap",
-              boxShadow: "0 2px 8px rgba(17, 24, 39, .08)",
-              animation: "pl-bubble-in .2s cubic-bezier(.22,1,.36,1)",
-              pointerEvents: "none",
-            }}
-          >
-            <span className={phasePulsing ? "pl-phase-dot pl-phase-pulse" : "pl-phase-dot"} />
-            <span>{T(PHASE_KEY[activity.phase])}</span>
-          </div>
-        )}
         </div>,
         document.body,
       )}
-      {/* 公告弹窗：双击小人打开（使用手册 + 通告） */}
+      {/* 右键迷你菜单：点击外部区域或菜单项后关闭；「打开工具面板 / 成就 / 公告」共用此入口 */}
+      {ctxMenu && ctxMenuEnabled && (
+        <>
+          {createPortal(
+            // 透明遮罩：与菜单同为最高层级且渲染在小人 portal 之后（DOM 靠后），
+            // 因此能盖住小人/等级徽章，点击任意位置即关闭菜单（也阻止误拖小人）
+            <div
+              style={{ position: "fixed", inset: 0, zIndex: 2147483647 }}
+              onMouseDown={() => setCtxMenu(null)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setCtxMenu(null);
+              }}
+            />,
+            document.body,
+          )}
+          {createPortal(
+            <div
+              className="pl-ctx-menu"
+              style={{
+                position: "fixed",
+                // 贴近屏幕右/下边缘时翻转到指针另一侧，保证菜单完整可见
+                left: ctxMenu.x + 156 > window.innerWidth ? Math.max(8, ctxMenu.x - 156) : ctxMenu.x,
+                top: ctxMenu.y + 152 > window.innerHeight ? Math.max(8, ctxMenu.y - 152) : ctxMenu.y,
+                zIndex: 2147483647,
+                minWidth: 150,
+                fontFamily: MONO,
+              }}
+            >
+              <div className="pl-ctx-head">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="var(--dsw-alias-brand-primary, #2563eb)" aria-hidden="true">
+                  <path d="M8 2.2l1.1 3.7 3.7 1.1-3.7 1.1L8 11.8 6.9 8.1 3.2 7l3.7-1.1L8 2.2z" />
+                </svg>
+                {T("pl.floating.title")}
+              </div>
+              {/* 打开工具面板：仅当「显示词库工具面板」开关开启时显示 */}
+              {(settings?.rightPanelEnabled ?? DEFAULT_SETTINGS.rightPanelEnabled) && (
+                <div
+                  className="pl-ctx-item"
+                  onClick={() => {
+                    setCtxMenu(null);
+                    onTogglePanel?.();
+                  }}
+                >
+                  <CtxIcon bg="rgba(37, 99, 235, .12)" color="var(--dsw-alias-brand-primary, #2563eb)">
+                    <rect x="2.5" y="2.5" width="4.6" height="4.6" rx="1.1" />
+                    <rect x="8.9" y="2.5" width="4.6" height="4.6" rx="1.1" />
+                    <rect x="2.5" y="8.9" width="4.6" height="4.6" rx="1.1" />
+                    <rect x="8.9" y="8.9" width="4.6" height="4.6" rx="1.1" />
+                  </CtxIcon>
+                  {T("pl.ctx.openPanel")}
+                </div>
+              )}
+              {/* 成就入口：仅当「显示等级助手」开关开启时显示，保持等级助手关闭时菜单无「成就」 */}
+              {levelEnabled && (
+                <div className="pl-ctx-item" onClick={openMenuAchievements}>
+                  <CtxIcon bg="rgba(217, 119, 6, .14)" color="#b45309">
+                    <path d="M5.8 2.5h4.4v3a2.2 2.2 0 0 1-4.4 0v-3Z" />
+                    <path d="M5.8 3.5H4.2A1.2 1.2 0 0 0 3 4.7v.1a2.6 2.6 0 0 0 2.8 2.6" />
+                    <path d="M10.2 3.5h1.6A1.2 1.2 0 0 1 13 4.7v.1a2.6 2.6 0 0 1-2.8 2.6" />
+                    <path d="M8 7.4v1.6M6.5 12.2h3M7.2 14h1.6" />
+                  </CtxIcon>
+                  {T("pl.ctx.achievements")}
+                </div>
+              )}
+              {/* 公告入口：仅当「显示公告」开关开启时显示，保持原右键打开公告的开关语义 */}
+              {(settings?.announcementEnabled ?? DEFAULT_SETTINGS.announcementEnabled) && (
+                <div className="pl-ctx-item" onClick={openMenuAnnounce}>
+                  <CtxIcon bg="rgba(220, 38, 38, .1)" color="var(--dsw-alias-state-error-primary, #dc2626)">
+                    <path d="M3 8.5V7a1.5 1.5 0 0 1 1.5-1.5h1L10 3.5v9l-4.5-2H4.5A1.5 1.5 0 0 1 3 9v-.5Z" />
+                    <path d="M11 6.5a2.6 2.6 0 0 1 0 3" />
+                  </CtxIcon>
+                  {T("pl.ctx.announce")}
+                </div>
+              )}
+            </div>,
+            document.body,
+          )}
+        </>
+      )}
+      {/* 公告弹窗：右键菜单「公告」打开（使用手册 + 通告） */}
       <AnnouncementModal open={announceOpen} onClose={() => setAnnounceOpen(false)} t={T} />
+      {/* 成就弹窗：右键菜单「成就」打开（等级 + 成就列表） */}
+      <AchievementModal open={achievementOpen} onClose={() => setAchievementOpen(false)} t={T} />
     </>
   );
 }

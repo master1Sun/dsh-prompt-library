@@ -60,6 +60,11 @@ export function usePrompt(id: string): Promise<Prompt> {
   return send<Prompt>("POST", `${BASE}/${encodeURIComponent(id)}`);
 }
 
+/** 重新触发某条提示词的 AI 完善（查看详情「重新完善」入口）。返回是否成功触发。 */
+export function refinePrompt(id: string): Promise<{ ok: boolean }> {
+  return send<{ ok: boolean }>("POST", `${BASE}/${encodeURIComponent(id)}/refine`);
+}
+
 /** 导出全部提示词（备份内容，含 schema 版本与导出时间）。 */
 export interface PromptBackup {
   version: 1;
@@ -260,6 +265,11 @@ export function genIntro(lang: "zh" | "en"): Promise<{ lines: string[] }> {
   return send<{ lines: string[] }>("POST", "/api/prompt-library/ai/intro", { lang });
 }
 
+/** 请求 AI 依据词库当前统计生成建议点评（公告看板「AI 建议」卡片；AI 不可用时返回空串）。 */
+export function getAiSuggest(lang: "zh" | "en"): Promise<{ suggestion: string }> {
+  return send<{ suggestion: string }>("POST", "/api/prompt-library/ai/suggest", { lang });
+}
+
 /** 版本检查结果：当前版本、最新可更新版本、是否有更新及来源。 */
 export interface UpdateInfo {
   current: string;
@@ -308,12 +318,65 @@ export type ActivityPhase =
 /** 词库助手活动快照。 */
 export interface ActivitySnapshot {
   phase: ActivityPhase;
+  /** 是否有正在进行的会话；无会话时小人应回到 idle。 */
   sessionActive: boolean;
+  /** 当前聊天主题风格（code/writing/translate/qa/general），由 host 分类。 */
+  topic?: string;
+  /** 匹配当前主题 + 阶段 + 语言的一条文案（同阶段多套轮换），由 host 推送。 */
+  text?: string;
 }
 
-/** 读取词库助手当前活动阶段（host 状态机投影官方会话事件，驱动小人动画）。 */
-export function getActivity(): Promise<ActivitySnapshot> {
-  return send<ActivitySnapshot>("GET", "/api/prompt-library/activity");
+/** 读取词库助手当前活动阶段与阶段文案（host 状态机投影官方会话事件，驱动小人动画）。 */
+export function getActivity(lang?: string): Promise<ActivitySnapshot> {
+  const q = lang ? `?lang=${encodeURIComponent(lang)}` : "";
+  return send<ActivitySnapshot>("GET", `/api/prompt-library/activity${q}`);
+}
+
+// ── 词库助手游戏化状态（等级 / 成就 / 彩蛋）────────────────────────────
+
+/** 词库助手等级信息。 */
+export interface AssistantLevel {
+  /** 当前等级（1 起步，已考虑回落）。 */
+  level: number;
+  /** 当前等级称号。 */
+  title: string;
+  /** 当前累计使用次数。 */
+  current: number;
+  /** 升下一级所需累计使用次数；0 表示已满级。 */
+  next: number;
+  /** 当前等级内进度百分比（0-100）。 */
+  pct: number;
+  /** 是否因长期未使用而触发等级回落。 */
+  decayed?: boolean;
+  /** 距上次使用的天数（本地时区），用于解释回落原因。 */
+  inactiveDays?: number;
+}
+
+/** 词库助手单条成就。 */
+export interface AssistantAchievement {
+  id: string;
+  title: string;
+  desc: string;
+  achieved: boolean;
+}
+
+/** 词库助手一条彩蛋文案。 */
+export interface AssistantEasterEgg {
+  id: string;
+  text: string;
+}
+
+/** 词库助手游戏化快照。 */
+export interface AssistantStatus {
+  level: AssistantLevel;
+  achievements: AssistantAchievement[];
+  easterEgg: AssistantEasterEgg | null;
+}
+
+/** 读取词库助手等级 / 成就 / 彩蛋快照（host 依据统计与本地时间生成）。 */
+export function getAssistantStatus(lang?: string): Promise<AssistantStatus> {
+  const q = lang ? `?lang=${encodeURIComponent(lang)}` : "";
+  return send<AssistantStatus>("GET", `/api/prompt-library/assistant/status${q}`);
 }
 
 // ── 公告通告 ────────────────────────────────────────────────────────────
@@ -343,7 +406,7 @@ export interface AnnouncementData {
   versions: VersionEntry[];
 }
 
-/** 拉取公告通告（双击词库助手弹窗时调用；lang 传入浏览器/系统语言，内部归一化）。 */
+/** 拉取公告通告（词库助手右键菜单「公告」弹窗时调用；lang 传入浏览器/系统语言，内部归一化）。 */
 export function getAnnouncement(lang?: string): Promise<AnnouncementData> {
   const url = lang
     ? `/api/prompt-library/announcement?lang=${encodeURIComponent(lang)}`
@@ -393,6 +456,8 @@ export interface LibraryStats {
   topUsed7: Array<{ title: string; count: number }>;
   /** 近 7 天经 AI 完善的提示词数量。 */
   aiRefinedIn7: number;
+  /** 自动学习条目数量（标签为配置的自动学习标签或默认 auto-learned）。 */
+  autoLearnedCount: number;
 }
 
 /** 每周增量统计（近 7 天：新增/使用/AI 完善）。 */

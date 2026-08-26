@@ -17,22 +17,10 @@ import {
 } from "../../services/api.js";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { plBtn } from "../../utils/button-style.js";
+import { getTone, useThemeSync } from "../../utils/theme.js";
 
 const MONO =
   'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif)';
-
-const TONE = {
-  text: "var(--dsw-alias-label-primary, #f2f6fc)",
-  muted: "var(--dsw-alias-label-secondary, #9daabd)",
-  quiet: "var(--dsw-alias-label-tertiary, #718096)",
-  panel: "var(--dsw-alias-bg-layer-1, #171f2b)",
-  row: "var(--dsw-alias-bg-layer-3, #1d2735)",
-  border: "var(--dsw-alias-border-l2, rgba(196, 211, 232, 0.16))",
-  accent: "var(--dsw-alias-brand-primary, #8ec5ff)",
-  accentSoft: "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 20%, transparent)",
-  mint: "var(--dsw-alias-state-success-primary, #78dda0)",
-  red: "var(--dsw-alias-state-error-primary, #ff8592)",
-} as const;
 
 /** 把时间戳格式化为「n 分钟/小时/天前」，超过 60 天显示日期。 */
 function formatAgo(ts: number, T: PLT): string {
@@ -59,6 +47,7 @@ function formatDay(ts: number): string {
 
 /** 图例小方块。 */
 function Legend({ color, label }: { color: string; label: string }): ReactNode {
+  const TONE = getTone();
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, color: TONE.muted }}>
       <span style={{ width: 8, height: 8, borderRadius: 2, background: color, flexShrink: 0 }} />
@@ -69,6 +58,7 @@ function Legend({ color, label }: { color: string; label: string }): ReactNode {
 
 /** 概览统计卡片：数值 + 标签 + 可选副文案。 */
 function StatCard({ label, value, sub }: { label: string; value: ReactNode; sub?: string }): ReactNode {
+  const TONE = getTone();
   return (
     <div
       style={{
@@ -93,6 +83,7 @@ function StatCard({ label, value, sub }: { label: string; value: ReactNode; sub?
 
 /** 区块标题。 */
 function Section({ title, children }: { title: string; children?: ReactNode }): ReactNode {
+  const TONE = getTone();
   return (
     <section style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <h3
@@ -123,6 +114,7 @@ function BarList({
   rows: Array<{ key: string; label: string; value: number; sub?: string }>;
   T: PLT;
 }): ReactNode {
+  const TONE = getTone();
   const max = Math.max(1, ...rows.map((r) => r.value));
   if (rows.length === 0) {
     return (
@@ -166,6 +158,7 @@ function BarList({
 
 /** 每周趋势图：近 7 天「新增 / 使用次数」双系列柱状图（纯 SVG）。 */
 function TrendChart({ snapshots, T }: { snapshots: StatsSnapshot[]; T: PLT }): ReactNode {
+  const TONE = getTone();
   if (snapshots.length === 0) {
     return (
       <div style={{ padding: "14px 12px", color: TONE.quiet, fontSize: 12, textAlign: "center" }}>
@@ -244,8 +237,8 @@ function TrendChart({ snapshots, T }: { snapshots: StatsSnapshot[]; T: PLT }): R
   );
 }
 
-/** 统计页主布局：概览卡片 + 各区块图表。 */
-function StatsContent({
+/** 统计页主布局：概览卡片 + 各区块图表（供词库面板与公告看板复用）。 */
+export function StatsContent({
   stats,
   snapshots,
   T,
@@ -254,6 +247,8 @@ function StatsContent({
   snapshots: StatsSnapshot[];
   T: PLT;
 }): ReactNode {
+  useThemeSync(); // 订阅宿主主题变化，切换白天/黑夜时刷新主题色
+  const TONE = getTone();
   const usedRate = stats.total > 0 ? Math.round((stats.usedCount / stats.total) * 100) : 0;
   const topTags = useMemo(
     () =>
@@ -461,6 +456,8 @@ function StatsContent({
 
 /** 统计可视化面板（供词库面板在「统计」视图下渲染）。 */
 export function StatsPanel({ t, onBack }: { t?: PLT; onBack?: () => void }): ReactNode {
+  useThemeSync(); // 订阅宿主主题变化，切换白天/黑夜时刷新主题色
+  const TONE = getTone();
   const T = t ?? fallbackT;
   const [data, setData] = useState<PromptStatsData | null>(null);
   const [error, setError] = useState<string | null>(null);

@@ -37,8 +37,9 @@ import { SelectionAddPrompt } from "../selection/SelectionAddPrompt.js";
 import { Pagination } from "../common/Pagination.js";
 import { TagInput } from "../common/TagInput.js";
 import { ConfirmDialog } from "../common/ConfirmDialog.js";
-import { AUTO_LEARN_TOAST_MS, useAutoLearn } from "../../utils/auto-learn.js";
+import { AUTO_LEARN_TOAST_MS, AUTO_LEARN_UNDO_MS, useAutoLearn } from "../../utils/auto-learn.js";
 import { isRecent, markRecent } from "../../utils/recent-created.js";
+import { rowBackground } from "../../utils/theme.js";
 import { notifyDataChanged, useDataChanged, useExportDownloaded, useFillDraft } from "../../services/data-sync.js";
 import { type PLT, type PLTranslate, usePLT } from "../../i18n/i18n.js";
 import { SearchBox, TagFilterBar } from "../common/SearchBox.js";
@@ -624,23 +625,42 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   });
   // 编辑表单正文输入框引用：供「插入变量 {{}}」定位光标
   const bodyRef = useRef<HTMLTextAreaElement>(null);
-  const [toast, setToast] = useState<{ visible: boolean; text?: string }>({ visible: false });
+  const [toast, setToast] = useState<{ visible: boolean; text?: string; undoId?: string }>({ visible: false });
   // 模板变量填充弹窗：插入含 {{变量}} 的提示词前弹出
   // fromOverlay：由 # 浮层触发，确认后需替换「#」及其后的筛选内容
   const [template, setTemplate] = useState<{ prompt: Prompt; mode: "insert" | "overwrite"; fromOverlay?: boolean } | null>(null);
   // 手动确认模式：记录待确认入库的正文，聊天框弹出保存/取消
-  const [pendingConfirm, setPendingConfirm] = useState<string | null>(null);
+  // text：当前待保存正文（可编辑）；original：首次学习到的原稿；showOriginal：对比视图，true 时展示原稿（只读）
+  // 自动学习内容统一使用配置的自动学习标签（autoLearnTag），不做手动标签选择
+  const [pendingConfirm, setPendingConfirm] = useState<{ text: string; original: string; showOriginal: boolean } | null>(null);
   // 手动确认里是否点过「AI 润色」：点过则保存后不再触发后台 AI 完善
   const [polishConfirmUsed, setPolishConfirmUsed] = useState(false);
   // 确认卡片内的 AI 润色加载状态
   const [polishConfirmLoading, setPolishConfirmLoading] = useState(false);
+  // 确认卡片内 AI 润色失败提示（再次点击润色时清除）
+  const [polishConfirmError, setPolishConfirmError] = useState<string | null>(null);
   // 查看弹层：点击列表项「查看」显示完整标题/标签/正文
   const [viewing, setViewing] = useState<Prompt | null>(null);
+  // 查看详情「AI 优化」：润色状态、结果与原稿/润色稿切换
+  const [viewPolish, setViewPolish] = useState<{ status: "idle" | "loading" | "done"; id: string }>({ status: "idle", id: "" });
+  const [viewPolishText, setViewPolishText] = useState("");
+  const [viewShowOriginal, setViewShowOriginal] = useState(false);
+  // 查看详情「AI 优化」失败提示（再次点击优化时清除）
+  const [viewPolishError, setViewPolishError] = useState<string | null>(null);
+
+  // 关闭查看详情：清空查看状态与 AI 优化结果
+  const closeView = useCallback(() => {
+    setViewing(null);
+    setViewPolish({ status: "idle", id: "" });
+    setViewPolishText("");
+    setViewShowOriginal(false);
+    setViewPolishError(null);
+  }, []);
 
   // 面板关闭时清理查看弹层，避免残留
   useEffect(() => {
-    if (!open) setViewing(null);
-  }, [open]);
+    if (!open) closeView();
+  }, [open, closeView]);
 
   const [settings] = useSettings();
   const panelId = useId();
@@ -651,9 +671,10 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
     if (body) inputActions.setDraft(body);
   });
 
-  const showToast = useCallback((text?: string) => {
-    setToast({ visible: true, text });
-    setTimeout(() => setToast({ visible: false }), AUTO_LEARN_TOAST_MS);
+  const showToast = useCallback((text?: string, undoId?: string) => {
+    setToast({ visible: true, text, undoId });
+    // 带「撤销」的 toast 展示更久，留足操作时间；普通提示按默认时长
+    setTimeout(() => setToast({ visible: false }), undoId ? AUTO_LEARN_UNDO_MS : AUTO_LEARN_TOAST_MS);
   }, []);
 
   const refresh = useCallback(() => {
@@ -666,6 +687,12 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
       .then((list) => {
         if (ctrl.signal.aborted) return;
         setPrompts(list);
+        // 查看详情时同步刷新当前条目：AI 完善回写完成后按钮/状态即时隐藏
+        setViewing((cur) => {
+          if (!cur) return cur;
+          const updated = list.find((x) => x.id === cur.id);
+          return updated ?? cur;
+        });
         setPhase("ready");
       })
       .catch((err: unknown) => {
@@ -694,7 +721,8 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   useAutoLearn(draft, prompts, settings, useCallback((learned: Prompt) => {
     // 通知两侧面板重新加载，展示自动学习结果（此刻可能还未被 AI 完善）
     notifyDataChanged();
-    showToast();
+    // 自动学习 toast 附带「撤销」入口：撤销即删除刚入库的这条（移入回收站，可恢复）
+    showToast(undefined, learned.id);
     // 若开启 AI 智能完善：AI 回写是异步的（约 10~30 秒）。
     // 轮询列表直到该条提示词完成 AI 完善（aiRefined === true），
     // 再刷新展示 AI 生成的标题/标签/摘要，避免前端一直停留在自动完善结果。
@@ -722,7 +750,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   }, [showToast, settings.aiEnrichEnabled]),
   // 手动确认模式回调：学习到正文后不自动保存，交由界面弹出保存/取消
   useCallback((text: string) => {
-    setPendingConfirm(text);
+    setPendingConfirm({ text, original: text, showOriginal: false });
     setPolishConfirmUsed(false);
   }, []));
 
@@ -941,13 +969,16 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
     return () => document.removeEventListener("mousedown", onDocMouseDown, true);
   }, [open, editing, pendingConfirm, viewing, panelId]);
 
-  // 手动确认：保存选中正文到词库
+  // 手动确认：保存选中正文到词库（支持编辑正文，润色后可对比原稿；标签统一用自动学习标签）
   const confirmLearn = useCallback(async () => {
-    const text = pendingConfirm;
-    if (!text) return;
+    const item = pendingConfirm;
+    if (!item) return;
     setPendingConfirm(null);
     try {
+      // 当前展示的是原稿则保存原稿；否则保存润色/编辑后的正文
+      const text = (item.showOriginal ? item.original : item.text).trim();
       // 点过「AI 润色」则已是润色后的正文，保存时跳过后台 AI 完善
+      // 自动学习内容统一使用配置的自动学习标签（autoLearnTag）
       const learned = await apiLearn(text, settings.autoLearnTag, polishConfirmUsed);
       setPolishConfirmUsed(false);
       markRecent(learned.id);
@@ -969,18 +1000,72 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   const polishLearnText = useCallback(async () => {
     if (!pendingConfirm || polishConfirmLoading) return;
     setPolishConfirmLoading(true);
+    setPolishConfirmError(null);
     try {
-      const res = await apiPolish(pendingConfirm);
-      // 润色完直接填充到框内（预览与待保存正文一起更新）
-      setPendingConfirm(res.polished);
+      const res = await apiPolish(pendingConfirm.text);
+      // 润色完填充为润色稿，并切回润色稿视图（保留原稿用于对比）
+      setPendingConfirm((prev) => (prev ? { ...prev, text: res.polished, showOriginal: false } : prev));
       // 已在本卡片内完成 AI 润色，保存时不再重复触发后台 AI 完善
       setPolishConfirmUsed(true);
-    } catch {
-      /* 静默失败 */
+    } catch (e: unknown) {
+      // 润色失败：卡片内给出错误提示，用户可再次点击重试
+      setPolishConfirmError(e instanceof Error ? e.message : String(e));
     } finally {
       setPolishConfirmLoading(false);
     }
   }, [pendingConfirm, polishConfirmLoading]);
+
+  // 自动学习 toast 的「撤销」：删除刚自动学习入库的那条（移入回收站，可恢复）
+  const undoLearn = useCallback(async () => {
+    const id = toast.undoId;
+    setToast({ visible: false });
+    if (!id) return;
+    try {
+      await apiDelete(id);
+      notifyDataChanged();
+    } catch {
+      /* 静默失败 */
+    }
+  }, [toast.undoId]);
+
+  // 查看详情「AI 优化」：对正文执行润色，成功后展示结果（可编辑/对比原稿/复制/插入/保存）
+  const startViewPolish = useCallback(async () => {
+    if (!viewing || viewPolish.status === "loading") return;
+    setViewPolish({ status: "loading", id: viewing.id });
+    setViewShowOriginal(false);
+    setViewPolishError(null);
+    try {
+      const res = await apiPolish(viewing.body);
+      setViewPolishText(res.polished);
+      setViewPolish({ status: "done", id: viewing.id });
+    } catch (e: unknown) {
+      // 优化失败：回到空闲态并给出错误提示，按钮可再次点击重试
+      setViewPolish({ status: "idle", id: "" });
+      setViewPolishError(e instanceof Error ? e.message : String(e));
+    }
+  }, [viewing, viewPolish.status]);
+
+  // 查看详情里把润色结果保存回词库（更新正文，保留原稿作对比，标记已 AI 完善）
+  const saveViewPolish = useCallback(async () => {
+    if (viewPolish.status !== "done" || !viewing) return;
+    const body = viewPolishText.trim();
+    if (!body) return;
+    try {
+      const updated = await apiUpdate(viewing.id, {
+        body,
+        sourceBody: viewing.body !== body ? viewing.body : undefined,
+        aiRefined: true,
+      });
+      setViewing(updated);
+      setPrompts((list) => list.map((p) => (p.id === updated.id ? updated : p)));
+      setViewPolish({ status: "idle", id: "" });
+      setViewPolishText("");
+      setViewShowOriginal(false);
+      notifyDataChanged();
+    } catch {
+      /* 静默失败 */
+    }
+  }, [viewPolish.status, viewPolishText, viewing]);
 
   const containerStyle: CSSProperties = {
     display: "inline-flex",
@@ -1016,6 +1101,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   return (
     <span data-prompt-library style={containerStyle}>
       <style>{`@keyframes pl-refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      <style>{`@keyframes pl-progress { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }`}</style>
       <style>{PL_BUTTON_CSS}</style>
       {showComposerButton && (
         <>
@@ -1058,7 +1144,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
         </svg>
       </Button>
 
-      {/* toast */}
+      {/* toast（自动学习时附带「撤销」入口） */}
       {toast.visible && (
         <span
           role="status" aria-live="polite"
@@ -1066,23 +1152,47 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
             position: "absolute",
             bottom: "calc(100% + 4px)",
             right: 0,
-            padding: "4px 10px",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "4px 8px 4px 10px",
             color: TONE.panel,
             background: TONE.mint,
             borderRadius: 6,
             fontSize: 11,
             fontFamily: MONO,
             whiteSpace: "nowrap",
-            pointerEvents: "none",
-            opacity: 0.92,
+            // 有撤销按钮时需可点击；纯提示时穿透不挡点击
+            pointerEvents: toast.undoId ? "auto" : "none",
+            opacity: 0.94,
             zIndex: 1001,
           }}
         >
           &#10003; {toast.text || T("pl.learnedToast")}
+          {toast.undoId && (
+            <button
+              type="button"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={undoLearn}
+              style={{
+                cursor: "pointer",
+                padding: "1px 8px",
+                color: "inherit",
+                background: "rgba(0,0,0,0.14)",
+                border: "none",
+                borderRadius: 4,
+                fontSize: 11,
+                fontFamily: MONO,
+                lineHeight: "16px",
+              }}
+            >
+              {T("pl.undo")}
+            </button>
+          )}
         </span>
       )}
 
-      {/* 手动确认卡片：学习到提示词后在聊天框弹出保存/取消 */}
+      {/* 手动确认卡片：学习到提示词后在聊天框弹出保存/取消；支持编辑正文/标签，润色后对比原稿 */}
       {pendingConfirm !== null && (
         <span
           role="dialog"
@@ -1095,7 +1205,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
             display: "flex",
             flexDirection: "column",
             gap: 8,
-            width: 280,
+            width: 300,
             boxSizing: "border-box",
             padding: "10px 12px",
             color: TONE.text,
@@ -1106,23 +1216,66 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
           }}
         >
           <div style={{ fontSize: 12, fontWeight: 600 }}>{T("pl.learnFound")}</div>
-          <div
+
+          {/* 原稿 / 润色稿对比切换：仅 AI 润色后出现 */}
+          {pendingConfirm.original !== pendingConfirm.text && (
+            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+              {([
+                { value: false, label: T("pl.polished") },
+                { value: true, label: T("pl.original") },
+              ] as const).map((opt) => (
+                <button
+                  key={String(opt.value)}
+                  type="button"
+                  onClick={() => setPendingConfirm((prev) => (prev ? { ...prev, showOriginal: opt.value } : prev))}
+                  style={{
+                    cursor: "pointer",
+                    padding: "2px 10px",
+                    fontSize: 11,
+                    fontFamily: MONO,
+                    color: pendingConfirm.showOriginal === opt.value ? TONE.accent : TONE.muted,
+                    background: pendingConfirm.showOriginal === opt.value ? TONE.accentSoft : "transparent",
+                    border: `1px solid ${pendingConfirm.showOriginal === opt.value ? TONE.accent : TONE.border}`,
+                    borderRadius: 999,
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* 正文编辑区：对比原稿时只读展示原稿，避免误改；内容较长时自动撑高便于查看 */}
+          <textarea
+            value={pendingConfirm.showOriginal ? pendingConfirm.original : pendingConfirm.text}
+            readOnly={pendingConfirm.showOriginal}
+            onChange={(e) => setPendingConfirm((prev) => (prev ? { ...prev, text: e.target.value } : prev))}
             style={{
-              maxHeight: 96,
-              overflowY: "auto",
+              maxHeight: 300,
+              minHeight: 96,
+              resize: "vertical",
+              boxSizing: "border-box",
               padding: "6px 8px",
               fontSize: 11,
               lineHeight: 1.5,
-              color: TONE.muted,
-              background: TONE.row,
+              color: TONE.text,
+              background: pendingConfirm.showOriginal ? TONE.panel : rowBackground(),
               border: `1px solid ${TONE.border}`,
               borderRadius: 6,
+              fontFamily: MONO,
+              outline: "none",
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",
+              opacity: pendingConfirm.showOriginal ? 0.75 : 1,
             }}
-          >
-            {pendingConfirm}
-          </div>
+          />
+
+          {polishConfirmError && (
+            <div style={{ color: TONE.red, fontSize: 11, lineHeight: 1.5, wordBreak: "break-word" }}>
+              {T("pl.polishFail")}
+            </div>
+          )}
+
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
             <Button
               type="button"
@@ -1231,6 +1384,24 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
                     >
                       <path d="M4 20V14M10 20V10M16 20V4M22 20H2" />
+                    </svg>
+                  }
+                />
+                {/* 折叠按钮：一键隐藏面板（不保留折叠内容） */}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className={plBtn("ghost", "sm")}
+                  onClick={() => setOpen(false)}
+                  data-tip={T("pl.skillModal.collapse")}
+                  aria-label={T("pl.skillModal.collapse")}
+                  icon={
+                    <svg
+                      width="13" height="13" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                    >
+                      <path d="M6 9l6 6 6-6" />
                     </svg>
                   }
                 />
@@ -1478,7 +1649,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                     variant="ghost"
                     size="sm"
                     className={plBtn("ghost", "sm")}
-                    onClick={() => setViewing(null)}
+                    onClick={closeView}
                     data-tip={T("pl.close")}
                     style={{ flexShrink: 0 }}
                   >
@@ -1500,18 +1671,153 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                     ))}
                   </div>
                 )}
-                {/* 正文（可滚动） */}
+                {/* AI 优化结果：原稿/润色稿切换 + 可编辑正文；未优化时展示原正文（可滚动） */}
+                {viewPolish.status === "done" ? (
+                  <div style={{
+                    flex: 1,
+                    minHeight: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 6,
+                    padding: "8px 14px 0",
+                    boxSizing: "border-box",
+                  }}>
+                    <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
+                      {([
+                        { value: false, label: T("pl.polished") },
+                        { value: true, label: T("pl.original") },
+                      ] as const).map((opt) => (
+                        <button
+                          key={String(opt.value)}
+                          type="button"
+                          onClick={() => setViewShowOriginal(opt.value)}
+                          style={{
+                            cursor: "pointer",
+                            padding: "2px 10px",
+                            fontSize: 11,
+                            fontFamily: MONO,
+                            color: viewShowOriginal === opt.value ? TONE.accent : TONE.muted,
+                            background: viewShowOriginal === opt.value ? TONE.accentSoft : "transparent",
+                            border: `1px solid ${viewShowOriginal === opt.value ? TONE.accent : TONE.border}`,
+                            borderRadius: 999,
+                          }}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                    <textarea
+                      value={viewShowOriginal ? viewing.body : viewPolishText}
+                      readOnly={viewShowOriginal}
+                      onChange={(e) => setViewPolishText(e.target.value)}
+                      style={{
+                        flex: 1,
+                        minHeight: 0,
+                        boxSizing: "border-box",
+                        padding: "6px 8px",
+                        fontSize: 12.5,
+                        lineHeight: 1.7,
+                        color: TONE.text,
+                        background: viewShowOriginal ? TONE.panel : rowBackground(),
+                        border: `1px solid ${TONE.border}`,
+                        borderRadius: 6,
+                        fontFamily: MONO,
+                        outline: "none",
+                        resize: "none",
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                        opacity: viewShowOriginal ? 0.75 : 1,
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <div style={{
+                    flex: 1,
+                    minHeight: 0,
+                    overflow: "auto",
+                    padding: "10px 14px 14px",
+                    color: TONE.text,
+                    fontSize: 12.5,
+                    lineHeight: 1.7,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                  }}>{viewing.body}</div>
+                )}
+                {/* AI 优化失败提示：显示在底部操作栏上方，重试前保持展示 */}
+                {viewPolishError && (
+                  <div style={{
+                    flexShrink: 0,
+                    padding: "4px 14px 0",
+                    color: TONE.red,
+                    fontSize: 11,
+                    lineHeight: 1.5,
+                    wordBreak: "break-word",
+                  }}>
+                    {T("pl.polishFail")}
+                  </div>
+                )}
+                {/* 底部：AI 完善状态 + AI 优化入口（优化中显示进度，完成后展示结果操作） */}
                 <div style={{
-                  flex: 1,
-                  minHeight: 0,
-                  overflow: "auto",
-                  padding: "10px 14px 14px",
-                  color: TONE.text,
-                  fontSize: 12.5,
-                  lineHeight: 1.7,
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-word",
-                }}>{viewing.body}</div>
+                  flexShrink: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                  padding: "8px 14px 12px",
+                  borderTop: `1px solid ${TONE.border}`,
+                }}>
+                  <span style={{ fontSize: 11, color: viewing.aiRefined ? TONE.mint : TONE.quiet, flexShrink: 0 }}>
+                    {viewPolish.status === "loading"
+                      ? T("pl.polishing")
+                      : viewPolish.status === "done"
+                        ? T("pl.polishResult")
+                        : viewing.aiRefined
+                          ? `${"✓"} ${T("pl.refinedDone")}`
+                          : `${"…"} ${T("pl.refinePending")}`}
+                  </span>
+                  {viewPolish.status === "loading" ? (
+                    // 优化中：不确定进度条动画
+                    <div style={{ flex: 1, marginLeft: 8, height: 3, borderRadius: 2, overflow: "hidden", background: TONE.border }}>
+                      <div style={{
+                        height: "100%",
+                        width: "40%",
+                        borderRadius: 2,
+                        background: TONE.accent,
+                        animation: "pl-progress 1.2s ease-in-out infinite",
+                      }} />
+                    </div>
+                  ) : viewPolish.status === "done" ? (
+                    <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                      <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => { navigator.clipboard.writeText(viewPolishText).catch(() => {}); }}>
+                        {T("pl.copy")}
+                      </Button>
+                      <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => {
+                        if (!viewPolishText) return;
+                        inputActions.setDraft(draft && draft.trim() ? `${draft}\n\n${viewPolishText}` : viewPolishText);
+                        closeView();
+                      }}>
+                        {T("pl.insert")}
+                      </Button>
+                      <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={saveViewPolish}>
+                        {T("pl.saveToLibrary")}
+                      </Button>
+                    </div>
+                  ) : (
+                    !viewing.aiRefined && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className={plBtn("ghost", "sm")}
+                        onClick={startViewPolish}
+                        data-tip={T("pl.polishBtnTitle")}
+                        style={{ flexShrink: 0 }}
+                      >
+                        {T("pl.polish")}
+                      </Button>
+                    )
+                  )}
+                </div>
               </div>
             )}
           </section>

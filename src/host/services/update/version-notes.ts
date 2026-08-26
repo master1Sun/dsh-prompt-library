@@ -34,17 +34,29 @@ export interface VersionNote {
 export const VERSION_NOTES: VersionNote[] = [
   {
     version: "0.8.16",
-    date: "2026-08-25",
+    date: "2026-08-26",
     zh: {
-      title: "修复公告弹窗无法打开",
+      title: "词库助手等级 · 换装 · 心情",
       items: [
-        "修复双击词库助手公告弹窗不显示的问题",
+        "等级回落：30 天未使用自动降一级，等级不再只升不降。",
+        "成就升级：成就弹窗改为等级圆环 + 奖牌墙，不同等级小人配色与星章不同。",
+        "小人换装：按聊天主题切换职业形象（代码-工程师帽 / 写作-贝雷帽 / 翻译-领带 / 问答-眼镜）。",
+        "心情系统：小人记录每日会话成败，成功开心蹦跳、失败垂头丧气，情绪同步到动作与气泡。",
+        "设置新增「等级助手」「我的等级公告」开关，可分别控制等级徽章、成就入口与解锁播报。",
+        "词库助手左键不再联动面板，开合统一走右键菜单；右键菜单按开关显隐。",
+        "修复公告弹窗无法打开的问题。",
       ],
     },
     en: {
-      title: "Fix announcement dialog not opening",
+      title: "Assistant level · Costumes · Mood",
       items: [
-        "Fixed double-clicking the assistant not opening the announcement dialog: the modal violated React rules of hooks (a hook was called after an early return), crashing the render; hook order is now constant, so double-clicking opens the user guide and release notes.",
+        "Level decay: unused for 30 days drops one level; levels can now decrease.",
+        "Achievements upgrade: dialog reworked into a level ring + medal wall; each level shows distinct colors and star badges.",
+        "Costumes: the assistant switches outfits by chat topic (engineer hat for code / beret for writing / tie for translation / glasses for Q&A).",
+        "Mood system: the assistant records daily session wins/losses — happy and bouncy on success, downcast on failure, reflected in actions and bubbles.",
+        "New toggles \"Level assistant\" and \"Level announcements\" control the level badge, achievements entry and unlock toasts.",
+        "Left-click no longer toggles the panel; open/close goes through the context menu, which hides itself based on the toggles.",
+        "Fixed the announcement dialog not opening.",
       ],
     },
   },

@@ -22,6 +22,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import type { PluginSettings, Prompt } from "../../../types.js";
 import { clampTitle, DEFAULT_SETTINGS } from "../../../types.js";
 import {
@@ -39,6 +40,7 @@ import { useHoverDetail } from "../common/HoverDetail.js";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { notifyDataChanged, useDataChanged } from "../../services/data-sync.js";
 import { PL_BUTTON_CSS, plBtn } from "../../utils/button-style.js";
+import { rowBackground } from "../../utils/theme.js";
 import { PromptAssistant } from "../assistant/PromptAssistant.js";
 import { StatsPanel } from "../stats/StatsPanel.js";
 import { type PLTranslate, usePLT } from "../../i18n/i18n.js";
@@ -140,16 +142,28 @@ function clampPos(
 }
 
 /**
- * 找到最接近面板的「会话窗口」容器：自面板向上取第一个宽高足够大（≥ 360×240）的稳定祖宗。
+ * 找到最接近面板的「会话窗口」容器：优先自面板向上取带 data-phase 的会话根节点。
  *
- * 阈值取「高且宽」以跳过聊天输入框这类偏矮的子容器：输入框平时高度很小，插入内容后纵使
- * 变高也不该抢走锚点；未找到时回退到整个窗口，行为与之前一致。
+ * 宿主会话根节点带 data-phase 标记（hero/active/settling），用它作为锚点最准确：
+ * 新建会话（hero 模式）下输入框很大，纯尺寸启发式会误命中输入卡片
+ * （data-composer-card），把面板活动范围夹取在输入框内。未找到 data-phase 时，
+ * 尺寸回退需跳过输入卡片，避免同样的误判。
  */
 function findChatWindow(panel: HTMLElement | null): Element | null {
+  // 主路径：向上找第一个带 data-phase 的会话根节点（文本框的 data-phase 与工具栏行
+  // 不同分支，向上遍历不会命中）
   let el = panel?.parentElement ?? null;
   while (el && el !== document.body && el !== document.documentElement) {
-    const r = el.getBoundingClientRect();
-    if (r.width >= 360 && r.height >= 240) return el;
+    if (el.hasAttribute("data-phase")) return el;
+    el = el.parentElement;
+  }
+  // 回退：跳过输入卡片（data-composer-card），取第一个足够大的稳定祖先
+  el = panel?.parentElement ?? null;
+  while (el && el !== document.body && el !== document.documentElement) {
+    if (!el.hasAttribute("data-composer-card")) {
+      const r = el.getBoundingClientRect();
+      if (r.width >= 360 && r.height >= 240) return el;
+    }
     el = el.parentElement;
   }
   return null;
@@ -281,8 +295,14 @@ export function SidebarPromptLibrary(props?: {
   const [template, setTemplate] = useState<{ prompt: Prompt; mode: "insert" | "overwrite" } | null>(null);
   // 待确认删除的提示词（自定义确认弹窗，替代系统 confirm）
   const [deleteConfirm, setDeleteConfirm] = useState<Prompt | null>(null);
+  // AI 优化重复确认：已 AI 完善的提示词再次点「AI 优化」时弹出确认，由用户决定是否继续优化
+  const [polishConfirm, setPolishConfirm] = useState<Prompt | null>(null);
   // 待查看详情的提示词（查看弹层，覆盖整个面板展示完整标题/标签/正文，仅可通过关闭按钮关闭）
   const [viewing, setViewing] = useState<Prompt | null>(null);
+  // 查看详情「AI 优化」：润色状态、结果与原稿/润色稿切换（在详情内联展示，不关闭详情）
+  const [viewPolish, setViewPolish] = useState<{ status: "idle" | "loading" | "done"; id: string }>({ status: "idle", id: "" });
+  const [viewPolishText, setViewPolishText] = useState("");
+  const [viewShowOriginal, setViewShowOriginal] = useState(false);
   // 每个分组的展开状态（持久化到 localStorage，刷新后保持）。
   // 默认全部折叠：集合中只记录「已展开」的分组，空集合即全部折叠。
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => {
@@ -320,6 +340,9 @@ export function SidebarPromptLibrary(props?: {
   const hoverEnabled = settings.hoverDetailEnabled;
   // 面板根元素 ref：用于把悬停详情卡片固定在面板左侧
   const panelRef = useRef<HTMLElement>(null);
+  // 面板锚点 ref：保持在原 DOM 树内（聊天工具栏行内）的不可见元素，
+  // 供 useChatWindow 沿父链定位会话窗口（面板本体通过 Portal 渲染到 body）
+  const chatAnchorRef = useRef<HTMLSpanElement>(null);
   // 编辑表单正文输入框引用：供「插入变量 {{}}」定位光标
   const bodyRef = useRef<HTMLTextAreaElement>(null);
 
@@ -327,7 +350,7 @@ export function SidebarPromptLibrary(props?: {
   // 以「会话窗口」为锚点：会话容器被其它窗口/内部面板挤压、或缩小返回原大小时，
   // 计算 chat 矩形并重算 view，面板跟随会话窗口收回与展开。world 位置（float.x/y）不变，
   // 大到会话窗口扩大后又能回到原本的位置与尺寸。
-  const chat = useChatWindow(panelRef);
+  const chat = useChatWindow(chatAnchorRef);
   // 展示用的位置与尺寸：把 home（float.x/y/width/height）按会话窗口矩形夹取得到实际渲染
   // 坐标与宽高；home 保持不变。聊天窗口被挤压变小时，面板也随之收回（宽高夹回会话窗口内），
   // 拉大窗口后又回到原来的位置与尺寸（展开）。
@@ -644,6 +667,12 @@ export function SidebarPromptLibrary(props?: {
     setPolishInsert(null);
   }, []);
 
+  // 点击「AI 优化」：内容已 AI 完善过则先弹确认，由用户决定是否继续优化；未完善直接优化
+  const handlePolishClick = useCallback((p: Prompt) => {
+    if (p.aiRefined) setPolishConfirm(p);
+    else startPolish(p);
+  }, [startPolish]);
+
   // AI 优化失败提示展示若干秒后自动关闭（无需手动点击）
   useEffect(() => {
     if (!polishError) return;
@@ -665,6 +694,53 @@ export function SidebarPromptLibrary(props?: {
       notifyDataChanged();
     }, (e: unknown) => setError(e instanceof Error ? e.message : String(e)));
   }, [polish, polishResult, prompts, closePolish]);
+
+  // 关闭查看详情：清空查看状态与详情内联的 AI 优化结果
+  const closeView = useCallback(() => {
+    setViewing(null);
+    setViewPolish({ status: "idle", id: "" });
+    setViewPolishText("");
+    setViewShowOriginal(false);
+  }, []);
+
+  // 查看详情「AI 优化」：对正文执行润色，成功后内联展示结果（不关闭详情）
+  const startViewPolish = useCallback(async () => {
+    if (!viewing || viewPolish.status === "loading") return;
+    setViewPolish({ status: "loading", id: viewing.id });
+    setViewShowOriginal(false);
+    setPolishError(null);
+    try {
+      const res = await polishPrompt(viewing.body);
+      setViewPolishText(res.polished);
+      setViewPolish({ status: "done", id: viewing.id });
+    } catch (e: unknown) {
+      // 优化失败：回到空闲态并给出错误提示，按钮可再次点击重试
+      setViewPolish({ status: "idle", id: "" });
+      setPolishError(e instanceof Error ? e.message : String(e));
+    }
+  }, [viewing, viewPolish.status]);
+
+  // 查看详情里把润色结果保存回词库（更新正文，保留原稿作对比，标记已 AI 完善）
+  const saveViewPolish = useCallback(async () => {
+    if (viewPolish.status !== "done" || !viewing) return;
+    const body = viewPolishText.trim();
+    if (!body) return;
+    try {
+      const updated = await apiUpdate(viewing.id, {
+        body,
+        sourceBody: viewing.body !== body ? viewing.body : undefined,
+        aiRefined: true,
+      });
+      setViewing(updated);
+      setPrompts((list) => list.map((p) => (p.id === updated.id ? updated : p)));
+      setViewPolish({ status: "idle", id: "" });
+      setViewPolishText("");
+      setViewShowOriginal(false);
+      notifyDataChanged();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [viewPolish.status, viewPolishText, viewing]);
 
   // 分组渲染顺序：
   // 1. 最近使用分组（30 天内有使用记录，按使用次数降序取前 10 条）固定在列表最前，
@@ -762,9 +838,16 @@ export function SidebarPromptLibrary(props?: {
 
   return (
     <>
+      {/* 面板锚点：保持在原 DOM 树内（聊天工具栏行内），供 useChatWindow 沿父链定位会话窗口；
+          面板/弹窗本体通过 Portal 渲染到 document.body，突破宿主 container-type 包含块对 fixed 的约束 */}
+      <span ref={chatAnchorRef} aria-hidden="true" style={{ display: "contents" }} />
+      {createPortal(
+      <>
       <style>{`@keyframes pl-refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 /* 浮动面板展开时的浮入动画：轻微上移 + 缩放 + 淡入 */
 @keyframes pl-pop-in { from { opacity: 0; transform: translateY(10px) scale(.975); } to { opacity: 1; transform: translateY(0) scale(1); } }
+/* AI 优化进度条动画：不确定进度左右滑动 */
+@keyframes pl-progress { 0% { transform: translateX(-100%); } 50% { transform: translateX(150%); } 100% { transform: translateX(350%); } }
 .pl-grab { cursor: grab; user-select: none; }
 .pl-grab:active { cursor: grabbing; }
 /* 内容区细滚动条 */
@@ -789,7 +872,8 @@ export function SidebarPromptLibrary(props?: {
 .pl-search-input:focus { box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 16%, transparent); }
 }`}</style>
       <style>{PL_BUTTON_CSS}</style>
-      {/* 词库助手（小人+气泡）：独立组件，自管理位置/冒泡/简介；点击小人通知面板切换开合。
+      {/* 词库助手（小人+气泡）：独立组件，自管理位置/冒泡/简介；左键不联动面板，
+          面板开合统一走右键菜单「打开工具面板」回调。
           受「显示词库助手」设置控制，关闭后整屏隐藏。 */}
       {settings.assistantEnabled && (
         <PromptAssistant
@@ -1169,7 +1253,7 @@ export function SidebarPromptLibrary(props?: {
                             variant="ghost"
                             size="sm"
                             className={plBtn("ghost", "sm")}
-                            onClick={() => startPolish(p)}
+                            onClick={() => handlePolishClick(p)}
                             disabled={polish.status === "loading"}
                           >
                             {polish.status === "loading" && polish.id === p.id ? T("pl.polishing") : T("pl.polish")}
@@ -1327,18 +1411,157 @@ export function SidebarPromptLibrary(props?: {
                   ))}
                 </div>
               )}
-              {/* 正文（可滚动） */}
+              {/* AI 优化结果：原稿/润色稿切换 + 可编辑正文；未优化时展示原正文（可滚动） */}
+              {viewPolish.status === "done" ? (
+                <div style={{
+                  flex: 1,
+                  minHeight: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 6,
+                  padding: "8px 14px 0",
+                  boxSizing: "border-box",
+                }}>
+                  <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
+                    {([
+                      { value: false, label: T("pl.polished") },
+                      { value: true, label: T("pl.original") },
+                    ] as const).map((opt) => (
+                      <button
+                        key={String(opt.value)}
+                        type="button"
+                        onClick={() => setViewShowOriginal(opt.value)}
+                        style={{
+                          cursor: "pointer",
+                          padding: "2px 10px",
+                          fontSize: 11,
+                          fontFamily: MONO,
+                          color: viewShowOriginal === opt.value ? TONE.accent : TONE.muted,
+                          background: viewShowOriginal === opt.value ? TONE.accentSoft : "transparent",
+                          border: `1px solid ${viewShowOriginal === opt.value ? TONE.accent : TONE.border}`,
+                          borderRadius: 999,
+                        }}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                  <textarea
+                    value={viewShowOriginal ? viewing.body : viewPolishText}
+                    readOnly={viewShowOriginal}
+                    onChange={(e) => setViewPolishText(e.target.value)}
+                    style={{
+                      flex: 1,
+                      minHeight: 0,
+                      boxSizing: "border-box",
+                      padding: "6px 8px",
+                      fontSize: 12.5,
+                      lineHeight: 1.7,
+                      color: TONE.text,
+                      background: viewShowOriginal ? TONE.panel : rowBackground(),
+                      border: `1px solid ${TONE.border}`,
+                      borderRadius: 6,
+                      fontFamily: MONO,
+                      outline: "none",
+                      resize: "none",
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                      opacity: viewShowOriginal ? 0.75 : 1,
+                    }}
+                  />
+                </div>
+              ) : (
+                <div style={{
+                  flex: 1,
+                  minHeight: 0,
+                  overflow: "auto",
+                  padding: "10px 14px 14px",
+                  color: TONE.text,
+                  fontSize: 12.5,
+                  lineHeight: 1.7,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                }}>{viewing.body}</div>
+              )}
+              {/* AI 优化失败提示：显示在底部操作栏上方，重试前保持展示 */}
+              {polishError && (
+                <div style={{
+                  flexShrink: 0,
+                  padding: "4px 14px 0",
+                  color: TONE.red,
+                  fontSize: 11,
+                  lineHeight: 1.5,
+                  wordBreak: "break-word",
+                }}>
+                  {polishError}
+                </div>
+              )}
+              {/* 底部：AI 完善状态 + AI 优化入口（优化中显示进度，完成后展示结果操作） */}
               <div style={{
-                flex: 1,
-                minHeight: 0,
-                overflow: "auto",
-                padding: "10px 14px 14px",
-                color: TONE.text,
-                fontSize: 12.5,
-                lineHeight: 1.7,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-              }}>{viewing.body}</div>
+                flexShrink: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+                padding: "8px 14px 12px",
+                borderTop: `1px solid ${TONE.border}`,
+              }}>
+                <span style={{ fontSize: 11, color: viewing.aiRefined ? TONE.mint : TONE.quiet, flexShrink: 0 }}>
+                  {viewPolish.status === "loading"
+                    ? T("pl.polishing")
+                    : viewPolish.status === "done"
+                      ? T("pl.polishResult")
+                      : viewing.aiRefined
+                        ? `${"✓"} ${T("pl.refinedDone")}`
+                        : `${"…"} ${T("pl.refinePending")}`}
+                </span>
+                {viewPolish.status === "loading" ? (
+                  // 优化中：不确定进度条动画
+                  <div style={{ flex: 1, marginLeft: 8, height: 3, borderRadius: 2, overflow: "hidden", background: TONE.border }}>
+                    <div style={{
+                      height: "100%",
+                      width: "40%",
+                      borderRadius: 2,
+                      background: TONE.accent,
+                      animation: "pl-progress 1.2s ease-in-out infinite",
+                    }} />
+                  </div>
+                ) : viewPolish.status === "done" ? (
+                  <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                    <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => { navigator.clipboard.writeText(viewPolishText).catch(() => {}); }}>
+                      {T("pl.copy")}
+                    </Button>
+                    <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => {
+                      if (!viewPolishText) return;
+                      if (inputActions) {
+                        inputActions.setDraft(draft && draft.trim() ? `${draft}\n\n${viewPolishText}` : viewPolishText);
+                      } else {
+                        navigator.clipboard.writeText(viewPolishText).catch(() => {});
+                      }
+                      closeView();
+                    }}>
+                      {T("pl.insert")}
+                    </Button>
+                    <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={saveViewPolish}>
+                      {T("pl.saveToLibrary")}
+                    </Button>
+                  </div>
+                ) : (
+                  !viewing.aiRefined && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className={plBtn("ghost", "sm")}
+                      onClick={startViewPolish}
+                      data-tip={T("pl.polishBtnTitle")}
+                      style={{ flexShrink: 0 }}
+                    >
+                      {T("pl.polish")}
+                    </Button>
+                  )
+                )}
+              </div>
             </div>
           )}
         </section>
@@ -1370,6 +1593,22 @@ export function SidebarPromptLibrary(props?: {
           confirmRemove();
         }}
       />
+      {/* AI 优化重复确认：已 AI 完善的提示词再次优化前由用户决定 */}
+      <ConfirmDialog
+        open={polishConfirm !== null}
+        message={T("pl.polishReconfirmMsg", { title: polishConfirm?.title ?? "" })}
+        confirmLabel={T("pl.polishReconfirmOk")}
+        cancelLabel={T("pl.cancel")}
+        onCancel={() => setPolishConfirm(null)}
+        onConfirm={() => {
+          const p = polishConfirm;
+          setPolishConfirm(null);
+          if (p) startPolish(p);
+        }}
+      />
+      </>,
+      document.body,
+      )}
     </>
   );
 }

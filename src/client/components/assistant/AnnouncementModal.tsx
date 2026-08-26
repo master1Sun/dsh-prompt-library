@@ -1,45 +1,29 @@
 /**
- * 公告弹窗 — 双击词库助手时展示。
+ * 公告弹窗 — 右键词库助手时展示。
  *
- * 内容分两块：
- *  - 使用手册：插件核心能力要点（本地 i18n 文案，跟随系统语言切换）；
- *  - 版本说明：优先展示「当前运行版本」对应的更新说明（推送与当前版本匹配），
- *    当前版本无内置说明时回退到最新一个版本；
- *    数据来自 host/services/update/version-notes.ts（本地多语言），不再读取网络 JSON。
+ * 内容为使用手册（插件核心能力要点）+ 版本说明（优先当前运行版本对应的更新说明，
+ * 当前版本无内置说明时回退到最新一个版本；数据来自 host/services/update/version-notes.ts）。
  * 与其它弹窗交互保持一致：只能通过右上角关闭按钮或底部「知道了」按钮关闭，
  * 禁止点击遮罩/外部区域关闭。
  */
-import { type CSSProperties, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { plBtn } from "../../utils/button-style.js";
 import { type PLT } from "../../i18n/i18n.js";
-import { getAnnouncement, type AnnouncementData, type VersionEntry } from "../../services/api.js";
+import {
+  getAnnouncement,
+  type AnnouncementData,
+  type VersionEntry,
+} from "../../services/api.js";
+import { getTone, useThemeSync } from "../../utils/theme.js";
 
 const MONO =
   'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif)';
 
-const TONE = {
-  text: "var(--dsw-alias-label-primary, #f2f6fc)",
-  muted: "var(--dsw-alias-label-secondary, #9daabd)",
-  quiet: "var(--dsw-alias-label-tertiary, #718096)",
-  panel: "var(--dsw-alias-bg-layer-1, #171f2b)",
-  row: "var(--dsw-alias-bg-layer-3, #1d2735)",
-  border: "var(--dsw-alias-border-l2, rgba(196, 211, 232, 0.16))",
-  borderStrong: "var(--dsw-alias-border-l3, rgba(196, 211, 232, 0.31))",
-  accent: "var(--dsw-alias-brand-primary, #8ec5ff)",
-} as const;
-
-/** 区块小标题样式。 */
-const sectionTitleStyle: CSSProperties = {
-  fontSize: 13,
-  fontWeight: 600,
-  color: TONE.text,
-  marginBottom: 8,
-};
-
 /** 手册条目图标：小型对勾。 */
 function CheckIcon(): ReactNode {
+  const TONE = getTone();
   return (
     <svg
       width="13"
@@ -62,6 +46,7 @@ function CheckIcon(): ReactNode {
 
 /** 版本要点条目图标：小菱形点。 */
 function BulletIcon(): ReactNode {
+  const TONE = getTone();
   return (
     <svg
       width="8"
@@ -103,8 +88,17 @@ function currentLang(): "zh" | "en" {
   return raw.toLowerCase().startsWith("en") ? "en" : "zh";
 }
 
-/** 居中遮罩公告弹窗：使用手册 + 版本通告。 */
+/** 居中遮罩公告弹窗。 */
 export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
+  useThemeSync(); // 订阅宿主主题变化，切换白天/黑夜时刷新主题色
+  const TONE = getTone();
+  // 区块小标题样式（跟随当前主题）
+  const sectionTitleStyle: CSSProperties = {
+    fontSize: 13,
+    fontWeight: 600,
+    color: TONE.text,
+    marginBottom: 8,
+  };
   // 打开时拉取版本通告数据；传入浏览器/系统语言，host 返回对应语言的 manual 与 versions
   const [data, setData] = useState<AnnouncementData | null>(null);
   const lang = useMemo(() => currentLang(), [open]);
@@ -162,9 +156,9 @@ export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: 560,
+          width: 600,
           maxWidth: "calc(100vw - 40px)",
-          maxHeight: "min(640px, calc(100vh - 40px))",
+          maxHeight: "min(680px, calc(100vh - 40px))",
           boxSizing: "border-box",
           display: "flex",
           flexDirection: "column",
@@ -207,133 +201,144 @@ export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
             paddingBottom: 4,
           }}
         >
-          {/* 使用手册 */}
-          <section>
-            <div style={sectionTitleStyle}>{t("pl.announce.manualTitle")}</div>
-            <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 8 }}>
-              {manualItems.map((item, idx) => (
-                <li
-                  key={idx}
+          <>
+            {/* 使用手册 */}
+            <section>
+              <div style={sectionTitleStyle}>{t("pl.announce.manualTitle")}</div>
+              <ul
+                style={{
+                  margin: 0,
+                  padding: 0,
+                  listStyle: "none",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                }}
+              >
+                {manualItems.map((item, idx) => (
+                  <li
+                    key={idx}
+                    style={{
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: 8,
+                      fontSize: 12.5,
+                      lineHeight: 1.6,
+                      color: TONE.muted,
+                      background: TONE.row,
+                      border: `1px solid ${TONE.border}`,
+                      borderRadius: 7,
+                      padding: "7px 10px",
+                    }}
+                  >
+                    <CheckIcon />
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+
+            {/* 版本说明（仅最新一个版本） */}
+            <section>
+              <div style={sectionTitleStyle}>{t("pl.announce.noticeTitle")}</div>
+              {!latest ? (
+                <div
                   style={{
-                    display: "flex",
-                    alignItems: "flex-start",
-                    gap: 8,
                     fontSize: 12.5,
-                    lineHeight: 1.6,
-                    color: TONE.muted,
+                    lineHeight: 1.7,
+                    color: TONE.quiet,
                     background: TONE.row,
                     border: `1px solid ${TONE.border}`,
                     borderRadius: 7,
-                    padding: "7px 10px",
+                    padding: "9px 11px",
+                    fontStyle: "italic",
                   }}
                 >
-                  <CheckIcon />
-                  <span>{item}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
-
-          {/* 版本说明（仅最新一个版本） */}
-          <section>
-            <div style={sectionTitleStyle}>{t("pl.announce.noticeTitle")}</div>
-            {!latest ? (
-              <div
-                style={{
-                  fontSize: 12.5,
-                  lineHeight: 1.7,
-                  color: TONE.quiet,
-                  background: TONE.row,
-                  border: `1px solid ${TONE.border}`,
-                  borderRadius: 7,
-                  padding: "9px 11px",
-                  fontStyle: "italic",
-                }}
-              >
-                {t("pl.announce.noNotice")}
-              </div>
-            ) : (
-              <div
-                style={{
-                  background: TONE.row,
-                  border: `1px solid ${TONE.border}`,
-                  borderRadius: 8,
-                  padding: "10px 12px",
-                }}
-              >
-                {/* 版本号 + 标题 + 日期行 */}
+                  {t("pl.announce.noNotice")}
+                </div>
+              ) : (
                 <div
                   style={{
-                    display: "flex",
-                    alignItems: "baseline",
-                    gap: 8,
-                    flexWrap: "wrap",
-                    marginBottom: 8,
+                    background: TONE.row,
+                    border: `1px solid ${TONE.border}`,
+                    borderRadius: 8,
+                    padding: "10px 12px",
                   }}
                 >
-                  <span
+                  {/* 版本号 + 标题 + 日期行 */}
+                  <div
                     style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      padding: "2px 8px",
-                      borderRadius: 999,
-                      background: "rgba(142, 197, 255, 0.14)",
-                      color: TONE.accent,
-                      border: `1px solid ${TONE.border}`,
-                      fontSize: 12,
-                      fontWeight: 700,
-                      lineHeight: 1.5,
-                      letterSpacing: 0.2,
+                      display: "flex",
+                      alignItems: "baseline",
+                      gap: 8,
+                      flexWrap: "wrap",
+                      marginBottom: 8,
                     }}
                   >
-                    v{latest.version}
-                  </span>
-                  <strong style={{ fontSize: 13, fontWeight: 600, color: TONE.text, flex: "1 1 auto" }}>
-                    {latest.title}
-                  </strong>
-                  {latest.date && (
                     <span
                       style={{
-                        fontSize: 11.5,
-                        color: TONE.quiet,
-                        fontWeight: 500,
-                      }}
-                    >
-                      {latest.date}
-                    </span>
-                  )}
-                </div>
-                {/* 版本要点列表 */}
-                <ul
-                  style={{
-                    margin: 0,
-                    padding: 0,
-                    listStyle: "none",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 6,
-                  }}
-                >
-                  {latest.items.map((item, i) => (
-                    <li
-                      key={i}
-                      style={{
-                        display: "flex",
-                        alignItems: "flex-start",
-                        gap: 8,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        padding: "2px 8px",
+                        borderRadius: 999,
+                        background: "rgba(142, 197, 255, 0.14)",
+                        color: TONE.accent,
+                        border: `1px solid ${TONE.border}`,
                         fontSize: 12,
-                        lineHeight: 1.65,
-                        color: TONE.muted,
+                        fontWeight: 700,
+                        lineHeight: 1.5,
+                        letterSpacing: 0.2,
                       }}
                     >
-                      <BulletIcon />
-                      <span style={{ flex: 1 }}>{item}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </section>
+                      v{latest.version}
+                    </span>
+                    <strong style={{ fontSize: 13, fontWeight: 600, color: TONE.text, flex: "1 1 auto" }}>
+                      {latest.title}
+                    </strong>
+                    {latest.date && (
+                      <span
+                        style={{
+                          fontSize: 11.5,
+                          color: TONE.quiet,
+                          fontWeight: 500,
+                        }}
+                      >
+                        {latest.date}
+                      </span>
+                    )}
+                  </div>
+                  {/* 版本要点列表 */}
+                  <ul
+                    style={{
+                      margin: 0,
+                      padding: 0,
+                      listStyle: "none",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 6,
+                    }}
+                  >
+                    {latest.items.map((item, i) => (
+                      <li
+                        key={i}
+                        style={{
+                          display: "flex",
+                          alignItems: "flex-start",
+                          gap: 8,
+                          fontSize: 12,
+                          lineHeight: 1.65,
+                          color: TONE.muted,
+                        }}
+                      >
+                        <BulletIcon />
+                        <span style={{ flex: 1 }}>{item}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </section>
+          </>
         </div>
 
         {/* 底部按钮：仅「知道了」可关闭 */}

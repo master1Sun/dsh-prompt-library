@@ -559,21 +559,38 @@ function hasAnyPrompts(): boolean {
  * 如果超过最大数量，删除最不常用的提示词。
  * 优先删除使用次数为 0 且最旧的。
  */
-async function enforceMaxCount(maxCount: number): Promise<void> {
+async function enforceMaxCount(maxCount: number, autoLearnTag?: string): Promise<void> {
   const cur = getDb();
   const { total } = cur.prepare("SELECT COUNT(*) AS total FROM prompts").get() as { total: number };
   if (total <= maxCount) return;
-  // 超出个数的由当前最少使用/最旧者删除：优先删除使用次数为 0 且最旧的
   const toRemove = total - maxCount;
-  const ids = cur
-    .prepare(
-      `SELECT id FROM prompts
-       ORDER BY usageCount ASC, updatedAt ASC
-       LIMIT ?`,
-    )
-    .all(toRemove) as unknown as Array<{ id: string }>;
+
+  // 识别「自动学习」条目：标签为配置的自动学习标签或默认 auto-learned。
+  // 淘汰时优先删除它们，保护用户手工创建/维护的提示词不被误删。
+  const learnTags = new Set(["auto-learned"]);
+  if (autoLearnTag?.trim()) learnTags.add(autoLearnTag.trim());
+  const isAutoLearned = (tagsJson: string | null): boolean => {
+    if (!tagsJson) return false;
+    return [...learnTags].some((tag) => tagsJson.includes(`"${tag}"`));
+  };
+
+  const rows = cur
+    .prepare("SELECT id, tags, usageCount, updatedAt FROM prompts")
+    .all() as unknown as Array<{ id: string; tags: string | null; usageCount: number; updatedAt: number }>;
+  // 最少使用 + 最旧者优先（排序函数）
+  const byLeastUsed = (
+    a: { usageCount: number; updatedAt: number },
+    b: { usageCount: number; updatedAt: number },
+  ): number => a.usageCount - b.usageCount || a.updatedAt - b.updatedAt;
+  const candidates = [...rows.filter((r) => isAutoLearned(r.tags)).sort(byLeastUsed)];
+
+  // 自动学习条目不足时，再退化为最旧的普通条目（保证数量上限仍生效）
+  if (candidates.length < toRemove) {
+    candidates.push(...rows.filter((r) => !isAutoLearned(r.tags)).sort(byLeastUsed));
+  }
+
   const rm = cur.prepare("DELETE FROM prompts WHERE id = ?");
-  for (const { id } of ids) rm.run(id);
+  for (const { id } of candidates.slice(0, toRemove)) rm.run(id);
 }
 
 export function listPrompts(): Promise<Prompt[]> {
@@ -651,7 +668,7 @@ export function createPrompt(input: {
         now,
       );
     // 用用户配置的真实上限做后台淘汰（getSettingsSync 只回默认值）
-    void getSettings().then((s) => enforceMaxCount(s.maxPromptCount));
+    void getSettings().then((s) => enforceMaxCount(s.maxPromptCount, s.autoLearnTag));
     return Promise.resolve(prompt);
   } catch (e) {
     return Promise.reject(e);
@@ -773,6 +790,86 @@ function buildTitle(body: string): string {
   return clampTitle(cleaned.slice(0, Math.max(1, cut)) + "…");
 }
 
+/** 字符二元组 Jaccard 相似度（0~1），忽略空格与大小写，用于近似去重。 */
+function bigramSimilarity(a: string, b: string): number {
+  const grams = (s: string): Set<string> => {
+    const set = new Set<string>();
+    const t = s.toLowerCase().replace(/\s+/g, "");
+    for (let i = 0; i < t.length; i++) set.add(t.slice(i, i + 2));
+    if (!t) set.add("");
+    return set;
+  };
+  const A = grams(a);
+  const B = grams(b);
+  const union = A.size + B.size;
+  if (union === 0) return 1;
+  let inter = 0;
+  for (const g of A) if (B.has(g)) inter++;
+  return inter / (union - inter);
+}
+
+/**
+ * 近似去重：返回与正文高度相似（长度相近且 bigram 相似度 ≥ 阈值）的已有提示词。
+ * 长度差异过大的两条直接跳过，避免长文误伤短文。命中则不再重复入库。
+ */
+function findNearDuplicatePrompt(body: string, threshold = 0.8): Prompt | undefined {
+  const t = body.trim();
+  if (!t) return undefined;
+  const rows = getDb().prepare("SELECT * FROM prompts").all() as unknown as PromptRow[];
+  for (const r of rows) {
+    const b = r.body.trim();
+    if (!b) continue;
+    const ratio = Math.min(t.length, b.length) / Math.max(t.length, b.length);
+    if (ratio < 0.5) continue;
+    if (bigramSimilarity(t, b) >= threshold) return rowToPrompt(r);
+  }
+  return undefined;
+}
+
+/** 把回收站行转回提示词（丢弃 deletedAt 等回收站专属字段）。 */
+function trashRowToPrompt(r: TrashRow): Prompt {
+  return {
+    id: r.id,
+    title: r.title,
+    body: r.body,
+    tags: r.tags ? (JSON.parse(r.tags) as string[]) : undefined,
+    summary: r.summary ?? undefined,
+    sourceBody: r.sourceBody ?? undefined,
+    aiRefined: r.aiRefined === 1,
+    updatedAt: r.updatedAt,
+    createdAt: r.createdAt,
+    usageCount: r.usageCount,
+    lastUsedAt: r.lastUsedAt,
+  };
+}
+
+/** 把一条回收站内容恢复到词库（保留原始标题/标签/AI 完善结果），并从回收站移除。 */
+function restoreTrashRow(r: TrashRow): void {
+  const cur = getDb();
+  const tags = r.tags ? (JSON.parse(r.tags) as string[]) : [];
+  ensureTags(tags);
+  cur
+    .prepare(
+      `INSERT OR REPLACE INTO prompts
+         (id, title, body, tags, summary, sourceBody, aiRefined, updatedAt, usageCount, lastUsedAt, createdAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      r.id,
+      r.title,
+      r.body,
+      r.tags,
+      r.summary,
+      r.sourceBody,
+      r.aiRefined,
+      r.updatedAt,
+      r.usageCount,
+      r.lastUsedAt,
+      r.createdAt,
+    );
+  cur.prepare("DELETE FROM trash WHERE id = ?").run(r.id);
+}
+
 export function autoLearn(body: string, tag?: string, skipEnrich?: boolean): Promise<Prompt> {
   try {
     const normalized = body.trim().toLowerCase();
@@ -785,6 +882,27 @@ export function autoLearn(body: string, tag?: string, skipEnrich?: boolean): Pro
         .get(collisions[0]!.id) as unknown as PromptRow;
       const existing = rowToPrompt(row);
       return Promise.resolve(existing).then(async (prompt) => {
+        void continueEnrich(prompt, !!skipEnrich);
+        return prompt;
+      });
+    }
+
+    // 回收站已有完全相同的内容：恢复该条而非重复入库（保留用户原先的标题/标签/AI 完善结果）
+    const trashHit = getDb()
+      .prepare("SELECT * FROM trash WHERE lower(body) = ?")
+      .get(normalized) as unknown as TrashRow | undefined;
+    if (trashHit) {
+      restoreTrashRow(trashHit);
+      const prompt = trashRowToPrompt(trashHit);
+      void continueEnrich(prompt, !!skipEnrich);
+      emitDataChanged();
+      return Promise.resolve(prompt);
+    }
+
+    // 近似去重：与词库中已有内容高度相似时视为已有条目，不重复入库（返回原条目）
+    const near = findNearDuplicatePrompt(body);
+    if (near) {
+      return Promise.resolve(near).then(async (prompt) => {
         void continueEnrich(prompt, !!skipEnrich);
         return prompt;
       });
@@ -814,7 +932,7 @@ export function autoLearn(body: string, tag?: string, skipEnrich?: boolean): Pro
       )
       .run(prompt.id, prompt.title, prompt.body, tagsToJson(prompt.tags), prompt.aiRefined ? 1 : 0, now, 0, 0, now);
     // 用用户配置的真实上限做后台淘汰（getSettingsSync 只回默认值）
-    void getSettings().then((s) => enforceMaxCount(s.maxPromptCount));
+    void getSettings().then((s) => enforceMaxCount(s.maxPromptCount, s.autoLearnTag));
     void continueEnrich(prompt, !!skipEnrich);
     emitDataChanged();
     return Promise.resolve(prompt);
@@ -836,6 +954,26 @@ async function continueEnrich(prompt: Prompt, skipEnrich: boolean): Promise<void
       .catch(() => {
         /* 静默：AI 完善失败不影响已保存的提示词 */
       });
+  }
+}
+
+/**
+ * 重新触发某条提示词的 AI 完善（查看详情里「重新完善」入口用）。
+ * 失败时保留 aiRefined=false 标记，供再次重试；未启用 AI 完善或无 LLM 时返回 false。
+ */
+export async function refinePrompt(id: string): Promise<boolean> {
+  try {
+    const row = getDb().prepare("SELECT * FROM prompts WHERE id = ?").get(id) as unknown as PromptRow | undefined;
+    if (!row) return false;
+    const prompt = rowToPrompt(row);
+    if (prompt.aiRefined) return true; // 已完成过完善，无需重复触发
+    const settings = await getSettings();
+    if (!settings.aiEnrichEnabled || !isAiAvailable()) return false;
+    await enrichLearnedPrompt(prompt, settings);
+    emitDataChanged();
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -1219,6 +1357,8 @@ export interface LibraryStats {
   topUsed7: Array<{ title: string; count: number }>;
   /** 近 7 天经 AI 完善的提示词数量。 */
   aiRefinedIn7: number;
+  /** 自动学习条目数量（标签为配置的自动学习标签或默认 auto-learned）。 */
+  autoLearnedCount: number;
 }
 
 /** 一周的毫秒数。 */
@@ -1291,6 +1431,11 @@ export async function computeLibraryStats(): Promise<LibraryStats> {
         .get(weekAgo) as { c: number }
     ).c;
 
+    // 自动学习条目数量（标签为配置的自动学习标签或默认 auto-learned）
+    const settings = await getSettings();
+    const autoLearnTags = new Set(["auto-learned", settings.autoLearnTag?.trim()].filter(Boolean));
+    const autoLearnedCount = all.filter((p) => (p.tags ?? []).some((t) => autoLearnTags.has(t))).length;
+
     return Promise.resolve({
       total,
       totalUsage,
@@ -1311,6 +1456,7 @@ export async function computeLibraryStats(): Promise<LibraryStats> {
       addedIn30Days,
       topUsed7,
       aiRefinedIn7,
+      autoLearnedCount,
     });
   } catch (e) {
     return Promise.reject(e);
@@ -1388,6 +1534,67 @@ export async function computeWeeklyStats(): Promise<WeeklyStats> {
       topUsed,
       aiRefinedCount,
     });
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+// ── 连续活跃天数（成就系统数据源）───────────────────────────────────────
+
+/** 把时间戳格式化为本地时区的日期键（YYYY-MM-DD）。 */
+function localDayKey(ts: number): string {
+  const d = new Date(ts);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * 计算连续活跃天数（streak）：基于 usage_log 按「本地时区天」去重，
+ * 从今天向前数连续有使用的天数。今天还没使用不算断签（从昨天起算，
+ * 给今天一个「仍在进行中」的宽限），一旦中间断一天即停止。
+ */
+export async function computeStreak(): Promise<number> {
+  try {
+    const cur = getDb();
+    const rows = cur
+      .prepare("SELECT DISTINCT usedAt FROM usage_log")
+      .all() as Array<{ usedAt: number }>;
+    if (rows.length === 0) return 0;
+    const days = new Set(rows.map((r) => localDayKey(r.usedAt)));
+    const now = new Date();
+    const todayKey = localDayKey(now.getTime());
+    const cursor = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    if (!days.has(todayKey)) cursor.setDate(cursor.getDate() - 1);
+    let streak = 0;
+    while (days.has(localDayKey(cursor.getTime()))) {
+      streak += 1;
+      cursor.setDate(cursor.getDate() - 1);
+    }
+    return streak;
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+/**
+ * 计算距上次使用的时间（按本地时区「天」计）。
+ * 今天使用过或从未使用过都返回 0（等级不回落）。
+ */
+export async function computeInactiveDays(): Promise<number> {
+  try {
+    const cur = getDb();
+    const row = cur
+      .prepare("SELECT MAX(usedAt) AS lastUsed FROM usage_log")
+      .get() as { lastUsed: number | null };
+    const lastUsed = row?.lastUsed;
+    if (!lastUsed || lastUsed <= 0) return 0;
+    const last = new Date(lastUsed);
+    const todayUTC = Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
+    const lastUTC = Date.UTC(last.getFullYear(), last.getMonth(), last.getDate());
+    const diff = Math.floor((todayUTC - lastUTC) / (24 * 60 * 60 * 1000));
+    return diff < 0 ? 0 : diff;
   } catch (e) {
     return Promise.reject(e);
   }

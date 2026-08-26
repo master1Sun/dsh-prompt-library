@@ -676,24 +676,36 @@ export async function polishPromptBody(
 }
 
 /**
- * 依据「词库使用统计」文本调用 AI 生成一段中文点评（总结现状 + 给出可执行建议）。
- * 供 `/prompts -data` 在统计数字之后追加「AI 点评」。AI 不可用或失败时返回空字符串。
+ * 依据「词库使用统计」文本调用 AI 生成一段点评（总结现状 + 给出可执行建议）。
+ * 供 `/prompts -data` 在统计数字之后追加「AI 点评」，以及公告看板「AI 建议」卡片。
+ * AI 不可用或失败时返回空字符串。
  */
 export async function commentOnStats(
   statsText: string,
   settings: PluginSettings,
+  lang: "zh" | "en" = "zh",
 ): Promise<string> {
   if (!llm) return "";
   const candidates = await resolveCandidates(llm, settings);
   if (candidates.length === 0) return "";
-  const system = [
-    "你是一名词库运营分析助手，擅长根据统计数据给出简洁、可执行的点评与改进建议。",
-    "",
-    "要求：",
-    "- 用一段中文点评以上统计数据（100 字以内），指出亮点与可优化点；",
-    "- 给出接地气、可执行的建议，不要空话套话；",
-    "- 直接输出点评文本，不要标题、编号或 Markdown 代码块，不要复述原始统计数据。",
-  ].join("\n");
+  const system =
+    lang === "en"
+      ? [
+          "You are a prompt-library operations analyst who gives concise, actionable reviews and suggestions based on stats.",
+          "",
+          "Requirements:",
+          "- Write one paragraph (within 100 words) in English, highlighting strengths and areas to improve;",
+          "- Give practical, actionable suggestions, no empty talk;",
+          "- Output only the review text: no headings, numbering, or Markdown code blocks; do not restate raw stats.",
+        ].join("\n")
+      : [
+          "你是一名词库运营分析助手，擅长根据统计数据给出简洁、可执行的点评与改进建议。",
+          "",
+          "要求：",
+          "- 用一段中文点评以上统计数据（100 字以内），指出亮点与可优化点；",
+          "- 给出接地气、可执行的建议，不要空话套话；",
+          "- 直接输出点评文本，不要标题、编号或 Markdown 代码块，不要复述原始统计数据。",
+        ].join("\n");
   const content = `以下是词库的使用统计数据，请点评：\n\n${statsText}`;
   const text = await collectTextWithFallback(llm, candidates, system, content);
   return text?.trim() ?? "";

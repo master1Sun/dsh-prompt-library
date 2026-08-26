@@ -13,7 +13,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { WebRoute } from "@deepseek-ai/dsh-host-webserver";
 import type { ApiResponse, PluginSettings, Prompt, PromptInput, PromptPatch } from "../../types.js";
-import { generateIntro, generateSkillDescriptor, listAiSelectables, polishPromptBody } from "../services/ai/ai.js";
+import { commentOnStats, generateIntro, generateSkillDescriptor, listAiSelectables, polishPromptBody } from "../services/ai/ai.js";
 import {
   exportPromptsAsSkills,
   importSkillEntries,
@@ -24,6 +24,8 @@ import {
 import {
   autoLearn,
   computeLibraryStats,
+  computeInactiveDays,
+  computeStreak,
   createPrompt,
   createTag,
   deletePrompt,
@@ -38,13 +40,15 @@ import {
   listTags,
   listTrash,
   recordUsage,
+  refinePrompt,
   renameTag,
   restorePrompts,
   updatePrompt,
   updateSettings,
 } from "../services/data/store.js";
-import { checkUpdate, upgradePlugin } from "../services/update/update.js";
+import { checkUpdate, getVersionInfo, restartService, upgradePlugin } from "../services/update/update.js";
 import { getActivity } from "../services/assistant/activity.js";
+import { buildAssistantStatus } from "../services/assistant/gamification.js";
 import { getAnnouncement } from "../services/update/announcement.js";
 import { deleteBackup, listBackups, restoreBackup, runBackup, type BackupFormat } from "../services/data/backup.js";
 
@@ -182,6 +186,12 @@ export function makePromptRoutes(): WebRoute[] {
         const removed = await deletePrompt(promptId);
         if (!removed) return json(res, 404, { ok: false, error: "not found" });
         return json(res, 200, { ok: true, data: { id: promptId } });
+      }
+
+      // POST /prompts/:id/refine — 重新触发某条提示词的 AI 完善（查看详情「重新完善」入口）
+      if (method === "POST" && segments[0] === "prompts" && segments[2] === "refine" && segments.length === 3) {
+        const ok = await refinePrompt(segments[1] ?? "");
+        return json(res, ok ? 200 : 404, { ok, data: { ok } });
       }
 
       // POST /prompts/:id — 记录使用次数
@@ -408,21 +418,55 @@ export function makePromptRoutes(): WebRoute[] {
         return json(res, 200, { ok: true, data: { lines } });
       }
 
+      // POST /ai/suggest — 依据词库当前统计生成「AI 建议」点评（公告看板 AI 建议卡片；
+      // 失败时返回空串，前端显示 AI 不可用提示）
+      if (method === "POST" && tail === "/ai/suggest") {
+        const raw = await readJsonBody(req);
+        const lang = (raw as { lang?: string })?.lang === "en" ? "en" : "zh";
+        const settings = await getSettings();
+        const stats = await computeLibraryStats().catch(() => undefined);
+        if (!stats) return json(res, 503, { ok: false, error: "统计不可用" });
+        const lines: string[] = [
+          `词库共 ${stats.total} 条提示词，累计使用 ${stats.totalUsage} 次，使用率 ${stats.total ? Math.round((stats.usedCount / stats.total) * 100) : 0}%；`,
+          `近 7 天使用 ${stats.usedIn7Days} 条、新增 ${stats.addedIn7Days} 条、AI 完善 ${stats.aiRefinedIn7} 条；近 30 天使用 ${stats.usedIn30Days} 条、新增 ${stats.addedIn30Days} 条。`,
+        ];
+        if (stats.topUsed.length) {
+          lines.push(`最常用：${stats.topUsed.slice(0, 3).map((p) => `${p.title}（${p.usageCount}次）`).join("、")}。`);
+        }
+        if (stats.tagStats.length) {
+          lines.push(`标签分布：${stats.tagStats.slice(0, 5).map((t) => `${t.name}(${t.count})`).join("、")}。`);
+        }
+        if (stats.trashCount) lines.push(`回收站有 ${stats.trashCount} 条待清理。`);
+        const suggestion = await commentOnStats(lines.join("\n"), settings, lang).catch(() => "");
+        return json(res, 200, { ok: true, data: { suggestion } });
+      }
+
       // GET /settings — 获取设置
       if (method === "GET" && tail === "/settings") {
         const settings = await getSettings();
         return json(res, 200, { ok: true, data: settings });
       }
 
-      // GET /update — 检查插件是否有新版本（npm registry，结果带缓存）
+      // GET /update — 检查插件是否有新版本（前端手动检查：强制刷新，绕过 24h 缓存并落日志）
       if (method === "GET" && tail === "/update") {
-        const info = await checkUpdate();
+        const info = await checkUpdate(true);
         return json(res, 200, { ok: true, data: info });
       }
 
       // POST /update/apply — 点击气泡「更新」按钮后执行安装命令升级插件到最新版
       if (method === "POST" && tail === "/update/apply") {
         const result = await upgradePlugin();
+        return json(res, 200, { ok: result.ok, data: result });
+      }
+
+      // GET /version — 服务端/客户端版本比对信息（运行版本 + 磁盘已安装版本）
+      if (method === "GET" && tail === "/version") {
+        return json(res, 200, { ok: true, data: getVersionInfo() });
+      }
+
+      // POST /restart — 重启本地 dsh web 服务（重启后当前连接会短暂断开）
+      if (method === "POST" && tail === "/restart") {
+        const result = await restartService();
         return json(res, 200, { ok: result.ok, data: result });
       }
 
@@ -436,13 +480,44 @@ export function makePromptRoutes(): WebRoute[] {
         return json(res, 200, { ok: true, data: settings });
       }
 
-      // GET /activity — 词库助手活动状态机快照（idle/waiting/thinking/tool/review/done/failed），驱动小人动画
+      // GET /activity — 词库助手活动状态机快照（idle/waiting/thinking/tool/review/done/failed），
+      // 驱动小人动画；支持 lang 查询参数，host 按语言返回匹配主题+阶段的文案
       if (method === "GET" && tail === "/activity") {
-        const data = getActivity();
+        let lang = "zh";
+        try {
+          const raw = req.url ?? "";
+          const q = raw.includes("?") ? raw.slice(raw.indexOf("?") + 1) : "";
+          const lv = new URLSearchParams(q).get("lang");
+          if (lv) lang = lv;
+        } catch {
+          /* 解析失败用默认 zh */
+        }
+        const data = getActivity(lang.toLowerCase().startsWith("en") ? "en" : "zh");
         return json(res, 200, { ok: true, data });
       }
 
-      // GET /announcement — 公告通告（双击词库助手弹窗读取；本地多语言，支持 lang 查询参数）
+      // GET /assistant/status — 词库助手游戏化快照：等级 + 成就 + 时间/节日彩蛋，
+      // 驱动小人等级徽章、成就解锁气泡与应景彩蛋；支持 lang 查询参数
+      if (method === "GET" && tail === "/assistant/status") {
+        let lang = "zh";
+        try {
+          const raw = req.url ?? "";
+          const q = raw.includes("?") ? raw.slice(raw.indexOf("?") + 1) : "";
+          const lv = new URLSearchParams(q).get("lang");
+          if (lv) lang = lv;
+        } catch {
+          /* 解析失败用默认 zh */
+        }
+        const [stats, streak, inactiveDays] = await Promise.all([
+          computeLibraryStats().catch(() => undefined),
+          computeStreak().catch(() => 0),
+          computeInactiveDays().catch(() => 0),
+        ]);
+        const data = buildAssistantStatus(stats, streak, inactiveDays, lang.toLowerCase().startsWith("en") ? "en" : "zh");
+        return json(res, 200, { ok: true, data });
+      }
+
+      // GET /announcement — 公告通告（词库助手右键菜单「公告」弹窗读取；本地多语言，支持 lang 查询参数）
       if (method === "GET" && tail === "/announcement") {
         let lang = "zh";
         try {

@@ -323,6 +323,14 @@ export function SkillImportModal(props: {
       setEntries((prev) => {
         const next = [...prev];
         for (const it of incoming) {
+          // 同一来源 + 同一标识（技能名 / promptId）已存在时跳过，避免重复扫描重复加入
+          const ident = it.promptId ?? it.name;
+          if (
+            ident &&
+            next.some((e) => e.source === it.source && (e.promptId ?? e.name) === ident)
+          ) {
+            continue;
+          }
           let key = `${it.source}:${it.promptId ?? it.name}`;
           // 同源同名（如 JSON 条目未带 name）冲突时追加序号，保证每条独立可编辑
           while (next.some((e) => e.key === key)) {

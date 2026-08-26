@@ -16,6 +16,7 @@ import type { PluginSettings } from "../../../types.js";
 import { DEFAULT_SETTINGS } from "../../../types.js";
 import { type PLTranslate, usePLT } from "../../i18n/i18n.js";
 import { useFillDraft } from "../../services/data-sync.js";
+import { rowBackground } from "../../utils/theme.js";
 
 /**
  * `conversation.input.left` 的最小属性合约（与 PromptLibraryButton 一致）。
@@ -41,6 +42,7 @@ const TONE = {
   border: "var(--dsw-alias-border-l2, rgba(196, 211, 232, 0.16))",
   borderStrong: "var(--dsw-alias-border-l3, rgba(196, 211, 232, 0.31))",
   accent: "var(--dsw-alias-brand-primary, #8ec5ff)",
+  accentSoft: "var(--dsw-alias-brand-primary-weak, rgba(142, 197, 255, 0.14))",
   mint: "var(--dsw-alias-state-success-primary, #78dda0)",
   red: "var(--dsw-alias-state-error-primary, #ff8592)",
 } as const;
@@ -109,6 +111,9 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
 
   const [status, setStatus] = useState<"idle" | "polishing" | "done" | "error">("idle");
   const [result, setResult] = useState("");
+  // 润色前的原稿：供结果面板「原稿/润色稿」对比
+  const [original, setOriginal] = useState("");
+  const [showOriginal, setShowOriginal] = useState(false);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
 
@@ -124,6 +129,8 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
   const closeResult = useCallback(() => {
     setStatus("idle");
     setResult("");
+    setOriginal("");
+    setShowOriginal(false);
     setError("");
   }, []);
 
@@ -136,6 +143,8 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
     }
     setStatus("polishing");
     setError("");
+    setOriginal(draft);
+    setShowOriginal(false);
     // 聊天框按钮润色不启用「{{}} 模板变量保留/新增」能力（与词库内润色区分）
     polishPrompt(draft, { keepVariables: false })
       .then(({ polished }) => {
@@ -244,8 +253,34 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
               <strong style={{ fontSize: 13, fontWeight: 470 }}>{T("pl.polishResult")}</strong>
               {error && <span style={{ color: TONE.red, fontSize: 11 }}>{error}</span>}
             </div>
+            {/* 原稿 / 润色稿对比切换 */}
+            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+              {([
+                { value: false, label: T("pl.polished") },
+                { value: true, label: T("pl.original") },
+              ] as const).map((opt) => (
+                <button
+                  key={String(opt.value)}
+                  type="button"
+                  onClick={() => setShowOriginal(opt.value)}
+                  style={{
+                    cursor: "pointer",
+                    padding: "2px 10px",
+                    fontSize: 11,
+                    fontFamily: MONO,
+                    color: showOriginal === opt.value ? TONE.accent : TONE.muted,
+                    background: showOriginal === opt.value ? TONE.accentSoft : "transparent",
+                    border: `1px solid ${showOriginal === opt.value ? TONE.accent : TONE.border}`,
+                    borderRadius: 999,
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
             <textarea
-              value={result}
+              value={showOriginal ? original : result}
+              readOnly={showOriginal}
               onChange={(e) => setResult(e.target.value)}
               rows={7}
               aria-label={T("pl.polishResultAria")}
@@ -255,12 +290,13 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
                 resize: "vertical",
                 padding: "7px 9px",
                 color: TONE.text,
-                background: TONE.row,
+                background: showOriginal ? TONE.panel : rowBackground(),
                 border: `1px solid ${TONE.border}`,
                 borderRadius: 7,
                 fontFamily: MONO,
                 fontSize: 12,
                 outline: "none",
+                opacity: showOriginal ? 0.75 : 1,
               }}
             />
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>

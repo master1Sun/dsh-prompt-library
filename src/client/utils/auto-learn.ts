@@ -17,6 +17,8 @@ export const AUTO_LEARN_DEBOUNCE_MS = 3000;
 
 /** 自动学习成功 toast 的展示时长（毫秒）。 */
 export const AUTO_LEARN_TOAST_MS = 2500;
+/** 自动学习 toast 带「撤销」按钮时的展示时长：给用户留足撤销时间。 */
+export const AUTO_LEARN_UNDO_MS = 8000;
 
 /** 明显无意义的客套语 / 问候 / 单字应答（紧凑命中即视为低质量）。 */
 const LOW_QUALITY_PATTERNS = [
@@ -32,6 +34,10 @@ const CLAUSE_BOUNDARY_RE = /[。！？!?；;…]|[\r\n]/g;
 
 /** 结构化线索：列表项、占位符、层级标记等，多为可复用提示词特征。 */
 const STRUCTURE_HINT_RE = /[#*\-•1-9]\.|【|】|\[|\]|<|>|：|、/;
+
+/** 指令倾向线索：动作动词（翻译/总结/生成/写作等）或角色设定，多为可复用提示词特征。 */
+const INSTRUCTION_HINT_RE =
+  /翻译|总结|概括|摘要|生成|撰写|编写|写|创建|制作|设计|规划|分析|比较|对比|解释|说明|描述|润色|改写|优化|转换|提炼|提取|列举|列出|推荐|建议|评估|判断|分类|整理|修复|调试|代码|脚本|步骤|流程|方案|报告|邮件|论文|文案|大纲|你是|你是一位|你是一个|你扮演|扮演|作为|请|帮我|translate|summar|generat|write|creat|design|analyz|compar|explain|describ|polish|rewrit|optimiz|convert|extract|list|recommend|suggest|evaluat|classif|debug|refactor|script|code|draft|outline|report|email|essay|you are|please/i;
 
 /**
  * 低质量内容检测：
@@ -61,7 +67,8 @@ export function isLearnWorthy(text: string, minLength: number): boolean {
   if (meaningful < minLength) return false;
   const clauseCount = (t.match(CLAUSE_BOUNDARY_RE) ?? []).length;
   const hasStructure = STRUCTURE_HINT_RE.test(t);
-  if (clauseCount >= 1 || hasStructure) return true;
+  const hasInstruction = INSTRUCTION_HINT_RE.test(t);
+  if (clauseCount >= 1 || hasStructure || hasInstruction) return true;
   return meaningful >= Math.max(minLength * 2, 20);
 }
 
@@ -89,15 +96,23 @@ export function similarity(a: string, b: string): number {
 /**
  * 判断文本是否与词库中的某条高度重复（近似去重）。
  * 长度差异过大的两条直接跳过，避免长文误伤短文。
+ * 性能优化：长度预筛后仅对有限的相似长度条目计算 bigram，限制比较数量避免大词库卡顿。
+ * （host 侧仍会做权威近似去重，这里只是前端预筛，漏判无副作用。）
  */
 export function isNearDuplicate(text: string, existingPrompts: Prompt[], threshold = 0.8): boolean {
   const t = text.trim();
   if (!t) return false;
+  const tLen = t.length;
+  // 单次扫描最多计算的 bigram 次数：足够覆盖常见重复，且避免词库膨胀时拖慢输入
+  let compared = 0;
+  const MAX_COMPARE = 40;
   for (const p of existingPrompts) {
     const b = p.body.trim();
     if (!b) continue;
-    const ratio = Math.min(t.length, b.length) / Math.max(t.length, b.length);
-    if (ratio < 0.5) continue;
+    const bLen = b.length;
+    // 长度预筛：只与长度相近的条目比较（0.5x ~ 2x）
+    if (bLen < tLen * 0.5 || bLen > tLen * 2) continue;
+    if (compared++ >= MAX_COMPARE) break;
     if (similarity(t, b) >= threshold) return true;
   }
   return false;

@@ -11,7 +11,11 @@
  *   做词频加权匹配，按得分排序取前 3 条；
  * - 渲染为输入框上方的横条，点击任意推荐即插入到输入框草稿。
  *
- * 仅在「输入框为空」时展示（用户已在输入时不再打扰），空会话或没有匹配时不渲染。
+ * 推荐来源（按优先级）：
+ * - 输入框有内容时，按输入内容（叠加聊天上下文）实时匹配；
+ * - 输入框为空且有聊天上下文时，按最近聊天内容匹配；
+ * - 输入框为空且无聊天上下文（新建会话）时，按使用频率兜底推荐常用/最近使用的提示词；
+ * 其余情况无匹配时不渲染。
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { ConversationNode, ConversationSnapshot, UserMessageNode } from "@deepseek-ai/dsh-client-runtime/client";
@@ -187,45 +191,67 @@ export function ContextRecommendations(props: DockProps): ReactNode {
   }, [refresh]);
   useDataChanged(refresh);
 
-  // 依据上下文给每条提示词智能打分，取前 LIMIT 条（最多 5 条；综合相关度 + 使用智能）
+  // 推荐关键词来源（按优先级叠加）：
+  // 输入框有内容时以输入内容为主，其次叠加最近聊天上下文，实时匹配用户正在输入的内容
+  const keywordText = useMemo(() => {
+    const parts: string[] = [];
+    if (draft.trim()) parts.push(draft);
+    if (userText) parts.push(userText);
+    return parts.join("\n").trim();
+  }, [draft, userText]);
+
+  // 依据关键词给每条提示词智能打分，取前 LIMIT 条（最多 5 条；综合相关度 + 使用智能）。
+  // 无输入且无聊天上下文（新建会话）时兜底推荐常用/最近使用的提示词，避免空显示。
   const hits = useMemo(() => {
-    if (!enabled || !userText) return [] as Prompt[];
-    const kw = extractKeywords(userText);
-    if (kw.size === 0) return [] as Prompt[];
+    if (!enabled) return [] as Prompt[];
     const now = Date.now();
+    if (!keywordText) {
+      const fallbackScore = (p: Prompt) => {
+        const freq = p.usageCount > 0 ? Math.log(1 + p.usageCount) / Math.log(11) : 0;
+        const fresh = p.lastUsedAt > 0 && now - p.lastUsedAt < FRESH_MS ? 1 : 0;
+        return freq * 0.6 + fresh * 0.4;
+      };
+      return prompts
+        .filter((p) => p.usageCount > 0 || (p.lastUsedAt > 0 && now - p.lastUsedAt < FRESH_MS))
+        .map((p) => ({ p, score: fallbackScore(p) }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, LIMIT)
+        .map((x) => x.p);
+    }
+    const kw = extractKeywords(keywordText);
+    if (kw.size === 0) return [] as Prompt[];
     return prompts
       .map((p) => ({ p, score: scorePrompt(p, kw, now) }))
       .filter((x) => x.score > 0)
       .sort((a, b) => b.score - a.score)
       .slice(0, LIMIT)
       .map((x) => x.p);
-  }, [enabled, userText, prompts]);
+  }, [enabled, keywordText, prompts]);
 
   // 推荐命中含 {{变量}} 的提示词时，记录待填充的模板（变量填充弹窗状态）
   const [template, setTemplate] = useState<{ p: Prompt } | null>(null);
 
-  // 未开启 / 输入框已有内容 / 无匹配（或空会话）时都不渲染；
-  // 变量填充弹窗打开时保持渲染，避免用户填写中途组件卸载
-  if (!enabled || !useSession || !useInput || !inputActions || hits.length === 0 || (draft.trim() && !template)) {
+  // 未开启 / 无匹配（或空会话）时都不渲染；输入内容时也保持显示，随输入实时更新
+  if (!enabled || !useSession || !useInput || !inputActions || hits.length === 0) {
     return null;
   }
 
-  // 点击推荐：含 {{变量}} 时先弹变量填充框，否则统计使用并插入到输入框草稿（展示时草稿为空，直接替换）
+  // 点击推荐：含 {{变量}} 时先弹变量填充框，否则统计使用并插入到输入框草稿（草稿为空时直接替换，非空时追加）
   const insert = (p: Prompt) => {
     if (hasVariables(p.body)) {
       setTemplate({ p });
       return;
     }
     apiUse(p.id).catch(() => {});
-    inputActions.setDraft(p.body);
+    inputActions.setDraft(draft && draft.trim() ? `${draft}\n\n${p.body}` : p.body);
   };
 
-  // 变量填充确认：用填充后的正文替换占位符后写入草稿
+  // 变量填充确认：用填充后的正文替换占位符后写入草稿（草稿为空时直接替换，非空时追加）
   const applyTpl = (values: Record<string, string>) => {
     if (!template) return;
     const filled = applyVariables(template.p.body, values);
     apiUse(template.p.id).catch(() => {});
-    inputActions.setDraft(filled);
+    inputActions.setDraft(draft && draft.trim() ? `${draft}\n\n${filled}` : filled);
     setTemplate(null);
   };
 

@@ -19,6 +19,7 @@ import {
   applyUpdate,
   getAiSelectables,
   getSettings,
+  getStats,
   getUpdate,
   updateSettings as apiUpdateSettings,
   type ClientAiSelectable,
@@ -27,6 +28,7 @@ import {
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { plBtn } from "../../utils/button-style.js";
 import { type PLTranslate, usePLT } from "../../i18n/i18n.js";
+import { PLUGIN_VERSION } from "../../version.js";
 
 const MONO =
   '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "SimHei", "黑体", sans-serif';
@@ -401,6 +403,8 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
   const [updating, setUpdating] = useState(false);
   const [updateMsg, setUpdateMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 自动学习统计：已学习条数 + 近 7 天 AI 完善次数（设置面板展示用）
+  const [learnStats, setLearnStats] = useState<{ autoLearnedCount: number; aiRefinedIn7: number } | null>(null);
 
   useEffect(() => {
     getSettings()
@@ -411,6 +415,18 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
     getAiSelectables()
       .then(setSelectables)
       .catch(() => setSelectables([]));
+  }, []);
+
+  // 拉取自动学习统计：展示已学习条数/近 7 天 AI 完善次数
+  useEffect(() => {
+    getStats()
+      .then((data) =>
+        setLearnStats({
+          autoLearnedCount: data.stats.autoLearnedCount,
+          aiRefinedIn7: data.stats.aiRefinedIn7,
+        }),
+      )
+      .catch(() => setLearnStats(null));
   }, []);
 
   // 保存设置到后台并通知其他组件
@@ -603,6 +619,22 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
               onChange={(v) => updateAndSave({ aiModel: v })}
             />
           </div>
+
+          {/* 自动学习统计：已学习条数 + 近 7 天 AI 完善次数 */}
+          {learnStats && (
+            <div style={{
+              marginTop: 4,
+              padding: "6px 10px",
+              fontSize: 11,
+              lineHeight: 1.5,
+              color: TONE.quiet,
+              background: TONE.row,
+              border: `1px solid ${TONE.border}`,
+              borderRadius: 6,
+            }}>
+              {T("pl.set.learnStats", { count: learnStats.autoLearnedCount, n: learnStats.aiRefinedIn7 })}
+            </div>
+          )}
         </div>
       </ModuleCard>
 
@@ -680,7 +712,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             flexDirection: "column",
           }}
         >
-          {/* 公告控制：仅当词库助手显示时可开关，默认开启；关闭后双击词库助手不再弹出公告 */}
+          {/* 公告控制：仅当词库助手显示时可开关，默认开启；关闭后词库助手右键菜单不显示「公告」 */}
           <ToggleRow
             label={T("pl.set.announcement")}
             desc={T("pl.set.announcementDesc")}
@@ -695,6 +727,22 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             checked={draft.rightPanelEnabled}
             disabled={!draft.assistantEnabled}
             onChange={(v) => updateAndSave({ rightPanelEnabled: v })}
+          />
+          {/* 等级助手：控制小助手等级徽章与右键菜单「成就」入口；仅当词库助手显示时可开关 */}
+          <ToggleRow
+            label={T("pl.set.levelAssistant")}
+            desc={T("pl.set.levelAssistantDesc")}
+            checked={draft.levelEnabled}
+            disabled={!draft.assistantEnabled}
+            onChange={(v) => updateAndSave({ levelEnabled: v })}
+          />
+          {/* 我的等级公告：新成就解锁时由小助手气泡播报；仅当词库助手显示时可开关 */}
+          <ToggleRow
+            label={T("pl.set.levelAnnouncement")}
+            desc={T("pl.set.levelAnnouncementDesc")}
+            checked={draft.levelAnnouncementEnabled}
+            disabled={!draft.assistantEnabled}
+            onChange={(v) => updateAndSave({ levelAnnouncementEnabled: v })}
           />
         </div>
         <ToggleRow
@@ -735,10 +783,25 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
         />
       </ModuleCard>
 
-      {/* 分类模块四：更新 */}
+      {/* 分类模块四：实验室 */}
       <ModuleCard
-        title={T("pl.setModuleUpdate")}
-        desc={T("pl.setModuleUpdateDesc")}
+        title={T("pl.setModuleLab")}
+        desc={T("pl.setModuleLabDesc")}
+        open={openLab}
+        onToggle={() => setOpenLab((v) => !v)}
+      >
+        <ToggleRow
+          label={T("pl.set.chatCharacter")}
+          desc={T("pl.set.chatCharacterDesc")}
+          checked={draft.applyCharacterToChat}
+          onChange={(v) => updateAndSave({ applyCharacterToChat: v })}
+        />
+      </ModuleCard>
+
+      {/* 分类模块五：关于与更新 */}
+      <ModuleCard
+        title={T("pl.setModuleAboutUpdate")}
+        desc={T("pl.setModuleAboutUpdateDesc")}
         open={openUpdate}
         onToggle={() => setOpenUpdate((v) => !v)}
       >
@@ -943,114 +1006,94 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             </div>
           )}
         </div>
-      </ModuleCard>
 
-      {/* 分类模块五：实验室 */}
-      <ModuleCard
-        title={T("pl.setModuleLab")}
-        desc={T("pl.setModuleLabDesc")}
-        open={openLab}
-        onToggle={() => setOpenLab((v) => !v)}
-      >
-        <ToggleRow
-          label={T("pl.set.chatCharacter")}
-          desc={T("pl.set.chatCharacterDesc")}
-          checked={draft.applyCharacterToChat}
-          onChange={(v) => updateAndSave({ applyCharacterToChat: v })}
-        />
-      </ModuleCard>
+        {/* 分隔线 */}
+        <div style={{ height: 1, background: TONE.border }} />
 
-      {/* 底部署名 */}
-      <footer
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          gap: 8,
-          padding: "18px 0 12px",
-          marginTop: 16,
-        }}
-      >
-        <span
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            fontSize: 13,
-            fontWeight: 600,
-            letterSpacing: 0.3,
-            color: TONE.text,
-          }}
-        >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M12 2l2.4 7.2H22l-6 4.6 2.3 7.2-6.3-4.4L5.7 21 8 13.8 2 9.2h7.6L12 2z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
-          </svg>
-          master1Sun
-        </span>
-        <a
-          href="https://github.com/master1Sun/dsh-prompt-library"
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 5,
-            color: TONE.accent,
-            textDecoration: "none",
-            fontSize: 11,
-            opacity: 0.9,
-            transition: "opacity 0.15s ease",
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
-          onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.9")}
-        >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M12 0C5.37 0 0 5.4 0 12.06c0 5.33 3.44 9.84 8.21 11.43.6.11.82-.26.82-.58 0-.29-.01-1.04-.02-2.04-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.2.09 1.84 1.24 1.84 1.24 1.07 1.84 2.81 1.31 3.5 1 .1-.78.42-1.31.76-1.61-2.66-.3-5.47-1.34-5.47-5.95 0-1.31.47-2.39 1.24-3.23-.13-.3-.54-1.53.11-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.66 1.65.25 2.88.12 3.18.77.84 1.23 1.92 1.23 3.23 0 4.62-2.81 5.64-5.49 5.94.43.38.81 1.12.81 2.26 0 1.63-.02 2.94-.02 3.34 0 .32.22.7.83.58A12.4 12.4 0 0 0 24 12.06C24 5.4 18.63 0 12 0z" />
-          </svg>
-          <span>github.com/master1Sun/dsh-prompt-library</span>
-        </a>
-
-        {/* 版权信息（通用格式：© 年份 作者 · All rights reserved · License MIT · 免责声明） */}
-        <div
-          aria-label="版权信息"
-          style={{
-            width: "100%",
-            marginTop: 8,
-            paddingTop: 12,
-            borderTop: `1px dashed ${TONE.border}`,
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            gap: 4,
-            color: TONE.quiet,
-            fontSize: 11,
-            lineHeight: 1.55,
-            textAlign: "center",
-            fontFamily: MONO,
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
-            <span>© {new Date().getFullYear()} master1Sun</span>
-            <span aria-hidden="true">·</span>
-            <span>All rights reserved</span>
-            <span aria-hidden="true">·</span>
-            <span style={{
-              display: "inline-flex",
+        {/* 关于信息：信息行、开源地址、版权注释 */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 2 }}>
+          {/* 信息行（标签: 值，分隔布局） */}
+          {(
+            [
+              [T("pl.about.version"), `v${PLUGIN_VERSION}`],
+              [T("pl.about.author"), "master1Sun"],
+              [T("pl.about.license"), "MIT"],
+            ] as [string, string][]
+          ).map(([label, value]) => (
+            <div
+              key={label}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                padding: "6px 2px",
+                borderBottom: `1px solid ${TONE.border}`,
+              }}
+            >
+              <span style={{ fontSize: 12.5, color: TONE.quiet }}>{label}</span>
+              <span style={{ fontSize: 12.5, color: TONE.text }}>{value}</span>
+            </div>
+          ))}
+          {/* 开源地址行：右侧为可点击链接 */}
+          <div
+            style={{
+              display: "flex",
               alignItems: "center",
-              padding: "1px 6px",
-              borderRadius: 4,
-              background: TONE.row,
-              border: `1px solid ${TONE.border}`,
-              fontWeight: 600,
-              letterSpacing: 0.3,
-              color: TONE.muted,
-            }}>MIT</span>
+              justifyContent: "space-between",
+              gap: 12,
+              padding: "6px 2px",
+            }}
+          >
+            <span style={{ fontSize: 12.5, color: TONE.quiet }}>{T("pl.about.repo")}</span>
+            <a
+              href="https://github.com/master1Sun/dsh-prompt-library"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 5,
+                color: TONE.accent,
+                textDecoration: "none",
+                fontSize: 12.5,
+                opacity: 0.9,
+                transition: "opacity 0.15s ease",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
+              onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.9")}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M12 0C5.37 0 0 5.4 0 12.06c0 5.33 3.44 9.84 8.21 11.43.6.11.82-.26.82-.58 0-.29-.01-1.04-.02-2.04-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.2.09 1.84 1.24 1.84 1.24 1.07 1.84 2.81 1.31 3.5 1 .1-.78.42-1.31.76-1.61-2.66-.3-5.47-1.34-5.47-5.95 0-1.31.47-2.39 1.24-3.23-.13-.3-.54-1.53.11-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.66 1.65.25 2.88.12 3.18.77.84 1.23 1.92 1.23 3.23 0 4.62-2.81 5.64-5.49 5.94.43.38.81 1.12.81 2.26 0 1.63-.02 2.94-.02 3.34 0 .32.22.7.83.58A12.4 12.4 0 0 0 24 12.06C24 5.4 18.63 0 12 0z" />
+              </svg>
+              <span>github.com/master1Sun/dsh-prompt-library</span>
+            </a>
           </div>
-          <div>
-            {T("pl.footer.disclaimer")}
+
+          {/* 版权注释（华为格式：版权所有 © 年份 作者 保留一切权利） */}
+          <div
+            aria-label="版权注释"
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 4,
+              marginTop: 10,
+              paddingTop: 10,
+              borderTop: `1px dashed ${TONE.border}`,
+              color: TONE.quiet,
+              fontSize: 11,
+              lineHeight: 1.55,
+              textAlign: "center",
+            }}
+          >
+            <span>
+              {T("pl.about.copyright", { year: new Date().getFullYear(), author: "master1Sun" })}
+            </span>
+            <span>{T("pl.footer.disclaimer")}</span>
           </div>
         </div>
-      </footer>
+      </ModuleCard>
     </div>
   );
 }

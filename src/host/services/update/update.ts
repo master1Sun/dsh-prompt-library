@@ -2,9 +2,10 @@
  * 新版本检查与自动更新（host 侧共享）。
  *
  * 版本来源（双通道，仅这两个外部源）：
- * - npm registry（主通道，优先）：@sunjuntao/dsh-prompt-library 的 latest 版本；
- * - GitHub Releases（兜底通道）：仓库 latest release 的 tag 作为版本号，npm 不可达时使用；
- *   安装该来源的更新走 `github:<repo>#<tag>`。
+ * - npm registry：@sunjuntao/dsh-prompt-library 的 latest 版本；
+ * - GitHub Releases：仓库 latest release 的 tag 作为版本号。
+ * 两者都能访问时取其中较高版本（安装走对应通道）；任一不可达时用可达的那个；
+ * 都不可达则判定无更新源。
  *
  * 自动更新由设置项「自动更新」控制：开启时发现新版本即后台静默安装；关闭则完全不动。
  *
@@ -13,10 +14,10 @@
 import { get as httpsGet } from "node:https";
 import type { IncomingMessage } from "node:http";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
-import { exec } from "node:child_process";
+import { exec, spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { getSettings, readGlobalLocale } from "../data/store.js";
-import { logDir } from "../../utils/paths.js";
+import { dshHome, logDir } from "../../utils/paths.js";
 
 /** npm registry 中本包的 latest 端点（scoped 包需把 `/` 编码为 `%2f`）。 */
 const REGISTRY_URL = "https://registry.npmjs.org/@sunjuntao%2fdsh-prompt-library/latest";
@@ -32,11 +33,11 @@ const REQUEST_TIMEOUT_MS = 8000;
 /** 版本检查结果：当前版本、待更新版本、更新来源及其安装方式。 */
 export interface UpdateInfo {
   current: string;
-  /** 可更新的最新版本（以 npm 为优先来源，npm 不可达时为 GitHub latest release）。 */
+  /** 可更新的最新版本（npm 与 GitHub 取较高；任一不可达时用可达的那个）。 */
   latest: string;
   /** 是否待更新（latest > current）。 */
   hasUpdate: boolean;
-  /** 该更新来源：npm（优先，默认）或 github（npm 不可达时的兜底）。 */
+  /** 该更新来源：npm（默认）或 github（GitHub 版本更高 / 仅 GitHub 可达时）。 */
   source: "npm" | "github";
   /** github 来源对应的 release tag（如 v0.9.0）；npm 来源为空串。 */
   gitTag: string;
@@ -77,6 +78,10 @@ interface VersionLogCopy {
   silentTo: (v: string) => string;
   /** 静默异常。 */
   silentErr: (msg: string) => string;
+  /** 重启服务命令触发。 */
+  restartCmd: (method: string, cmd: string) => string;
+  /** 重启服务异常。 */
+  restartErr: (msg: string) => string;
 }
 
 /** 构建版本日志文案（按语言）。 */
@@ -93,6 +98,8 @@ function buildVersionLogCopy(lang: string): VersionLogCopy {
       silentSkip: (latest) => `静默自动更新 无需自动升级 latest=${latest}`,
       silentTo: (v) => `静默自动更新 升级到 ${v}`,
       silentErr: (msg) => `静默自动更新 异常 ${msg}`,
+      restartCmd: (method, cmd) => `重启服务 方式=${method} 命令=${cmd}`,
+      restartErr: (msg) => `重启服务 异常 ${msg}`,
     };
   }
   return {
@@ -105,6 +112,8 @@ function buildVersionLogCopy(lang: string): VersionLogCopy {
     silentSkip: (latest) => `Silent auto-update no upgrade needed latest=${latest}`,
     silentTo: (v) => `Silent auto-update upgrading to ${v}`,
     silentErr: (msg) => `Silent auto-update error ${msg}`,
+    restartCmd: (method, cmd) => `Restart service method=${method} command=${cmd}`,
+    restartErr: (msg) => `Restart service error ${msg}`,
   };
 }
 
@@ -129,6 +138,25 @@ export function currentVersion(): string {
   } catch {
     return "0.0.0";
   }
+}
+
+/** 构建时注入的全局常量（由 esbuild define 提供，值为构建时的插件版本号）。 */
+declare const __PLUGIN_VERSION__: string;
+
+/**
+ * 服务端「运行版本」：构建时注入到服务端 bundle 的版本号。
+ *
+ * 与 currentVersion()（读磁盘 package.json 的「已安装版本」）不同，它反映的是
+ * 当前进程实际加载的代码版本：插件更新（文件已落盘）但未重启 dsh web 时，
+ * 运行版本仍为旧版本号，从而可与客户端版本比对、提示需要重启。
+ */
+export function builtVersion(): string {
+  return typeof __PLUGIN_VERSION__ !== "undefined" && __PLUGIN_VERSION__ ? __PLUGIN_VERSION__ : "0.0.0";
+}
+
+/** 服务端/客户端版本比对所需信息：运行版本 + 磁盘已安装版本（客户端用自己的构建版本比对）。 */
+export function getVersionInfo(): { server: string; installed: string } {
+  return { server: builtVersion(), installed: currentVersion() };
 }
 
 /** 简单 semver 比较：a > b 返回正数，a < b 返回负数，相等返回 0。 */
@@ -217,12 +245,13 @@ async function isAutoUpdateEnabled(): Promise<boolean> {
 }
 
 /**
- * 检查插件是否有新版本。只从两个外部源获取：npm registry（优先）+ GitHub Releases（兜底）。
+ * 检查插件是否有新版本。只从两个外部源获取：npm registry + GitHub Releases。
  *
  * 结果组合：
- * - npm 可达 → 以 npm version 为准（npm 优先）；
- * - npm 不可达但 GitHub latest release 可达 → 以其 tag 为准；
- * - 两者都不可达 → hasUpdate=false、latest=current。
+ * - 两者都可达 → 取较高版本（npm 与 GitHub 中更高的那个，安装走对应通道）；
+ * - 仅 npm 可达 → 以 npm version 为准；
+ * - 仅 GitHub latest release 可达 → 以其 tag 为准；
+ * - 都不可达 → hasUpdate=false、latest=current。
  */
 export async function checkUpdate(force = false): Promise<UpdateInfo> {
   const now = Date.now();
@@ -239,8 +268,19 @@ export async function checkUpdate(force = false): Promise<UpdateInfo> {
   logVersion(vlog.check(current, npm || "-", gh?.version || "-"));
 
   let info: UpdateInfo;
-  if (npm) {
-    // npm 主通道优先
+  if (npm && gh) {
+    // 双源都可达：取较高版本，安装走对应通道
+    const useGit = compareVersions(gh.version, npm) > 0;
+    const latest = useGit ? gh.version : npm;
+    info = {
+      current,
+      latest,
+      hasUpdate: compareVersions(latest, current) > 0,
+      source: useGit ? "github" : "npm",
+      gitTag: useGit ? gh.tag : "",
+    };
+  } else if (npm) {
+    // 仅 npm 可达
     info = {
       current,
       latest: npm,
@@ -249,7 +289,7 @@ export async function checkUpdate(force = false): Promise<UpdateInfo> {
       gitTag: "",
     };
   } else if (gh) {
-    // npm 不可达，用 GitHub latest release 兜底
+    // 仅 GitHub latest release 可达
     info = {
       current,
       latest: gh.version,
@@ -324,8 +364,59 @@ export async function upgradePlugin(target?: string, gitRef = ""): Promise<{ ok:
 let autoUpdating = false;
 
 /**
+ * 重启本地 dsh web 服务（自重启）。
+ *
+ * 重启命令可用环境变量 `DSH_PLUGIN_RESTART_CMD` 完全自定义（优先级最高）；
+ * Windows 默认实现：延迟 1 秒后结束 dsh web（node --profile web）进程，
+ * 再通过 harness 启动脚本（dsh-harness-start.vbs，可用 `DSH_HARNESS_VBS` 覆盖）重新拉起。
+ * 使用 detached + unref 的独立进程执行，确保父进程被杀后重启流程仍能完成。
+ * 返回 { ok, error? }；任何异常都不抛出，仅返回错误信息。
+ */
+export async function restartService(): Promise<{ ok: boolean; error?: string }> {
+  const vlog = buildVersionLogCopy(await readGlobalLocale().catch(() => ""));
+  try {
+    const override = process.env.DSH_PLUGIN_RESTART_CMD;
+    if (override) {
+      spawn(override, { detached: true, stdio: "ignore", shell: true, windowsHide: true }).unref();
+      logVersion(vlog.restartCmd("custom", override));
+      return { ok: true };
+    }
+    if (process.platform === "win32") {
+      const vbs = process.env.DSH_HARNESS_VBS || join(dshHome(), "file", "dsh-console", "dsh-harness-start.vbs");
+      // 转义单引号（路径含单引号时的 PowerShell 字符串安全）
+      const safeVbs = vbs.replace(/'/g, "''");
+      const ps = [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-WindowStyle",
+        "Hidden",
+        "-Command",
+        "Start-Sleep -Seconds 1; " +
+          "Get-CimInstance Win32_Process | " +
+          "Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -like '*--profile web*' } | " +
+          "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; " +
+          "Start-Sleep -Seconds 1; " +
+          `if (Test-Path '${safeVbs}') { wscript.exe '${safeVbs}' }`,
+      ];
+      spawn("powershell.exe", ps, { detached: true, stdio: "ignore", windowsHide: true }).unref();
+      logVersion(vlog.restartCmd("vbs", vbs));
+      return { ok: true };
+    }
+    return {
+      ok: false,
+      error: "restart not supported on this platform; set DSH_PLUGIN_RESTART_CMD to customize",
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logVersion(vlog.restartErr(msg));
+    return { ok: false, error: msg };
+  }
+}
+
+/**
  * 每日（含服务启动）的静默版本检查与自动更新，受设置项「自动更新」控制：
- * - 开启：npm 或 GitHub release 有更新即后台静默升级；
+ * - 开启：npm 或 GitHub release 有更新即后台静默升级，成功后自动重启服务使新代码生效；
  * - 关闭：不检查也不更新；
  * - 安装失败：给短缓存便于尽快重试。
  */
@@ -333,10 +424,8 @@ export async function autoUpdateDaily(): Promise<void> {
   if (autoUpdating) return;
   autoUpdating = true;
   try {
-    if (!(await isAutoUpdateEnabled())) {
-      logVersion("自动更新 已关闭，跳过");
-      return;
-    }
+    // 未开启「自动更新」时静默跳过：不检查、不更新，也不产生任何自动更新日志
+    if (!(await isAutoUpdateEnabled())) return;
     const vlog = buildVersionLogCopy(await readGlobalLocale());
     const info = await checkUpdate(true);
     if (!info.hasUpdate || !info.latest || !/^\d+\.\d+\.\d+/.test(info.latest)) {
@@ -349,7 +438,10 @@ export async function autoUpdateDaily(): Promise<void> {
     if (!res.ok) {
       // 安装失败：给短缓存便于尽快重试（upgradePlugin 成功时会自行置空缓存）
       cache = { at: Date.now(), info: { ...info, hasUpdate: false }, ttl: CACHE_MS / 2 };
+      return;
     }
+    // 升级成功后自动重启服务，使新版本代码生效（自重启进程，重启流程独立完成）
+    await restartService();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logVersion(buildVersionLogCopy(await readGlobalLocale().catch(() => "")).silentErr(msg));

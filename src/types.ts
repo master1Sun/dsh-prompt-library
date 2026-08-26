@@ -125,8 +125,12 @@ export interface PluginSettings {
   applyCharacterToChat: boolean;
   /** [实验室功能] 是否自动更新：开启后后台发现有新版本即自动安装，无需手动干预。 */
   autoUpdateEnabled: boolean;
-  /** 是否启用公告弹窗（双击词库助手弹出使用手册 + 版本通告）。仅当词库助手显示时可开关，默认开启。 */
+  /** 是否启用公告弹窗（词库助手右键菜单「公告」打开使用手册 + 版本通告）。仅当词库助手显示时可开关，默认开启。 */
   announcementEnabled: boolean;
+  /** 是否启用词库助手等级显示（等级助手）：控制小人等级徽章与右键菜单「成就」入口。默认开启。 */
+  levelEnabled: boolean;
+  /** 是否启用词库助手「我的等级公告」：新成就解锁时的小人气泡播报。默认开启。 */
+  levelAnnouncementEnabled: boolean;
   /** 是否启用自动备份（启动时及按周期把数据库备份到 backup 目录）。 */
   backupEnabled: boolean;
   /** 自动备份保留的备份文件份数（超出时自动清理最旧的）。 */
@@ -161,9 +165,11 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   personTipDuration: 20, // 20 秒
   applyCharacterToChat: false,
   autoUpdateEnabled: true, // 自动更新默认开启：发现新版本后台自动安装
-  announcementEnabled: true, // 公告默认开启：双击词库助手展示使用手册与版本通告
+  announcementEnabled: true, // 公告默认开启：词库助手右键菜单展示「公告」入口（使用手册与版本通告）
+  levelEnabled: true, // 等级助手默认开启：小人展示等级徽章，右键菜单含「成就」入口
+  levelAnnouncementEnabled: true, // 我的等级公告默认开启：新成就解锁时小人气泡播报
   backupEnabled: true, // 自动备份默认开启
   backupRetention: 15, // 默认保留最近 5 份备份
   backupSchedule: "weekly", // 默认每天备份一次
-  backupFormat: "json", // 默认备份为数据库文件（.json）
+  backupFormat: "db", // 默认备份为数据库文件（.db）
 };

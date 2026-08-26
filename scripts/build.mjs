@@ -21,6 +21,7 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 // 产物与运行时漂移。
 const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 const PLUGIN_ID = pkg.name;
+const PLUGIN_VERSION = pkg.version;
 
 const libDir = join(root, "lib");
 await rm(libDir, { recursive: true, force: true });
@@ -52,6 +53,10 @@ await esbuildBuild({
   platform: "node",
   target: "node22",
   external,
+  define: {
+    // 构建时注入插件版本号，供服务端上报自身运行版本（服务端/客户端版本比对用）
+    __PLUGIN_VERSION__: JSON.stringify(PLUGIN_VERSION),
+  },
   sourcemap: true,
   logLevel: "info",
 });
@@ -90,6 +95,10 @@ await esbuildBuild({
   target: "es2022",
   jsx: "automatic",
   external,
+  define: {
+    // 构建时注入插件版本号，供客户端「关于」页展示及服务端/客户端版本比对使用
+    __PLUGIN_VERSION__: JSON.stringify(PLUGIN_VERSION),
+  },
   banner: { js: clientBanner },
   footer: { js: clientFooter },
   sourcemap: true,

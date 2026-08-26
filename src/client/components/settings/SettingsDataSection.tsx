@@ -5,7 +5,7 @@
  * 1. 导入导出：勾选要导出的提示词生成备份文件，或从备份文件导入（合并式）
  * 2. 标签管理：新建 / 重命名 / 删除标签（表单式）
  * 3. 回收站：表单式展示已删除提示词，支持恢复 / 永久删除
- * 4. 自动备份：备份设置 / 立即备份 / 备份列表与恢复（独立 BackupModule）
+ * 4. 备份管理：备份设置 / 立即备份 / 备份列表与恢复（独立 BackupModule）
  */
 import {
   useCallback,
@@ -23,7 +23,6 @@ import {
   deleteTag as apiDeleteTag,
   deleteTrash as apiDeleteTrash,
   exportPrompts as apiExport,
-  importPrompts as apiImport,
   listPrompts as apiListPrompts,
   listTags as apiListTags,
   listTrash as apiListTrash,
@@ -36,6 +35,12 @@ import { plBtn } from "../../utils/button-style.js";
 import { type PLTranslate, usePLT } from "../../i18n/i18n.js";
 import { SkillImportModal } from "./modules/SkillImportModal.js";
 import { BackupModule } from "./modules/BackupModule.js";
+import { ImportEditModal } from "./modules/ImportEditModal.js";
+import {
+  parseImportFile,
+  serializeExport,
+  type TransferFormat,
+} from "../../services/data-formats.js";
 
 const MONO =
   '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "SimHei", "黑体", sans-serif';
@@ -102,6 +107,26 @@ const moduleDescStyle: CSSProperties = {
   fontSize: 12,
   lineHeight: 1.5,
   color: TONE.quiet,
+};
+
+/** 导入/导出分区卡片样式（浅色凸起块，区别于外层面板）。 */
+const sectionCardStyle: CSSProperties = {
+  boxSizing: "border-box",
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+  padding: "12px 14px",
+  background: TONE.row,
+  border: `1px solid ${TONE.border}`,
+  borderRadius: 10,
+};
+
+/** 分区卡片标题行：标题 + 说明，baseline 对齐可换行。 */
+const sectionTitleStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "baseline",
+  gap: 8,
+  flexWrap: "wrap",
 };
 
 /** 格式化删除时间：YYYY-MM-DD HH:mm。 */
@@ -189,14 +214,21 @@ function PromptCheckRow(props: {
         alignItems: "flex-start",
         gap: 10,
         padding: "10px 12px",
-        background: TONE.row,
-        border: `1px solid ${TONE.border}`,
+        background: checked ? "rgba(142, 197, 255, 0.10)" : TONE.row,
+        border: `1px solid ${checked ? "rgba(142, 197, 255, 0.5)" : TONE.border}`,
         borderRadius: 9,
         cursor: "pointer",
         userSelect: "none",
+        transition:
+          "border-color .24s cubic-bezier(.22,1,.36,1), background-color .24s cubic-bezier(.22,1,.36,1)",
       }}
     >
-      <input type="checkbox" checked={checked} onChange={onToggle} style={{ marginTop: 3 }} />
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onToggle}
+        style={{ marginTop: 3, accentColor: TONE.accent, cursor: "pointer", flexShrink: 0 }}
+      />
       <span style={{ flex: 1, minWidth: 0 }}>
         <span
           style={{
@@ -254,6 +286,13 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
   const [exportSelected, setExportSelected] = useState<Set<string>>(new Set());
   // 技能导入弹窗是否打开（选择 md 文件 / 扫描 Skills 目录，编辑校验后保存）
   const [skillImportOpen, setSkillImportOpen] = useState(false);
+  // 通用格式导入弹窗：是否打开 + 由所选文件解析出的初始条目
+  const [importEditOpen, setImportEditOpen] = useState(false);
+  const [importEntries, setImportEntries] = useState<
+    Array<{ title: string; body: string; tags?: string[] }>
+  >([]);
+  // 导出所选格式
+  const [exportFormat, setExportFormat] = useState<TransferFormat>("json");
   // 技能导出弹窗：是否打开 + 由勾选提示词转换的初始条目
   const [skillExportOpen, setSkillExportOpen] = useState(false);
   const [skillExportInitial, setSkillExportInitial] = useState<
@@ -358,7 +397,7 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
 
   // ── 导入导出 ─────────────────────────────────────────────────────────────
 
-  /** 导出勾选的提示词为 JSON 备份文件并触发下载。 */
+  /** 导出勾选的提示词为所选格式（JSON / CSV / Markdown / 文本）并触发下载。 */
   const exportSelectedPrompts = useCallback(() => {
     const ids = Array.from(exportSelected);
     if (ids.length === 0) {
@@ -367,13 +406,19 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
     }
     apiExport(ids).then(
       (backup) => {
-        const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+        const file = serializeExport(
+          exportFormat,
+          backup.prompts.map((p) => ({
+            title: p.title,
+            body: p.body,
+            tags: p.tags,
+          })),
+        );
+        const blob = new Blob([file.content], { type: file.mime });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
-        const d = new Date();
-        const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
         a.href = url;
-        a.download = `prompt-library-backup-${stamp}.json`;
+        a.download = file.fileName;
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -382,7 +427,7 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
       },
       (e: unknown) => showMsg(e instanceof Error ? e.message : String(e), true),
     );
-  }, [exportSelected, showMsg, T]);
+  }, [exportSelected, exportFormat, showMsg, T]);
 
   /** 打开技能导出弹窗：把勾选的提示词转成可编辑条目，编辑校验后写盘为技能。 */
   const openSkillExport = useCallback(() => {
@@ -432,7 +477,7 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
     return Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0]));
   }, [promptList, T]);
 
-  // 导入：读取用户选择的备份 JSON，确认后合并入库
+  // 导入：读取用户选择的数据文件（JSON / CSV / Markdown / 文本），解析后弹出卡片编辑校验窗口
   const onImportFile = useCallback(
     (e: ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
@@ -440,32 +485,26 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
       if (!file) return;
       const reader = new FileReader();
       reader.onload = () => {
+        const text = String(reader.result ?? "");
+        if (!text.trim()) {
+          showMsg(T("pl.importEdit.parseEmpty"), true);
+          return;
+        }
         try {
-          const data = JSON.parse(String(reader.result)) as unknown;
-          requestConfirm(T("pl.importConfirm"), false, () => {
-            apiImport(data).then(
-              (res) => {
-                showMsg(
-                  T("pl.imported", {
-                    imported: res.imported,
-                    updated: res.updated,
-                    skipped: res.skipped,
-                  }),
-                );
-                notifyDataChanged();
-                refreshPrompts();
-                refreshTags();
-              },
-              (err: unknown) => showMsg(err instanceof Error ? err.message : String(err), true),
-            );
-          });
+          const parsed = parseImportFile(file.name, text);
+          if (parsed.length === 0) {
+            showMsg(T("pl.importEdit.parseEmpty"), true);
+            return;
+          }
+          setImportEntries(parsed);
+          setImportEditOpen(true);
         } catch (err) {
-          showMsg(err instanceof Error ? err.message : String(err), true);
+          showMsg(T("pl.importEdit.parseFail", { err: err instanceof Error ? err.message : String(err) }), true);
         }
       };
       reader.readAsText(file);
     },
-    [showMsg, T, refreshPrompts, refreshTags, requestConfirm],
+    [showMsg, T],
   );
 
   // ── 标签管理 ─────────────────────────────────────────────────────────────
@@ -670,97 +709,116 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
         open={openIE}
         onToggle={() => setOpenIE((v) => !v)}
       >
-        {/* 工具栏：全选 + 列表/分组切换 + 导出选中 + 导入 */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <label
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 5,
-              fontSize: 12,
-              color: TONE.muted,
-              cursor: "pointer",
-              userSelect: "none",
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={promptList.length > 0 && exportSelected.size === promptList.length}
-              onChange={toggleExportAll}
-              disabled={promptList.length === 0}
-            />
-            {T("pl.exportSelectAll")}
-          </label>
+        {/* 导出卡片：勾选要导出的提示词，点击「导出选中」或「导出 Skill」 */}
+        <div style={sectionCardStyle}>
+          <div style={sectionTitleStyle}>
+            <strong style={{ fontSize: 13, color: TONE.text }}>{T("pl.exportSection")}</strong>
+            <span style={{ fontSize: 11, color: TONE.quiet }}>{T("pl.exportSectionDesc")}</span>
+          </div>
+          {/* 导出工具栏：全选 + 列表/分组切换 + 导出格式 + 导出选中 + 导出 Skill + 计数 */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <label
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                fontSize: 12,
+                color: TONE.muted,
+                cursor: "pointer",
+                userSelect: "none",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={promptList.length > 0 && exportSelected.size === promptList.length}
+                onChange={toggleExportAll}
+                disabled={promptList.length === 0}
+              />
+              {T("pl.exportSelectAll")}
+            </label>
 
-          {/* 展示方式切换：列表 / 分组 */}
-          <div style={{ display: "inline-flex", borderRadius: 7, border: `1px solid ${TONE.border}`, overflow: "hidden" }}>
-            {(["list", "group"] as const).map((view) => (
-              <button
-                key={view}
-                type="button"
-                onClick={() => setExportView(view)}
+            {/* 展示方式切换：列表 / 分组 */}
+            <div style={{ display: "inline-flex", borderRadius: 7, border: `1px solid ${TONE.border}`, overflow: "hidden" }}>
+              {(["list", "group"] as const).map((view) => (
+                <button
+                  key={view}
+                  type="button"
+                  onClick={() => setExportView(view)}
+                  style={{
+                    border: "none",
+                    outline: "none",
+                    padding: "3px 9px",
+                    fontSize: 12,
+                    lineHeight: 1.6,
+                    cursor: "pointer",
+                    fontFamily: MONO,
+                    backgroundColor: exportView === view ? "var(--dsw-alias-interactive-bg-hover, rgba(196,211,232,.12))" : "transparent",
+                    color: exportView === view ? TONE.text : TONE.muted,
+                    transition: "background-color .24s cubic-bezier(.22,1,.36,1), color .24s cubic-bezier(.22,1,.36,1)",
+                  }}
+                >
+                  {view === "list" ? T("pl.viewList") : T("pl.viewGroup")}
+                </button>
+              ))}
+            </div>
+
+            {/* 导出格式选择：JSON / CSV / Markdown / 文本 */}
+            <label
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                fontSize: 12,
+                color: TONE.muted,
+              }}
+            >
+              <span>{T("pl.exportFormat")}</span>
+              <select
+                value={exportFormat}
+                onChange={(e) => setExportFormat(e.target.value as TransferFormat)}
                 style={{
-                  border: "none",
-                  outline: "none",
-                  padding: "3px 9px",
+                  padding: "3px 6px",
                   fontSize: 12,
-                  lineHeight: 1.6,
-                  cursor: "pointer",
                   fontFamily: MONO,
-                  backgroundColor: exportView === view ? "var(--dsw-alias-interactive-bg-hover, rgba(196,211,232,.12))" : "transparent",
-                  color: exportView === view ? TONE.text : TONE.muted,
-                  transition: "background-color .24s cubic-bezier(.22,1,.36,1), color .24s cubic-bezier(.22,1,.36,1)",
+                  color: TONE.text,
+                  background: TONE.row,
+                  border: `1px solid ${TONE.border}`,
+                  borderRadius: 7,
+                  outline: "none",
+                  cursor: "pointer",
                 }}
               >
-                {view === "list" ? T("pl.viewList") : T("pl.viewGroup")}
-              </button>
-            ))}
-          </div>
+                <option value="json">JSON</option>
+                <option value="csv">CSV</option>
+                <option value="md">Markdown</option>
+                <option value="txt">{T("pl.format.txt")}</option>
+              </select>
+            </label>
 
-          <Button
-            type="button"
-            variant="primary"
-            size="sm"
-            className={plBtn("primary", "sm")}
-            onClick={exportSelectedPrompts}
-            data-tip={T("pl.exportTitle")}
-          >
-            {T("pl.exportSelected")}
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className={plBtn("ghost", "sm")}
-            onClick={() => importRef.current?.click()}
-            data-tip={T("pl.importTitle")}
-          >
-            {T("pl.import")}
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className={plBtn("ghost", "sm")}
-            onClick={() => setSkillImportOpen(true)}
-            data-tip={T("pl.skillImportBtnTitle")}
-          >
-            {T("pl.skillImport")}
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className={plBtn("ghost", "sm")}
-            onClick={openSkillExport}
-            data-tip={T("pl.skillExportBtnTitle")}
-          >
-            {T("pl.skillExport")}
-          </Button>
-          <span style={{ fontSize: 11, color: TONE.quiet }}>
-            {exportSelected.size > 0 ? `${exportSelected.size}/${promptList.length}` : T("pl.sidebar.total", { count: promptList.length })}
-          </span>
-        </div>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              className={plBtn("primary", "sm")}
+              onClick={exportSelectedPrompts}
+              data-tip={T("pl.exportTitle")}
+            >
+              {T("pl.exportSelected")}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={plBtn("ghost", "sm")}
+              onClick={openSkillExport}
+              data-tip={T("pl.skillExportBtnTitle")}
+            >
+              {T("pl.skillExport")}
+            </Button>
+            <span style={{ fontSize: 11, color: TONE.quiet }}>
+              {exportSelected.size > 0 ? `${exportSelected.size}/${promptList.length}` : T("pl.sidebar.total", { count: promptList.length })}
+            </span>
+          </div>
 
         {/* 提示词勾选列表（列表 / 分组两种展示） */}
         {promptLoading ? (
@@ -772,7 +830,20 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
             {T("pl.empty")}
           </div>
         ) : exportView === "group" ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: 300, overflow: "auto" }}>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+              maxHeight: 300,
+              overflow: "auto",
+              padding: "12px",
+              boxSizing: "border-box",
+              background: TONE.row,
+              border: `1px solid ${TONE.border}`,
+              borderRadius: 10,
+            }}
+          >
             {groupedPrompts.map(([group, prompts]) => {
               const groupChecked = prompts.length > 0 && prompts.every((p) => exportSelected.has(p.id));
               const collapsed = exportCollapsed.has(group);
@@ -794,7 +865,7 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
                         });
                       }}
                       data-tip={T("pl.exportSelectAll")}
-                      style={{ margin: 0 }}
+                      style={{ margin: 0, accentColor: TONE.accent, cursor: "pointer", flexShrink: 0 }}
                     />
                     <button
                       type="button"
@@ -809,9 +880,8 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
                       style={{
                         display: "inline-flex",
                         alignItems: "center",
-                        gap: 6,
+                        gap: 5,
                         border: "none",
-                        outline: "none",
                         background: "transparent",
                         padding: 0,
                         cursor: "pointer",
@@ -837,7 +907,9 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
                         <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
                       </svg>
                       <span style={{ fontWeight: 560 }}>{group}</span>
-                      <span style={{ fontSize: 11, color: TONE.quiet }}>{T("pl.sidebar.groupCount", { count: prompts.length })}</span>
+                      <span style={{ fontSize: 11, color: TONE.quiet }}>
+                        {T("pl.sidebar.groupCount", { count: prompts.length })}
+                      </span>
                     </button>
                   </div>
                   {!collapsed &&
@@ -855,7 +927,20 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
             })}
           </div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 300, overflow: "auto" }}>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+              maxHeight: 300,
+              overflow: "auto",
+              padding: "12px",
+              boxSizing: "border-box",
+              background: TONE.row,
+              border: `1px solid ${TONE.border}`,
+              borderRadius: 10,
+            }}
+          >
             {promptList.map((prompt) => (
               <PromptCheckRow
                 key={prompt.id}
@@ -867,6 +952,37 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
             ))}
           </div>
         )}
+        </div>
+
+        {/* 导入卡片：普通导入 + 从 Skills 导入 */}
+        <div style={sectionCardStyle}>
+          <div style={sectionTitleStyle}>
+            <strong style={{ fontSize: 13, color: TONE.text }}>{T("pl.importSection")}</strong>
+            <span style={{ fontSize: 11, color: TONE.quiet }}>{T("pl.importSectionDesc")}</span>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              className={plBtn("primary", "sm")}
+              onClick={() => importRef.current?.click()}
+              data-tip={T("pl.importTitle")}
+            >
+              {T("pl.import")}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={plBtn("ghost", "sm")}
+              onClick={() => setSkillImportOpen(true)}
+              data-tip={T("pl.skillImportBtnTitle")}
+            >
+              {T("pl.skillImport")}
+            </Button>
+          </div>
+        </div>
       </ModuleCard>
 
       {/* ── 模块二：标签管理（手风琴折叠，列表限高滚动） ─────────────────── */}
@@ -1187,17 +1303,37 @@ export function SettingsDataSection(props?: { t?: PLTranslate }): ReactNode {
       {/* 模块四：自动备份（独立自包含模块，含备份/恢复） */}
       <BackupModule t={t} />
 
-      {/* 导入备份用的隐藏文件选择 */}
+      {/* 导入数据用的隐藏文件选择（支持 JSON / CSV / Markdown / 文本） */}
       <input
         ref={importRef}
         type="file"
-        accept="application/json,.json"
+        accept=".json,.csv,.md,.markdown,.txt,text/plain,text/markdown,text/csv,application/json"
         style={{ display: "none" }}
         onChange={onImportFile}
       />
 
       {/* 技能导入弹窗：选择本地 md 文件 / 扫描 Skills 目录，编辑并校验后保存 */}
       <SkillImportModal open={skillImportOpen} onClose={() => setSkillImportOpen(false)} t={t} />
+
+      {/* 通用格式导入弹窗：选择导入数据后卡片编辑校验，通过后合并入库 */}
+      <ImportEditModal
+        open={importEditOpen}
+        onClose={() => setImportEditOpen(false)}
+        t={t}
+        initialEntries={importEntries}
+        onImported={(res) => {
+          showMsg(
+            T("pl.imported", {
+              imported: res.imported,
+              updated: res.updated,
+              skipped: res.skipped,
+            }),
+          );
+          notifyDataChanged();
+          refreshPrompts();
+          refreshTags();
+        }}
+      />
 
       {/* 技能导出弹窗：把勾选的提示词编辑并校验后写盘为技能 */}
       <SkillImportModal

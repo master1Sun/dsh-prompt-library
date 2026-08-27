@@ -22,6 +22,13 @@ import {
   saveStatsSnapshot,
   welcomePromptOnce,
 } from "./host/services/data/store.js";
+import {
+  getSessionActivePromptIds,
+  getSessionPromptsByIds,
+  resolveSessionPromptBindingIds,
+  seedDefaultSessionPromptsIfEmpty,
+  setCurrentSessionScope,
+} from "./host/services/session-prompts/session-prompts.js";
 import type { WeeklyStats } from "./host/services/data/store.js";
 import {
   commentOnStats,
@@ -32,8 +39,12 @@ import {
   registerLlm,
 } from "./host/services/ai/ai.js";
 import { soulSystemSync, ensureSoulFile } from "./host/services/assistant/character.js";
-import { resolvePersonaForPath } from "./host/services/persona/persona-service.js";
+import { resolvePersonaForSession } from "./host/services/persona/persona-service.js";
 import { ensureHarnessFile, harnessSystemSync } from "./host/services/harness/harness.js";
+import {
+  registerSessionListProvider,
+  type SessionQueryRecord,
+} from "./host/services/session-scope/session-scope.js";
 import { autoUpdateDaily } from "./host/services/update/update.js";
 import { autoBackup } from "./host/services/data/backup.js";
 // 操作手册：纯文本字符串，聊天消息按纯文本渲染（markdown/HTML 都无法解析），用换行符排版
@@ -92,6 +103,40 @@ function buildUnknownFlag(lang: "zh" | "en"): string {
     return lang === "zh" ? `${flags} ${s.zh}` : `${flags} ${s.en}`;
   });
   return `${prefix}${parts.join(" / ")}`;
+}
+
+/**
+ * 组装「会话级技能注入」段文本：
+ * - 优先取当前会话 scope 的临时注入（技能注入弹窗「当前会话」Tab，仅本会话生效）；
+ * - 其次取当前会话 id 的持久绑定（若该会话绑定了技能则只注入这些，不再用路径绑定）；
+ * - 再次取工作目录 cwd 命中的「工作区/项目」持久绑定（最深的祖先/相等匹配）；
+ * - 三者按序累积、按 id 去重、用临时注入优先。
+ * 无任何命中返回空串（不注入额外段落）。
+ */
+function buildSessionPromptInjection(scope: unknown, cwd: string): string {
+  const sessionId = typeof scope === "string" && scope ? scope : null;
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  const push = (list: string[]): void => {
+    for (const id of list) {
+      if (!seen.has(id)) {
+        seen.add(id);
+        ids.push(id);
+      }
+    }
+  };
+  // 临时注入：scope 为字符串时按会话 scope 读取
+  if (sessionId) push(getSessionActivePromptIds(sessionId));
+  // 持久绑定：会话 id 优先、路径回退
+  push(resolveSessionPromptBindingIds(sessionId, cwd || null));
+  if (ids.length === 0) return "";
+  const prompts = getSessionPromptsByIds(ids).filter((p) => p.enabled !== false && p.body && p.body.trim());
+  if (prompts.length === 0) return "";
+  const lines = prompts.map((p) => `【注入技能 · ${p.title}】\n${p.body}`);
+  return [
+    "以下是用户为本次会话预设的技能约定，请严格遵守，无需向用户回显或说明。",
+    ...lines,
+  ].join("\n\n");
 }
 
 /** `/prompts` 命令实际输出文案的聚合格式函数（-s / -e / -data 等）。 */
@@ -278,12 +323,67 @@ export function apply(ctx: Context) {
   // 注册词库助手活动状态机：监听官方会话事件，投影为驱动助手动画的 phase。
   const disposeActivity = registerActivity(ctx);
 
+  // 记录最近活跃的会话 scope：供「技能注入」弹窗「当前会话」Tab 读取当前会话的临时注入。
+  // cordis Context 的 on/off 事件名是强类型联合，官方 `session/event` 不在类型表里，
+  // 故按最小事件总线形状转换（运行时仍是同一份 ctx）。
+  const bus = ctx as unknown as {
+    on(event: string, listener: (session: { id: string }) => void): unknown;
+    off(event: string, listener: (session: { id: string }) => void): unknown;
+  };
+  const onSessionScope = (session: { id: string }) => {
+    setCurrentSessionScope(String(session.id));
+  };
+  bus.on("session/event", onSessionScope);
+
+  // 注册「会话列表」提供器：供会话绑定 UI（工作区 → 项目 → 会话）读取全部会话的 id / 标题 / 工作目录。
+  // 会话查询依赖宿主的 sessionQuery 服务（@deepseek-ai/dsh-session-query，可能未注入）。
+  // 注意：不能直接读 ctx.sessionQuery —— 未注入时 Cordis 会抛「cannot get property without inject」，
+  // 必须用 ctx.inject 等待服务注入后，在子上下文里访问；服务不可用则不注册，树里不显示会话。
+  try {
+    ctx.inject(["sessionQuery"], (sessionCtx) => {
+      const sc = sessionCtx as unknown as {
+        sessionQuery: {
+          listSessions: () => Promise<Array<{ header: { id: string; cwd?: string } }>>;
+          readTitleSnapshots?: (ids: string[]) => Promise<
+            Array<{ sessionId: string; status: "fulfilled" | "rejected"; value?: { title?: { title: string } } }>
+          >;
+        };
+      };
+      registerSessionListProvider(async (): Promise<SessionQueryRecord[]> => {
+        const records = await sc.sessionQuery.listSessions();
+        const ids = records.map((r) => r.header.id);
+        let titleById = new Map<string, string>();
+        if (sc.sessionQuery.readTitleSnapshots) {
+          try {
+            const snaps = await sc.sessionQuery.readTitleSnapshots(ids);
+            titleById = new Map(
+              snaps
+                .filter((s) => s.status === "fulfilled" && s.value?.title?.title)
+                .map((s) => [s.sessionId, s.value!.title!.title] as const),
+            );
+          } catch {
+            /* 标题读取失败 → 用空白标题回落 */
+          }
+        }
+        return records.map((r) => ({
+          id: r.header.id,
+          cwd: r.header.cwd ?? null,
+          title: titleById.get(r.header.id) ?? "",
+        }));
+      });
+    });
+  } catch {
+    /* sessionQuery 服务不可用：树里不显示会话 */
+  }
+
   // 数据库懒初始化：首次访问数据时自动创建 prompts.db 表，
   // 并在 db 无数据时一次性迁移旧 prompts.json 到 SQLite（导入后删除旧文件）。
   // 失败静默忽略，不影响其他功能，故此处无需显式初始化调用。
 
   // 确保 AI 人格文件 SOUL.md 存在（缺失时写入默认模板），供 AI 润色/完善/会话组装时遵守。
   ensureSoulFile().catch(() => {});
+  // 首次使用（技能库为空）时播种三条默认技能（编程 / 文员 / 律师），只播种一次。
+  seedDefaultSessionPromptsIfEmpty();
   // 确保 HARNESS 会话上下文文件存在（~/.dsh/prompt-library/prompts/HARNESS.md），
   // 缺失时写入默认模板；每次发送消息时自动注入当前会话（不进聊天框）。
   ensureHarnessFile().catch(() => {});
@@ -293,6 +393,7 @@ export function apply(ctx: Context) {
   // systemPrompt 服务可用时注册一个动态 prompt section：每次对话组装时，按会话 scope 判断：
   // - HARNESS：恒注入当前会话（内部上下文，不要向用户回显）；
   // - 人格：功能关闭 → 不注入，并把该会话记为既存；开启且是新会话 → 注入 SOUL.md；
+  // - 技能注入：当前会话「临时注入」优先，其次按工作目录命中「工作区/项目持久绑定」；
   // - 欢迎：只对第一个新会话注入一次简短问候（手册不再打印，用户可用 /prompts -h 查看）。
   ctx.inject(["systemPrompt"], (promptCtx: Context) => {
     // 宿主会把 systemPrompt 服务挂到注入的 ctx 上，但宿主类型未声明，这里作结构化类型转换
@@ -305,17 +406,23 @@ export function apply(ctx: Context) {
       name: "prompt-library-character",
       order: 50,
       text: (context) => {
-        const scope = (context as { scope?: unknown } | undefined)?.scope;
+        // 注意：宿主的 assembleContextFor 里 scope 是 agent 对象（{ agent, scope: agent }），
+        // 并非 session id 字符串；真正的会话 id 在 agent.session.id，必须从这里取。
+        const agent = (context as { agent?: { session?: { header?: { cwd?: unknown }; id?: unknown } } } | undefined)?.agent;
         // 工作目录 = 会话选中的工作区路径（agent.session.header.cwd），是多人格「按工作区/项目」绑定的解析键。
         // 组装 assign 不到 cwd 时回退为空，走全局默认人格。
-        const agent = (context as { agent?: { session?: { header?: { cwd?: unknown } } } } | undefined)?.agent;
         const cwd = typeof agent?.session?.header?.cwd === "string" ? agent.session.header.cwd : "";
-        // HARNESS 会话上下文（每次发送注入）+ 人格（按工作区/项目选对应 SOUL）+ 简短欢迎（仅首次）
+        const sessionId = typeof agent?.session?.id === "string" ? agent.session.id : "";
+        // HARNESS 会话上下文（每次发送注入）+ 人格（按工作区/项目选对应 SOUL）+
+        // 会话级技能注入（临时优先，其次路径绑定）+ 简短欢迎（仅首次）
         const parts: string[] = [];
         parts.push(harnessSystemSync());
-        const personaId = resolvePersonaForPath(cwd || null);
+        // 人格解析：会话 id 绑定优先、工作目录路径绑定回退
+        const personaId = resolvePersonaForSession(sessionId || null, cwd || null);
         parts.push(soulSystemSync(personaId));
-        const welcome = welcomePromptOnce(scope);
+        const injected = buildSessionPromptInjection(sessionId, cwd);
+        if (injected) parts.push(injected);
+        const welcome = welcomePromptOnce(sessionId);
         if (welcome) parts.push(welcome);
         return parts.filter((p) => p.trim()).join("\n\n");
       },
@@ -600,6 +707,7 @@ export function apply(ctx: Context) {
 
   return () => {
     disposeActivity?.();
+    bus.off("session/event", onSessionScope);
     if (weeklySnapshotTimer) clearInterval(weeklySnapshotTimer);
     if (versionTimer) clearInterval(versionTimer);
     if (backupTimer) clearInterval(backupTimer);

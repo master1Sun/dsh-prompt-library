@@ -33,6 +33,32 @@ export interface VersionNote {
  */
 export const VERSION_NOTES: VersionNote[] = [
   {
+    version: "0.9.2",
+    date: "2026-08-28",
+    zh: {
+      title: "会话技能注入 · 导入标签下拉 · 公告优化",
+      items: [
+        "会话技能：可绑定技能到指定会话，启用后该会话自动注入对应技能提示词。",
+        "技能管理：词库管理更名为「技能管理」，支持创建、编辑、绑定会话与注入技能。",
+        "导入标签：导入提示词的标签改为下拉选择既有标签，不再自由输入，界面更规范。",
+        "公告优化：修复历史期次无法切换、今日当前期高亮不清的问题，历史下拉与导航按钮增加悬停反馈。",
+        "今日日报：AI 生成日报失败时会自动重试补齐，避免永久显示「今日暂无推荐」。",
+        "设置文案：选项名称更简洁（工具面板 / 公告 / 等级徽章 / 成就公告），并移除冗余的条件说明。",
+      ],
+    },
+    en: {
+      title: "Session skill injection · Import tag dropdown · Announcement polish",
+      items: [
+        "Session skills: bind a skill to specific sessions; when enabled, the session auto-injects the skill prompt.",
+        "Skill manager: \"Word bank\" is renamed \"Skills\" with create, edit, session-binding and injection.",
+        "Import tags: the tag field in import is now a dropdown of existing tags instead of free text.",
+        "Announcement polish: fixed history issues not switchable and unclear current-issue highlight; history dropdown and nav buttons gain hover feedback.",
+        "Daily report: failed AI report generation now retries to backfill instead of staying \"No recommendations today\".",
+        "Settings copy: option names simplified (Assistant panel / Announcement / Level badge / Achievements) and redundant conditional text removed.",
+      ],
+    },
+  },
+  {
     version: "0.9.1",
     date: "2026-08-27",
     zh: {

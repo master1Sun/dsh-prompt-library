@@ -143,7 +143,7 @@ function getDb(): DatabaseSync {
       createdAt INTEGER NOT NULL
     );
   `);
-  // 多人格数据表：自定义人格的元信息（SOUL 正文存于 character/personas/<id>/SOUL.md）。
+  // 多人格数据表：自定义人格的元信息（SOUL 正文存于 character/personas/<id>.md）。
   next.exec(`
     CREATE TABLE IF NOT EXISTS personas (
       id        TEXT PRIMARY KEY,
@@ -160,6 +160,39 @@ function getDb(): DatabaseSync {
       path      TEXT PRIMARY KEY,
       personaId TEXT NOT NULL,
       updatedAt INTEGER NOT NULL
+    );
+  `);
+  // 工作区/项目路径 → 会话级技能 绑定表：按目录路径记录绑定的技能 id 列表（JSON 数组）。
+  // 与人格绑定同表结构语义（存库），解析规则一致（最深的祖先/相等匹配）。
+  next.exec(`
+    CREATE TABLE IF NOT EXISTS prompt_scope_bindings (
+      path      TEXT PRIMARY KEY,
+      promptIds TEXT NOT NULL,
+      updatedAt INTEGER NOT NULL
+    );
+  `);
+  // 会话级技能元信息表（正文存于 session-prompts/<id>.md，与人格 SOUL 文件一致）。
+  next.exec(`
+    CREATE TABLE IF NOT EXISTS session_prompts (
+      id         TEXT PRIMARY KEY,
+      title      TEXT NOT NULL,
+      tags       TEXT,
+      enabled    INTEGER NOT NULL DEFAULT 1,
+      createdAt  INTEGER NOT NULL,
+      updatedAt  INTEGER NOT NULL,
+      usageCount INTEGER NOT NULL DEFAULT 0,
+      lastUsedAt INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+  // 会话 id → 人格 + 会话级技能 绑定表：按「会话 id」持久绑定（优先于工作区/项目路径绑定生效）。
+  // 一个会话一行，personaId 为空表示会话未绑定自定义人格（回落默认/上游），
+  // promptIds 为该会话持久绑定的会话级技能 id 列表（JSON 数组，空/缺省表示未绑定技能）。
+  next.exec(`
+    CREATE TABLE IF NOT EXISTS session_scope_bindings (
+      sessionId  TEXT PRIMARY KEY,
+      personaId  TEXT,
+      promptIds  TEXT,
+      updatedAt  INTEGER NOT NULL
     );
   `);
   // 一次性把提示词中已有的标签同步进标签表（幂等）。
@@ -235,7 +268,7 @@ export function setMetaValue(key: string, value: string): void {
  * 同步读取宿主界面语言（`~/.dsh/settings.yaml` 的 `locale.preference`）。
  * 供默认播种等同步流程判断中/英文案；读取失败默认按中文处理。
  */
-function readUiLangSync(): "zh" | "en" {
+export function readUiLangSync(): "zh" | "en" {
   try {
     const text = readFileSync(systemSettingsPath(), "utf8");
     const pref = (load(text) as { locale?: { preference?: unknown } } | undefined)?.locale?.preference;
@@ -2111,7 +2144,7 @@ export function updateSettings(patch: Partial<PluginSettings>): Promise<PluginSe
 
 // ── 多人格（自定义 SOUL）数据访问 ─────────────────────────────────────────
 
-/** 自定义人格的元信息（不包含 SOUL 正文；正文以文件形式存放于 character/personas/<id>/SOUL.md）。 */
+/** 自定义人格的元信息（不包含 SOUL 正文；正文以文件形式存放于 character/personas/<id>.md）。 */
 export interface PersonaRecord {
   id: string;
   name: string;
@@ -2194,6 +2227,182 @@ export function deletePersona(id: string): boolean {
   const db_ = getDb();
   db_.prepare("DELETE FROM personas WHERE id = ?").run(id);
   db_.prepare("DELETE FROM persona_scope_bindings WHERE personaId = ?").run(id);
+  // 清理所有会话绑定中引用该人格的维度（回到默认人格）。
+  for (const b of listSessionScopeBindings()) {
+    if (b.personaId === id) {
+      setSessionScopeBinding(b.sessionId, null, b.promptIds);
+    }
+  }
+  return true;
+}
+
+// ── 会话级技能（元信息）数据访问 ──────────────────────────────────────────
+// 与多人格一致：元信息（标题/标签/启用等）存 SQLite，正文存 session-prompts/<id>.md 文件。
+
+/** 会话级技能的元信息记录（不包含正文；正文以文件形式存放于 session-prompts/<id>.md）。 */
+export interface SessionPromptRecord {
+  id: string;
+  title: string;
+  tags?: string[];
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+  usageCount: number;
+  lastUsedAt: number;
+}
+
+/** 读取一行会话级技能记录的辅助函数（tags 列为 JSON 数组或 NULL）。 */
+function sessionPromptFromRow(row: {
+  id: string;
+  title: string;
+  tags: string | null;
+  enabled: number;
+  createdAt: number;
+  updatedAt: number;
+  usageCount: number;
+  lastUsedAt: number;
+}): SessionPromptRecord {
+  let tags: string[] | undefined;
+  if (row.tags) {
+    try {
+      const parsed = JSON.parse(row.tags) as unknown;
+      if (Array.isArray(parsed)) tags = parsed.filter((x): x is string => typeof x === "string");
+    } catch {
+      tags = undefined;
+    }
+  }
+  return {
+    id: row.id,
+    title: row.title,
+    tags: tags && tags.length > 0 ? tags.slice(0, 1) : undefined,
+    enabled: row.enabled === 1,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    usageCount: row.usageCount,
+    lastUsedAt: row.lastUsedAt,
+  };
+}
+
+/** 列出全部会话级技能元信息（按更新时间倒序）。 */
+export function listSessionPromptRecords(): SessionPromptRecord[] {
+  try {
+    const rows = getDb()
+      .prepare(
+        "SELECT id, title, tags, enabled, createdAt, updatedAt, usageCount, lastUsedAt FROM session_prompts ORDER BY updatedAt DESC",
+      )
+      .all() as Array<{
+      id: string;
+      title: string;
+      tags: string | null;
+      enabled: number;
+      createdAt: number;
+      updatedAt: number;
+      usageCount: number;
+      lastUsedAt: number;
+    }>;
+    return rows.map(sessionPromptFromRow);
+  } catch {
+    return [];
+  }
+}
+
+/** 按 id 读取一条会话级技能元信息；不存在返回 undefined。 */
+export function getSessionPromptRecord(id: string): SessionPromptRecord | undefined {
+  try {
+    const row = getDb()
+      .prepare(
+        "SELECT id, title, tags, enabled, createdAt, updatedAt, usageCount, lastUsedAt FROM session_prompts WHERE id = ?",
+      )
+      .get(id) as
+      | {
+          id: string;
+          title: string;
+          tags: string | null;
+          enabled: number;
+          createdAt: number;
+          updatedAt: number;
+          usageCount: number;
+          lastUsedAt: number;
+        }
+      | undefined;
+    return row ? sessionPromptFromRow(row) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 创建会话级技能元信息记录（仅元信息；正文 MD 文件的写盘由 session-prompts 服务负责）。 */
+export function createSessionPromptRecord(
+  id: string,
+  title: string,
+  init: { tags?: string[]; enabled?: boolean; createdAt?: number; updatedAt?: number } = {},
+): SessionPromptRecord {
+  const now = Date.now();
+  const createdAt = init.createdAt ?? now;
+  const updatedAt = init.updatedAt ?? now;
+  const tags = Array.isArray(init.tags)
+    ? (() => {
+        const t = init.tags!.filter(Boolean);
+        return t.length > 0 ? t.slice(0, 1) : undefined;
+      })()
+    : undefined;
+  const enabled = init.enabled ?? true;
+  getDb()
+    .prepare(
+      "INSERT INTO session_prompts (id, title, tags, enabled, createdAt, updatedAt, usageCount, lastUsedAt) VALUES (?, ?, ?, ?, ?, ?, 0, 0)",
+    )
+    .run(id, title, tags ? JSON.stringify(tags) : null, enabled ? 1 : 0, createdAt, updatedAt);
+  return { id, title, tags, enabled, createdAt, updatedAt, usageCount: 0, lastUsedAt: 0 };
+}
+
+/** 更新会话级技能元信息（title / tags / enabled / usageCount / lastUsedAt）；记录不存在返回 false。 */
+export function updateSessionPromptMeta(
+  id: string,
+  patch: {
+    title?: string;
+    tags?: string[];
+    enabled?: boolean;
+    usageCount?: number;
+    lastUsedAt?: number;
+  },
+): boolean {
+  const existing = getSessionPromptRecord(id);
+  if (!existing) return false;
+  const next: SessionPromptRecord = {
+    ...existing,
+    title: patch.title ?? existing.title,
+    tags:
+      patch.tags !== undefined
+        ? (() => {
+            const t = patch.tags!.filter(Boolean);
+            return t.length > 0 ? t.slice(0, 1) : undefined;
+          })()
+        : existing.tags,
+    enabled: patch.enabled ?? existing.enabled,
+    usageCount: patch.usageCount ?? existing.usageCount,
+    lastUsedAt: patch.lastUsedAt ?? existing.lastUsedAt,
+    updatedAt: Date.now(),
+  };
+  getDb()
+    .prepare(
+      "UPDATE session_prompts SET title = ?, tags = ?, enabled = ?, updatedAt = ?, usageCount = ?, lastUsedAt = ? WHERE id = ?",
+    )
+    .run(
+      next.title,
+      next.tags ? JSON.stringify(next.tags) : null,
+      next.enabled ? 1 : 0,
+      next.updatedAt,
+      next.usageCount,
+      next.lastUsedAt,
+      id,
+    );
+  return true;
+}
+
+/** 删除会话级技能元信息记录（正文 MD 文件删除由 session-prompts 服务负责）。 */
+export function deleteSessionPromptRecord(id: string): boolean {
+  const db_ = getDb();
+  db_.prepare("DELETE FROM session_prompts WHERE id = ?").run(id);
   return true;
 }
 
@@ -2234,6 +2443,124 @@ export function listScopeBindings(): Array<{ path: string; personaId: string }> 
 export function clearScopePersonaBinding(path: string): void {
   try {
     getDb().prepare("DELETE FROM persona_scope_bindings WHERE path = ?").run(path);
+  } catch {
+    /* 删除失败静默 */
+  }
+}
+
+// ── 会话 id → 人格 + 会话级技能 绑定（存库，优先于路径绑定生效）──────────
+
+/** 记录某会话 id 绑定的人格与会话级技能 id 列表（personaId 为空 / promptIds 空 → 相应维度未绑定）。 */
+export function setSessionScopeBinding(
+  sessionId: string,
+  personaId: string | null,
+  promptIds: string[],
+): void {
+  const ids = [...new Set(promptIds.filter(Boolean))];
+  const db_ = getDb();
+  db_
+    .prepare(
+      "INSERT INTO session_scope_bindings (sessionId, personaId, promptIds, updatedAt) VALUES (?, ?, ?, ?) ON CONFLICT(sessionId) DO UPDATE SET personaId = excluded.personaId, promptIds = excluded.promptIds, updatedAt = excluded.updatedAt",
+    )
+    .run(sessionId, personaId ?? "", JSON.stringify(ids), Date.now());
+}
+
+/** 读取某会话 id 绑定的完整记录；无绑定返回 undefined。 */
+export function getSessionScopeBinding(
+  sessionId: string,
+): { personaId: string; promptIds: string[] } | undefined {
+  try {
+    const row = getDb()
+      .prepare("SELECT personaId, promptIds FROM session_scope_bindings WHERE sessionId = ?")
+      .get(sessionId) as { personaId: string; promptIds: string } | undefined;
+    if (!row) return undefined;
+    return { personaId: row.personaId, promptIds: parsePromptIds(row.promptIds) };
+  } catch {
+    return undefined;
+  }
+}
+
+/** 列出全部会话 id → 人格 + 技能 绑定（仅含存在记录的会话）。 */
+export function listSessionScopeBindings(): Array<{
+  sessionId: string;
+  personaId: string;
+  promptIds: string[];
+}> {
+  try {
+    return getDb()
+      .prepare("SELECT sessionId, personaId, promptIds FROM session_scope_bindings")
+      .all()
+      .map((r) => {
+        const row = r as { sessionId: string; personaId: string; promptIds: string };
+        return { sessionId: row.sessionId, personaId: row.personaId, promptIds: parsePromptIds(row.promptIds) };
+      });
+  } catch {
+    return [];
+  }
+}
+
+/** 清除某会话 id 的绑定（回到默认人格 / 不注入技能）。 */
+export function clearSessionScopeBinding(sessionId: string): void {
+  try {
+    getDb().prepare("DELETE FROM session_scope_bindings WHERE sessionId = ?").run(sessionId);
+  } catch {
+    /* 删除失败静默 */
+  }
+}
+
+// ── 工作区/项目路径 → 会话级技能 绑定（与人格绑定同表结构语义，存库）────────
+
+/** 记录某路径（工作区或其下项目）绑定的会话级技能 id 列表（空数组 → 解除绑定）。 */
+export function setScopePromptBinding(path: string, promptIds: string[]): void {
+  const ids = [...new Set(promptIds.filter(Boolean))];
+  const db_ = getDb();
+  db_
+    .prepare(
+      "INSERT INTO prompt_scope_bindings (path, promptIds, updatedAt) VALUES (?, ?, ?) ON CONFLICT(path) DO UPDATE SET promptIds = excluded.promptIds, updatedAt = excluded.updatedAt",
+    )
+    .run(path, JSON.stringify(ids), Date.now());
+}
+
+/** 解析 prompt_scope_bindings 表里的 promptIds 列（JSON 数组 → 字符串数组）。 */
+function parsePromptIds(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 读取某路径精确绑定的会话级技能 id 列表；无精确记录返回空数组。 */
+export function getScopeBoundPromptIds(path: string): string[] {
+  try {
+    const row = getDb()
+      .prepare("SELECT promptIds FROM prompt_scope_bindings WHERE path = ?")
+      .get(path) as { promptIds: string } | undefined;
+    return row ? parsePromptIds(row.promptIds) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 列出全部路径 → 会话级技能 绑定（仅含非空列表的记录）。 */
+export function listScopePromptBindings(): Array<{ path: string; promptIds: string[] }> {
+  try {
+    const rows = getDb()
+      .prepare("SELECT path, promptIds FROM prompt_scope_bindings")
+      .all() as Array<{ path: string; promptIds: string }>;
+    return rows
+      .map((r) => ({ path: r.path, promptIds: parsePromptIds(r.promptIds) }))
+      .filter((b) => b.promptIds.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+/** 清空某路径的会话级技能绑定。 */
+export function clearScopePromptBinding(path: string): void {
+  try {
+    getDb().prepare("DELETE FROM prompt_scope_bindings WHERE path = ?").run(path);
   } catch {
     /* 删除失败静默 */
   }

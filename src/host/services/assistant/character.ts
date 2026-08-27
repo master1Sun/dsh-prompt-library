@@ -3,7 +3,7 @@
  *
  * 支持多人格：
  * - 全局默认人格：~/.dsh/prompt-library/character/SOUL.md（用户可直接编辑，AI 严格遵守）；
- * - 自定义人格：character/personas/<id>/SOUL.md（按会话绑定后，该会话注入对应 SOUL）。
+ * - 自定义人格：character/personas/<id>.md（按会话绑定后，该会话注入对应 SOUL）。
  *
  * 能力：
  * - ensureSoulFile：默认人格文件缺失时写入默认模板，并创建目录；
@@ -147,7 +147,7 @@ export function invalidateSoulCache(personaId?: string | null): void {
  * 同步读取某人格文本（供每次对话组装 system prompt 时调用）。
  *
  * personaId 为 undefined / null / 'default' 时读全局默认人格；否则读
- * character/personas/<personaId>/SOUL.md。
+ * character/personas/<personaId>.md。
  *
  * 与 readSoulDoc 不同，这里是**同步**返回：宿主在组装对话提示时是同步
  * 回调 text 函数的，无法 await。每次组装都走到这里（热路径），为避免每次

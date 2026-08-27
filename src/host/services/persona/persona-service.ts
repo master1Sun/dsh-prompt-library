@@ -1,7 +1,7 @@
 /**
  * 多人格服务：组合「数据库元信息」与「SOUL 文件」两级存储，向上层（路由/组装）暴露统一操作。
  *
- * 人格本体是文件（character/SOUL.md 为全局默认，character/personas/<id>/SOUL.md 为自定义），
+ * 人格本体是文件（character/SOUL.md 为全局默认，character/personas/<id>.md 为自定义），
  * 元信息（名称/启用/创建时间）与「工作区/项目路径 → 人格」绑定存放在 SQLite（prompts.db）。
  *
  * 关键约定：
@@ -34,6 +34,7 @@ import {
   writePersonaSoul,
 } from "../assistant/character.js";
 import { workspaceStorePath } from "../../utils/paths.js";
+import { getSessionBoundPersonaId } from "../session-prompts/session-prompts.js";
 
 /** 面向 UI 的人格视图：元信息 + SOUL 正文 + 是否内置默认。 */
 export interface PersonaView {
@@ -184,6 +185,35 @@ export function resolvePersonaForPath(cwd: string | null | undefined): string | 
     cur = cur.slice(0, idx);
   }
   return null;
+}
+
+/**
+ * 读取某会话 id 精确绑定的人格 id（无绑定返回空串，表示使用默认人格/回落上层）。
+ * 绑定可能是失效的人格 id（已删除），此时返回空串（回落）。
+ */
+export function getPersonaForSession(sessionId: string): string {
+  const bound = getSessionBoundPersonaId(sessionId);
+  return normalizePersonaId(bound) ?? "";
+}
+
+/**
+ * 解析某会话应采用的人格 id：
+ * - 优先取「会话 id」精确绑定（绑定的人格启用才生效，否则回落）；
+ * - 无则按工作目录 cwd 命中的「工作区/项目」持久绑定（最深的祖先/相等匹配）；
+ * - 仍无 → null（使用全局默认人格）。
+ */
+export function resolvePersonaForSession(
+  sessionId: string | null | undefined,
+  cwd: string | null | undefined,
+): string | null {
+  if (typeof sessionId === "string" && sessionId) {
+    const pid = getPersonaForSession(sessionId);
+    if (pid) {
+      const record = getPersona(pid);
+      if (record && record.enabled) return pid;
+    }
+  }
+  return resolvePersonaForPath(cwd);
 }
 
 /**

@@ -1248,15 +1248,17 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
   };
   // 打开时拉取游戏化快照；传入语言，host 返回对应语言的等级与成就
   const [status, setStatus] = useState<AssistantStatus | null>(null);
-  // 推断界面语言：优先以浏览器语言为准，再回退到翻译结果是否含中文字符。
-  // 旧写法依赖 t("pl.rarity.common")===/包含中文，在该上下文不可靠，会导致中文界面下
-  // 塔罗牌名（如「权杖侍从」/「Page of Wands」）中英文主次颠倒。
-  const lang = useMemo(() => {
-    const nav = ((navigator.language || navigator.languages?.[0] || "") as string).toLowerCase();
-    if (/^zh/.test(nav)) return "zh" as const;
-    if (/^en/.test(nav)) return "en" as const;
-    return /[\u4e00-\u9fff]/.test(t("pl.rarity.common")) ? "zh" as const : "en" as const;
-  }, [t, open]);
+  // 取出界面语言：优先宿主真实界面语言（<html lang>），回退浏览器语言。
+  // 与词库助手其余双语内容保持一致，避免界面英文但系统中文时误判为 zh。
+  const lang = useMemo<"zh" | "en">(() => {
+    const raw = (
+      document.documentElement.lang ||
+      navigator.language ||
+      navigator.languages?.[0] ||
+      ""
+    ).toLowerCase();
+    return raw.startsWith("en") ? "en" : "zh";
+  }, [open]);
   useEffect(() => {
     if (!open) return;
     let alive = true;

@@ -10,16 +10,18 @@
  * - 只能通过右上角关闭按钮或底部「完成」按钮关闭，禁止点击遮罩/外部区域关闭；
  * - 删除需二次确认。
  */
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
-import type { PersonaView, ScopeNode } from "../../../types.js";
+import type { PersonaView, ScopeNode, SessionNode } from "../../../types.js";
+import { UNMATCHED_SCOPE_PATH } from "../../../types.js";
 import {
   createPersona as apiCreatePersona,
   deletePersona as apiDeletePersona,
   listPersonas,
-  listScopeTree,
+  listSessionScopeTree,
   setPersonaBinding as apiSetPersonaBinding,
+  setSessionPersonaBinding as apiSetSessionPersonaBinding,
   updatePersona as apiUpdatePersona,
 } from "../../services/api.js";
 import { plBtn } from "../../utils/button-style.js";
@@ -31,6 +33,24 @@ import { type PLT } from "../../i18n/i18n.js";
 
 const MONO =
   'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif)';
+
+/** 去掉文件名中的非法字符，空结果回落为 untitled */
+function sanitizeFileName(name: string): string {
+  return name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim() || "untitled";
+}
+
+/** 触发下载一个 Markdown 文本文件 */
+function downloadMarkdown(fileName: string, content: string): void {
+  const blob = new Blob([content], { type: "text/markdown" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
 interface Props {
   /** 是否显示。 */
@@ -73,13 +93,19 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
   // 展开的工作区路径集合（默认全部展开，便于看到所有项目）
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  // 重新拉取工作区/项目树（打开及绑定变更后回写节点 bound）；必须定义在提前返回之前，
+  // 重新拉取工作区/项目/会话树（打开及绑定变更后回写节点 bound）；必须定义在提前返回之前，
   // 与下方加载 effect 一起保证所有 hooks 都在 `if (!open) return null;` 之前稳定调用。
   const refreshScopes = () =>
-    listScopeTree().then((tree) => {
+    listSessionScopeTree().then((tree) => {
       setScopes(tree);
       const expandAll = new Set<string>();
-      for (const ws of tree) expandAll.add(ws.path);
+      const collect = (nodes: ScopeNode[]) => {
+        for (const node of nodes) {
+          expandAll.add(node.path);
+          collect(node.children);
+        }
+      };
+      collect(tree);
       setExpanded(expandAll);
       setScopesLoaded(true);
     });
@@ -101,12 +127,20 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
   const [detailId, setDetailId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // 导入导出等操作反馈（error=false 时为成功/普通提示，error=true 时红色警示）
+  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  // 勾选导出的目标 id 集合
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // 导入文件选择（MD 单文件）
+  const importFileRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
     let alive = true;
     setLoaded(false);
     setError(null);
+    setMsg(null);
+    setSelected(new Set());
     setEditingId(null);
     setDeleteId(null);
     setDetailId(null);
@@ -240,6 +274,45 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
       });
   };
 
+  // 导出勾选的人格为 Markdown：每张导出成一个 md 文件，文件名取标题
+  const handleExport = () => {
+    const exportList = personas.filter((p) => selected.has(p.id));
+    if (exportList.length === 0) {
+      setMsg({ text: t("pl.exportSelectEmpty"), error: true });
+      return;
+    }
+    for (const p of exportList) {
+      const title = p.isDefault ? p.name : (names[p.id] ?? p.name);
+      downloadMarkdown(`${sanitizeFileName(title)}.md`, p.content && p.content.trim() ? p.content.trim() : "");
+    }
+    setMsg({ text: t("pl.personas.exportDone", { count: exportList.length }) });
+  };
+
+  // 从 Markdown 单文件导入一个文案：正文取整个文件内容，标题取文件名（去扩展名）
+  const handleImport = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const text = (await file.text()).trim();
+    if (!text) {
+      setMsg({ text: t("pl.personas.importEmpty"), error: true });
+      return;
+    }
+    const title = file.name.replace(/\.[^/.]+$/, "").trim() || "untitled";
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await apiCreatePersona(title);
+      await apiUpdatePersona(created.id, { content: text, enabled: true });
+      await refresh();
+      setMsg({ text: t("pl.personas.importDone", { count: 1 }) });
+    } catch {
+      setMsg({ text: t("pl.personas.importFailed"), error: true });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const defaultPersona = personas.find((p) => p.isDefault);
   const customPersonas = personas.filter((p) => !p.isDefault);
   // 绑定下拉里可选的启用人格（只列举可用项，避免选中后被禁用的歧义）
@@ -256,18 +329,137 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
       .finally(() => setBusy(false));
   };
 
-  // 折叠/展开工作区
-  const toggleExpand = (wsPath: string) =>
+  // 设置某会话的绑定（'default' → 回落默认/上层），随后回写该会话节点的 boundPersonaId
+  const handleSessionBind = (sessionId: string, personaId: string) => {
+    const value = personaId === "default" ? "" : personaId;
+    setBusy(true);
+    setError(null);
+    apiSetSessionPersonaBinding(sessionId, value || "default")
+      .then(({ personaId: bound }) => {
+        setScopes((prev) =>
+          prev.map((node) => rewriteSessionPersona(node, sessionId, bound)),
+        );
+      })
+      .catch(() => setError(t("pl.personas.opFailed")))
+      .finally(() => setBusy(false));
+  };
+
+  // 递归回写树里某会话节点的绑定人格
+  const rewriteSessionPersona = (node: ScopeNode, sessionId: string, personaId: string): ScopeNode => {
+    const sessions = node.sessions?.map((s) =>
+      s.id === sessionId ? { ...s, boundPersonaId: personaId } : s,
+    );
+    return {
+      ...node,
+      sessions,
+      children: node.children.map((child) => rewriteSessionPersona(child, sessionId, personaId)),
+    };
+  };
+
+  // 折叠/展开工作区/项目
+  const toggleExpand = (path: string) =>
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (next.has(wsPath)) next.delete(wsPath);
-      else next.add(wsPath);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
       return next;
     });
 
+  // 人格选择下拉（工作区/项目/会话通用）
+  const renderPersonaSelect = (value: string, onChange: (v: string) => void): ReactNode => {
+    const selectValue = bindablePersonas.some((p) => p.id === value) ? value : "default";
+    return (
+      <select
+        value={selectValue}
+        disabled={busy}
+        onChange={(e) => onChange(e.target.value)}
+        style={{
+          flexShrink: 0,
+          boxSizing: "border-box",
+          width: "auto",
+          minWidth: 120,
+          maxWidth: 180,
+          fontSize: 12,
+          color: TONE.text,
+          background: TONE.row,
+          border: `1px solid ${TONE.border}`,
+          borderRadius: 7,
+          padding: "3px 6px",
+          outline: "none",
+          cursor: busy ? "not-allowed" : "pointer",
+          fontFamily: MONO,
+        }}
+      >
+        <option value="default">{t("pl.personas.scopes.defaultOption")}</option>
+        {bindablePersonas.map((p) => (
+          <option key={p.id} value={p.id}>
+            {names[p.id] ?? p.name}
+          </option>
+        ))}
+      </select>
+    );
+  };
+
+  // 类型徽标（工作区/项目/会话通用）
+  const renderKindBadge = (kind: "workspace" | "project" | "session"): ReactNode => (
+    <span
+      style={{
+        flexShrink: 0,
+        fontSize: 10.5,
+        color: kind === "workspace" ? TONE.accent : TONE.quiet,
+        background: TONE.accentSoft,
+        border: `1px solid ${TONE.border}`,
+        borderRadius: 999,
+        padding: "0 6px",
+        lineHeight: "15px",
+      }}
+    >
+      {kind === "workspace"
+        ? t("pl.personas.scopes.workspace")
+        : kind === "project"
+          ? t("pl.personas.scopes.project")
+          : t("pl.personas.scopes.session")}
+    </span>
+  );
+
+  // 渲染单个会话节点（挂在工作区/项目下的会话行）
+  const renderSessionNode = (session: SessionNode, depth: number): ReactNode => (
+    <div key={session.id} style={{ marginLeft: depth * 18 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "5px 0",
+          minHeight: 28,
+        }}
+      >
+        <span style={{ flexShrink: 0, width: 18 }} />
+        {renderKindBadge("session")}
+        <span
+          style={{
+            flex: 1,
+            fontSize: 12.5,
+            color: TONE.text,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+          title={session.cwd || session.id}
+        >
+          {session.title}
+        </span>
+        {renderPersonaSelect(session.boundPersonaId, (v) => handleSessionBind(session.id, v))}
+      </div>
+    </div>
+  );
+
   // 渲染单个绑定树节点；depth 决定缩进
   const renderScopeNode = (node: ScopeNode, depth: number): ReactNode => {
-    const selectValue = bindablePersonas.some((p) => p.id === node.bound) ? node.bound : "default";
+    const hasChildren = node.children.length > 0;
+    const hasSessions = (node.sessions?.length ?? 0) > 0;
+    const isExpandable = hasChildren || hasSessions;
+    const displayTitle = node.path === UNMATCHED_SCOPE_PATH ? t("pl.personas.scopes.others") : node.title;
     return (
       <div key={node.path} style={{ marginLeft: depth * 18 }}>
         <div
@@ -279,12 +471,12 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
             minHeight: 28,
           }}
         >
-          {/* 工作区可折叠，项目叶节点用占位 */}
-          {node.kind === "workspace" && node.children.length > 0 ? (
+          {/* 可折叠：工作区/项目（有下级或会话）显示折叠按钮，叶节点用占位 */}
+          {isExpandable ? (
             <button
               type="button"
               onClick={() => toggleExpand(node.path)}
-              title={node.title}
+              title={displayTitle}
               style={{
                 flexShrink: 0,
                 width: 18,
@@ -308,21 +500,7 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
           ) : (
             <span style={{ flexShrink: 0, width: 18 }} />
           )}
-          {/* 类型徽标 */}
-          <span
-            style={{
-              flexShrink: 0,
-              fontSize: 10.5,
-              color: node.kind === "workspace" ? TONE.accent : TONE.quiet,
-              background: TONE.accentSoft,
-              border: `1px solid ${TONE.border}`,
-              borderRadius: 999,
-              padding: "0 6px",
-              lineHeight: "15px",
-            }}
-          >
-            {node.kind === "workspace" ? t("pl.personas.scopes.workspace") : t("pl.personas.scopes.project")}
-          </span>
+          {renderKindBadge(node.kind)}
           <span
             style={{
               flex: 1,
@@ -334,41 +512,18 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
             }}
             title={node.path}
           >
-            {node.title}
+            {displayTitle}
           </span>
-          {/* 人格选择下拉 */}
-          <select
-            value={selectValue}
-            disabled={busy}
-            onChange={(e) => handleScopeBind(node.path, e.target.value)}
-            style={{
-              flexShrink: 0,
-              boxSizing: "border-box",
-              width: "auto",
-              minWidth: 120,
-              maxWidth: 180,
-              fontSize: 12,
-              color: TONE.text,
-              background: TONE.row,
-              border: `1px solid ${TONE.border}`,
-              borderRadius: 7,
-              padding: "3px 6px",
-              outline: "none",
-              cursor: busy ? "not-allowed" : "pointer",
-              fontFamily: MONO,
-            }}
-          >
-            <option value="default">{t("pl.personas.scopes.defaultOption")}</option>
-            {bindablePersonas.map((p) => (
-              <option key={p.id} value={p.id}>
-                {names[p.id] ?? p.name}
-              </option>
-            ))}
-          </select>
+          {renderPersonaSelect(node.bound, (v) => handleScopeBind(node.path, v))}
         </div>
-        {node.kind === "workspace" && expanded.has(node.path) && node.children.length > 0 && (
+        {expanded.has(node.path) && hasChildren && (
           <div style={{ display: "flex", flexDirection: "column" }}>
             {node.children.map((child) => renderScopeNode(child, depth + 1))}
+          </div>
+        )}
+        {expanded.has(node.path) && hasSessions && (
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            {node.sessions!.map((s) => renderSessionNode(s, depth + 1))}
           </div>
         )}
       </div>
@@ -420,6 +575,21 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
             borderBottom: `1px solid ${TONE.border}`,
           }}
         >
+          <input
+            type="checkbox"
+            title={t("pl.selectExport")}
+            checked={selected.has(p.id)}
+            disabled={busy}
+            onChange={() =>
+              setSelected((prev) => {
+                const next = new Set(prev);
+                if (next.has(p.id)) next.delete(p.id);
+                else next.add(p.id);
+                return next;
+              })
+            }
+            style={{ flexShrink: 0, accentColor: TONE.accent, cursor: busy ? "not-allowed" : "pointer", margin: 0 }}
+          />
           <BookIcon color={isDefault ? TONE.accent : p.enabled ? TONE.accent : TONE.quiet} />
           {isDefault ? (
             <>
@@ -495,12 +665,33 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
             variant="ghost"
             size="sm"
             className={plBtn("ghost", "sm")}
-            onClick={() => (isEditing ? cancelEdit(p) : openEditor(p))}
+            onClick={() => {
+              // 未启用时点击编辑给出提示（编辑中的「取消」仍可用）
+              if (!p.enabled && !isEditing) {
+                setMsg({ text: t("pl.personas.disabledEditHint"), error: true });
+                return;
+              }
+              if (isEditing) cancelEdit(p);
+              else openEditor(p);
+            }}
           >
             {isEditing ? t("pl.personas.cancel") : t("pl.personas.edit")}
           </Button>
           {!isDefault && (
-            <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => setDeleteId(p.id)}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={plBtn("ghost", "sm")}
+              onClick={() => {
+                // 未启用时点击删除给出提示
+                if (!p.enabled) {
+                  setMsg({ text: t("pl.personas.disabledDeleteHint"), error: true });
+                  return;
+                }
+                setDeleteId(p.id);
+              }}
+            >
               {t("pl.personas.delete")}
             </Button>
           )}
@@ -571,8 +762,9 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
         className={PL_DIALOG}
         style={{
           width: 860,
+          height: 760,
           maxWidth: "calc(100vw - 40px)",
-          maxHeight: "min(760px, calc(100vh - 40px))",
+          maxHeight: "calc(100vh - 40px)",
         }}
       >
         {/* 标题行 + 右上角关闭按钮 */}
@@ -604,6 +796,12 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
         {error && (
           <div style={{ marginTop: 8, fontSize: 12, color: TONE.red, lineHeight: 1.5, flexShrink: 0 }}>
             {error}
+          </div>
+        )}
+
+        {msg && (
+          <div style={{ marginTop: 8, fontSize: 12, color: msg.error ? TONE.red : TONE.text, lineHeight: 1.5, flexShrink: 0 }}>
+            {msg.text}
           </div>
         )}
 
@@ -640,6 +838,19 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
               </div>
               <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5, marginTop: 3 }}>
                 {t("pl.personas.listHint")}
+              </div>
+            </div>
+
+            {/* 导入导出工具栏：勾选人格后导出（每格一个 md）/ 从单个 md 导入一个文案 */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5 }}>{t("pl.exportHint")}</div>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={busy} onClick={handleExport}>
+                  {t("pl.export")}
+                </Button>
+                <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={busy} onClick={() => importFileRef.current?.click()}>
+                  {t("pl.import")}
+                </Button>
               </div>
             </div>
 
@@ -750,6 +961,15 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
           cancelLabel={t("pl.personas.cancel")}
           onCancel={() => setDeleteId(null)}
           onConfirm={confirmDelete}
+        />
+
+        {/* 导入 MD 文件选择（隐藏） */}
+        <input
+          ref={importFileRef}
+          type="file"
+          accept=".md,.markdown,.txt,text/markdown,text/plain"
+          style={{ display: "none" }}
+          onChange={(e) => void handleImport(e)}
         />
       </div>
       </div>,

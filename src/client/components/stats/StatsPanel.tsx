@@ -793,7 +793,7 @@ function PeakInsight({ heatmap, T }: { heatmap: HeatmapCell[]; T: PLT }): ReactN
   );
 }
 
-/** 词库热榜：最热标签 + 本周最热词条。 */
+/** 词库热榜：最热标签 + 本周最热技能。 */
 function HotRank({ stats, T }: { stats: LibraryStats; T: PLT }): ReactNode {
   const tagRows: Array<{ key: string; label: string; value: number }> = stats.tagStats
     .slice(0, 8)

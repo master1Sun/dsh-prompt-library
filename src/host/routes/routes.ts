@@ -49,6 +49,24 @@ import {
   updatePrompt,
   updateSettings,
 } from "../services/data/store.js";
+import {
+  clearScopePromptBinding,
+  createSessionPrompt,
+  deleteSessionPrompt,
+  getCurrentSessionScope,
+  getScopeBoundPromptIds,
+  getSessionActivePromptIds,
+  listScopePromptBindings,
+  listSessionPrompts,
+  setScopePromptBinding,
+  setSessionActivePrompts,
+  updateSessionPrompt,
+} from "../services/session-prompts/session-prompts.js";
+import {
+  clearSessionBinding,
+  setSessionPersonaBindingForSession,
+  setSessionPromptBindingForSession,
+} from "../services/session-prompts/session-prompts.js";
 import { checkUpdate, getVersionInfo, restartService, upgradePlugin } from "../services/update/update.js";
 import { getActivity } from "../services/assistant/activity.js";
 import { buildAssistantStatus } from "../services/assistant/gamification.js";
@@ -60,10 +78,12 @@ import {
   createPersonaWithSoul,
   deletePersonaWithSoul,
   getPersonaForScopePath,
+  getPersonaForSession,
   listPersonaViews,
   listScopeTree,
   updatePersonaWithContent,
 } from "../services/persona/persona-service.js";
+import { listSessionScopeTree } from "../services/session-scope/session-scope.js";
 
 const PREFIX = "/api/prompt-library";
 
@@ -133,16 +153,19 @@ function isSkillEntry(
   );
 }
 
-/** 从请求体中提取字符串数组（{ ids: string[] } 或直接数组）。 */
+/** 从请求体中提取字符串数组（{ ids: string[] }、{ promptIds: string[] } 或直接数组）。 */
 function extractIds(body: unknown): string[] {
-  const list =
-    typeof body === "object" &&
-    body !== null &&
-    Array.isArray((body as { ids?: unknown }).ids)
-      ? (body as { ids: unknown[] }).ids
-      : Array.isArray(body)
-        ? body
-        : [];
+  const obj =
+    typeof body === "object" && body !== null ? (body as Record<string, unknown>) : null;
+  const list = obj
+    ? Array.isArray(obj.promptIds)
+      ? obj.promptIds
+      : Array.isArray(obj.ids)
+        ? obj.ids
+        : []
+    : Array.isArray(body)
+      ? body
+      : [];
   return list.filter((x): x is string => typeof x === "string");
 }
 
@@ -568,7 +591,7 @@ export function makePromptRoutes(): WebRoute[] {
           const lv = params.get("lang");
           if (lv) lang = lv;
           const dv = params.get("date");
-          if (dv && /^\\d{4}-\\d{2}-\\d{2}$/.test(dv)) date = dv;
+          if (dv && /^\d{4}-\d{2}-\d{2}$/.test(dv)) date = dv;
         } catch {
           /* 解析失败忽略，默认 zh / 今天 */
         }
@@ -673,6 +696,11 @@ export function makePromptRoutes(): WebRoute[] {
         return json(res, 200, { ok: true, data: listScopeTree() });
       }
 
+      // GET /personas/scopes/sessions — 列出「工作区 → 项目 → 会话」树（节点自带会话绑定）
+      if (method === "GET" && segments[0] === "personas" && segments[1] === "scopes" && segments[2] === "sessions") {
+        return json(res, 200, { ok: true, data: await listSessionScopeTree() });
+      }
+
       // GET /personas/scopes/binding?path= — 读取某路径的精确绑定（无绑定返回空串）
       if (method === "GET" && segments[0] === "personas" && segments[1] === "scopes" && segments[2] === "binding") {
         const q = new URLSearchParams(tail.includes("?") ? tail.slice(tail.indexOf("?") + 1) : "");
@@ -739,6 +767,139 @@ export function makePromptRoutes(): WebRoute[] {
         const removed = await deletePersonaWithSoul(segments[1] ?? "");
         if (!removed) return json(res, 404, { ok: false, error: "not found" });
         return json(res, 200, { ok: true, data: { id: segments[1] } });
+      }
+
+      // ── 会话级技能（session-prompts）与技能注入 ────────────────────────────
+
+      // GET /session-prompts — 列出全部会话级技能
+      if (method === "GET" && segments[0] === "session-prompts" && segments.length === 1) {
+        return json(res, 200, { ok: true, data: listSessionPrompts() });
+      }
+
+      // POST /session-prompts — 新建会话级技能
+      if (method === "POST" && segments[0] === "session-prompts" && segments.length === 1) {
+        const body = await readJsonBody(req);
+        if (!isInput(body)) return json(res, 400, { ok: false, error: "invalid body: {title, body}" });
+        const prompt = createSessionPrompt(body);
+        return json(res, 201, { ok: true, data: prompt });
+      }
+
+      // PUT /session-prompts/:id — 更新会话级技能
+      if (method === "PUT" && segments[0] === "session-prompts" && segments.length === 2 && segments[1] !== "bindings" && segments[1] !== "active") {
+        const body = await readJsonBody(req);
+        if (!isPatch(body)) return json(res, 400, { ok: false, error: "invalid body" });
+        const updated = updateSessionPrompt(segments[1] ?? "", {
+          title: body.title,
+          body: body.body,
+          tags: body.tags,
+          enabled: (body as { enabled?: boolean }).enabled,
+        });
+        if (!updated) return json(res, 404, { ok: false, error: "not found" });
+        return json(res, 200, { ok: true, data: updated });
+      }
+
+      // DELETE /session-prompts/:id — 删除会话级技能（同时清理绑定与临时注入引用）
+      if (method === "DELETE" && segments[0] === "session-prompts" && segments.length === 2 && segments[1] !== "bindings" && segments[1] !== "active") {
+        const removed = deleteSessionPrompt(segments[1] ?? "");
+        if (!removed) return json(res, 404, { ok: false, error: "not found" });
+        return json(res, 200, { ok: true, data: { id: segments[1] } });
+      }
+
+      // GET /session-prompts/bindings — 列出全部路径绑定（工作区/项目绑定 Tab 用）
+      if (method === "GET" && segments[0] === "session-prompts" && segments[1] === "bindings" && segments.length === 2) {
+        return json(res, 200, { ok: true, data: listScopePromptBindings() });
+      }
+
+      // GET /session-prompts/bindings/path?path= — 读取某路径精确绑定的技能 id 列表
+      if (method === "GET" && segments[0] === "session-prompts" && segments[1] === "bindings" && segments[2] === "path" && segments.length === 3) {
+        const q = new URLSearchParams(tail.includes("?") ? tail.slice(tail.indexOf("?") + 1) : "");
+        const path = q.get("path") ?? "";
+        return json(res, 200, { ok: true, data: { promptIds: getScopeBoundPromptIds(path) } });
+      }
+
+      // PUT /session-prompts/bindings {path, promptIds} — 设置某路径绑定的技能 id 列表
+      if (method === "PUT" && segments[0] === "session-prompts" && segments[1] === "bindings" && segments.length === 2) {
+        const raw = await readJsonBody(req);
+        const path =
+          typeof raw === "object" && raw !== null && typeof (raw as { path?: unknown }).path === "string"
+            ? (raw as { path: string }).path
+            : "";
+        const promptIds = extractIds(raw);
+        if (!path) return json(res, 400, { ok: false, error: "invalid body: {path, promptIds}" });
+        setScopePromptBinding(path, promptIds);
+        return json(res, 200, { ok: true, data: { promptIds } });
+      }
+
+      // DELETE /session-prompts/bindings?path= — 清除某路径的绑定
+      if (method === "DELETE" && segments[0] === "session-prompts" && segments[1] === "bindings" && segments.length === 2) {
+        const q = new URLSearchParams(tail.includes("?") ? tail.slice(tail.indexOf("?") + 1) : "");
+        const path = q.get("path") ?? "";
+        if (!path) return json(res, 400, { ok: false, error: "invalid query: path" });
+        clearScopePromptBinding(path);
+        return json(res, 200, { ok: true, data: { cleared: true } });
+      }
+
+      // GET /session-prompts/current-scope — 读取最近活跃的会话 scope（「当前会话」Tab 用）
+      if (method === "GET" && segments[0] === "session-prompts" && segments[1] === "current-scope" && segments.length === 2) {
+        return json(res, 200, { ok: true, data: { scope: getCurrentSessionScope() } });
+      }
+
+      // GET /session-prompts/active?scope= — 读取某会话 scope 的临时注入技能 id 列表
+      if (method === "GET" && segments[0] === "session-prompts" && segments[1] === "active" && segments.length === 2) {
+        const q = new URLSearchParams(tail.includes("?") ? tail.slice(tail.indexOf("?") + 1) : "");
+        const scope = q.get("scope") ?? "";
+        return json(res, 200, { ok: true, data: { promptIds: getSessionActivePromptIds(scope) } });
+      }
+
+      // PUT /session-prompts/active {scope, promptIds} — 设置某会话 scope 的临时注入技能 id 列表
+      if (method === "PUT" && segments[0] === "session-prompts" && segments[1] === "active" && segments.length === 2) {
+        const raw = await readJsonBody(req);
+        const scope =
+          typeof raw === "object" && raw !== null && typeof (raw as { scope?: unknown }).scope === "string"
+            ? (raw as { scope: string }).scope
+            : "";
+        const promptIds = extractIds(raw);
+        if (!scope) return json(res, 400, { ok: false, error: "invalid body: {scope, promptIds}" });
+        setSessionActivePrompts(scope, promptIds);
+        return json(res, 200, { ok: true, data: { promptIds } });
+      }
+
+      // PUT /session-prompts/session/persona {sessionId, personaId} — 设置某会话绑定的人格（默认/空 → 回落）
+      if (method === "PUT" && segments[0] === "session-prompts" && segments[1] === "session" && segments[2] === "persona") {
+        const raw = await readJsonBody(req);
+        const sessionId =
+          typeof raw === "object" && raw !== null && typeof (raw as { sessionId?: unknown }).sessionId === "string"
+            ? (raw as { sessionId: string }).sessionId
+            : "";
+        const personaId =
+          typeof raw === "object" && raw !== null && typeof (raw as { personaId?: unknown }).personaId === "string"
+            ? (raw as { personaId: string }).personaId
+            : "";
+        if (!sessionId) return json(res, 400, { ok: false, error: "invalid body: {sessionId, personaId}" });
+        setSessionPersonaBindingForSession(sessionId, personaId || null);
+        return json(res, 200, { ok: true, data: { personaId: getPersonaForSession(sessionId) } });
+      }
+
+      // PUT /session-prompts/session/prompts {sessionId, promptIds} — 设置某会话持久绑定的技能 id 列表
+      if (method === "PUT" && segments[0] === "session-prompts" && segments[1] === "session" && segments[2] === "prompts") {
+        const raw = await readJsonBody(req);
+        const sessionId =
+          typeof raw === "object" && raw !== null && typeof (raw as { sessionId?: unknown }).sessionId === "string"
+            ? (raw as { sessionId: string }).sessionId
+            : "";
+        const promptIds = extractIds(raw);
+        if (!sessionId) return json(res, 400, { ok: false, error: "invalid body: {sessionId, promptIds}" });
+        setSessionPromptBindingForSession(sessionId, promptIds);
+        return json(res, 200, { ok: true, data: { promptIds } });
+      }
+
+      // DELETE /session-prompts/session?sessionId= — 清除某会话的全部绑定（人格回落默认、技能不再注入）
+      if (method === "DELETE" && segments[0] === "session-prompts" && segments[1] === "session" && segments.length === 2) {
+        const q = new URLSearchParams(tail.includes("?") ? tail.slice(tail.indexOf("?") + 1) : "");
+        const sessionId = q.get("sessionId") ?? "";
+        if (!sessionId) return json(res, 400, { ok: false, error: "invalid query: sessionId" });
+        clearSessionBinding(sessionId);
+        return json(res, 200, { ok: true, data: { cleared: true } });
       }
 
       // GET /assets/whale — 返回词库助手「鲸鱼款」助手的雪碧图（image/webp 字节），

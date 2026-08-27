@@ -767,6 +767,14 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             disabled={assistantMaxed && !draft.assistantEnabled}
             onChange={(v) => updateAndSave({ personaEnabled: v })}
           />
+          {/* 技能管理：词库助手右键菜单「技能管理」入口；仅当词库助手显示时可开关，置于人格管理之下 */}
+          <ToggleRow
+            label={T("pl.set.inject")}
+            desc={T("pl.set.injectDesc")}
+            checked={draft.injectEnabled}
+            disabled={assistantMaxed && !draft.assistantEnabled}
+            onChange={(v) => updateAndSave({ injectEnabled: v })}
+          />
           {/* 看板：词库助手右键菜单「看板」入口（统计可视化）；仅当词库助手显示时可开关 */}
           <ToggleRow
             label={T("pl.set.dashboard")}

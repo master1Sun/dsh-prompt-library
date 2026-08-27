@@ -20,7 +20,7 @@ import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { plBtn } from "../../../utils/button-style.js";
 import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../../../utils/dialog-style.js";
 import { type PLTranslate, usePLT } from "../../../i18n/i18n.js";
-import { importPrompts as apiImport } from "../../../services/api.js";
+import { importPrompts as apiImport, listTags as apiListTags } from "../../../services/api.js";
 import { notifyDataChanged } from "../../../services/data-sync.js";
 import { insertVariableAt } from "../../common/TemplateVariables.js";
 import type { TransferPrompt } from "../../../services/data-formats.js";
@@ -177,6 +177,24 @@ export function ImportEditModal(props: {
   const bodyRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
   const seqRef = useRef(0);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  // 下拉可选标签（既有标签名列表），打开时拉取
+  const [tagOptions, setTagOptions] = useState<string[]>([]);
+
+  // 打开时拉取既有标签，用于下拉选择
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    apiListTags()
+      .then((tags) => {
+        if (alive) setTagOptions(tags.map((x) => x.name));
+      })
+      .catch(() => {
+        if (alive) setTagOptions([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [open]);
 
   // 打开弹窗时用所选文件的条目初始化（默认全部勾选、展开）
   useEffect(() => {
@@ -186,7 +204,7 @@ export function ImportEditModal(props: {
       key: `imp:${++seqRef.current}`,
       title: e.title,
       body: e.body,
-      tags: (e.tags ?? []).join(", "),
+      tags: (e.tags ?? [])[0] ?? "",
       source: e.source ?? "txt",
       checked: true,
     }));
@@ -610,15 +628,20 @@ export function ImportEditModal(props: {
                       overflow: "hidden",
                     }}
                   >
-                    {/* 标签（逗号分隔） */}
-                    <input
-                      type="text"
+                    {/* 标签（下拉选择既有标签 / 无标签） */}
+                    <select
                       value={entry.tags}
                       onChange={(e) => updateEntry(entry.key, { tags: e.target.value })}
-                      placeholder={T("pl.importEdit.tagsLabel")}
                       disabled={!entry.checked}
-                      style={inputStyle}
-                    />
+                      style={{ ...inputStyle, cursor: "pointer" }}
+                    >
+                      <option value="">{T("pl.importEdit.tagsLabel")}</option>
+                      {tagOptions.map((tag) => (
+                        <option key={tag} value={tag}>
+                          {tag}
+                        </option>
+                      ))}
+                    </select>
                     {/* 正文 + 插入变量 */}
                     <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
                       <textarea

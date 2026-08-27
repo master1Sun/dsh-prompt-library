@@ -153,11 +153,50 @@ function parseIssueMarkdown(date: string, lang: "zh" | "en", content: string): I
 }
 
 /**
+ * 生成当日报纸的中英两版（一次统计，中英各跑一次 AI 生成日报），并一并落盘 Markdown。
+ * 返回两版 IssueData（lang 分别为 zh / en）。
+ */
+async function generateTodayIssue(
+  today: string,
+  settings: PluginSettings,
+): Promise<IssueData[]> {
+  const [streak, stats] = await Promise.all([
+    computeStreak().catch(() => 0),
+    computeLibraryStats().catch(() => undefined),
+  ]);
+  const statsText = stats ? buildStatsText(stats) : undefined;
+  if (!statsText) {
+    // 统计都拿不到时，仍按原有空态结构生成，避免上层逻辑依赖数组长度
+    const empty = { report: null, news: null, newsSource: "achievement" as const };
+    return [
+      { date: today, lang: "zh", ...empty },
+      { date: today, lang: "en", ...empty },
+    ];
+  }
+  const news = {
+    zh: buildAchievementNews(stats, streak, "zh"),
+    en: buildAchievementNews(stats, streak, "en"),
+  };
+  const [reportZh, reportEn] = await Promise.all([
+    generateDailyReport(statsText, settings, "zh"),
+    generateDailyReport(statsText, settings, "en"),
+  ]);
+  const versions: IssueData[] = [
+    { date: today, lang: "zh", report: reportZh ?? null, news: news.zh.length > 0 ? news.zh : null, newsSource: "achievement" },
+    { date: today, lang: "en", report: reportEn ?? null, news: news.en.length > 0 ? news.en : null, newsSource: "achievement" },
+  ];
+  for (const v of versions) writeIssueMarkdown(v);
+  return versions;
+}
+
+/**
  * 取某一期报纸。
  *  - 已有对应语言 md：直接解析回显（含历史与当日），不再重复生成；
  *  - 未存档日期：
  *      · 今天：由本地词库统计 + 成就进度生成「中英两版」，一并落盘 Markdown，返回请求语言版本；
  *      · 昨天及更早（历史空档）：返回空（日报/新闻为 null，前端显示「今日暂无推荐」）。
+ *  - 当日容错：若当日 md 里日报为空（说明此前 AI 生成失败被固化），自动重新生成补齐，
+ *    仅在补齐成功且返回请求语言版本非空时才用新数据，否则仍回退原缓存，避免永久空白。
  *
  * @param date 报纸日期 YYYY-MM-DD；缺省取今天。
  * @param lang 语言（zh / en），决定返回并回显哪一语言版本。
@@ -170,10 +209,21 @@ export async function getIssue(
 ): Promise<IssueData> {
   const L = normalizeDailyLang(lang);
   const today = beijingNow().date;
-  // 已有对应语言的 md：直接解析回显（历史与当日均已落盘，无需再动库）
+  // 已有对应语言的 md：先直接解析回显（历史与当日均已落盘）
   const mdPath = issueMdPath(date, L);
   if (existsSync(mdPath)) {
-    return parseIssueMarkdown(date, L, readFileSync(mdPath, "utf8"));
+    const cached = parseIssueMarkdown(date, L, readFileSync(mdPath, "utf8"));
+    // 当日日报为空（上次 AI 生成失败被固化）：重新生成补齐，成功后覆盖落盘
+    if (date === today && (cached.report === null || cached.report.length === 0)) {
+      try {
+        const versions = await generateTodayIssue(today, settings);
+        const fresh = versions.find((v) => v.lang === L);
+        if (fresh && fresh.report && fresh.report.length > 0) return fresh;
+      } catch {
+        /* 重生成失败则回退缓存，下次打开仍会再试 */
+      }
+    }
+    return cached;
   }
 
   if (date !== today) {
@@ -181,25 +231,8 @@ export async function getIssue(
     return { date, lang: L, report: null, news: null, newsSource: null };
   }
 
-  // 当日首访：一次统计，中英两版各生成一份并落盘
-  const [streak, stats] = await Promise.all([
-    computeStreak().catch(() => 0),
-    computeLibraryStats().catch(() => undefined),
-  ]);
-  const statsText = stats ? buildStatsText(stats) : undefined;
-  const news = {
-    zh: buildAchievementNews(stats, streak, "zh"),
-    en: buildAchievementNews(stats, streak, "en"),
-  };
-  const [reportZh, reportEn] = await Promise.all([
-    statsText ? generateDailyReport(statsText, settings, "zh") : undefined,
-    statsText ? generateDailyReport(statsText, settings, "en") : undefined,
-  ]);
-  const versions: IssueData[] = [
-    { date, lang: "zh", report: reportZh ?? null, news: news.zh.length > 0 ? news.zh : null, newsSource: "achievement" },
-    { date, lang: "en", report: reportEn ?? null, news: news.en.length > 0 ? news.en : null, newsSource: "achievement" },
-  ];
-  for (const v of versions) writeIssueMarkdown(v);
+  // 当日首访：生成中英两版并落盘，返回请求语言版本
+  const versions = await generateTodayIssue(today, settings);
   return versions.find((v) => v.lang === L) ?? versions[0];
 }
 

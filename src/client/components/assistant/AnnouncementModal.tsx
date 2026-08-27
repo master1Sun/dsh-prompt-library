@@ -151,7 +151,7 @@ function NavIcon({
       }}
       onMouseEnter={(e) => {
         if (disabled) return;
-        (e.currentTarget as HTMLButtonElement).style.background = TONE.row;
+        (e.currentTarget as HTMLButtonElement).style.background = TONE.borderStrong;
       }}
       onMouseLeave={(e) => {
         (e.currentTarget as HTMLButtonElement).style.background = TONE.panel;
@@ -353,27 +353,52 @@ export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
                     padding: 4,
                   }}
                 >
-                  {historyLabels.map((h) => (
-                    <button
-                      key={h.date}
-                      type="button"
-                      onClick={() => goTo(h.date)}
-                      style={{
-                        display: "block",
-                        width: "100%",
-                        textAlign: "left",
-                        border: "none",
-                        background: h.date === daily?.date ? TONE.row : "transparent",
-                        color: TONE.text,
-                        fontSize: 12,
-                        padding: "6px 8px",
-                        borderRadius: 6,
-                        cursor: "pointer",
-                      }}
-                    >
-                      {h.label}
-                    </button>
-                  ))}
+                  {historyLabels.map((h) => {
+                    // 当前正在展示的期次：高亮标记 + 左侧强调条
+                    const isActive = h.date === daily?.date;
+                    return (
+                      <button
+                        key={h.date}
+                        type="button"
+                        onClick={() => goTo(h.date)}
+                        onMouseEnter={(e) => {
+                          const el = e.currentTarget;
+                          el.style.background = TONE.borderStrong;
+                        }}
+                        onMouseLeave={(e) => {
+                          const el = e.currentTarget;
+                          el.style.background = isActive ? TONE.row : "transparent";
+                        }}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          width: "100%",
+                          textAlign: "left",
+                          border: "none",
+                          background: isActive ? TONE.row : "transparent",
+                          color: isActive ? TONE.accent : TONE.text,
+                          fontSize: 12,
+                          fontWeight: isActive ? 600 : 400,
+                          padding: "6px 8px",
+                          borderRadius: 6,
+                          cursor: "pointer",
+                          transition: "background 0.24s, color 0.24s",
+                        }}
+                      >
+                        <span
+                          style={{
+                            width: 3,
+                            height: 12,
+                            borderRadius: 1,
+                            background: isActive ? TONE.accent : "transparent",
+                            flexShrink: 0,
+                          }}
+                        />
+                        {h.label}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -426,9 +451,7 @@ export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
               }}
             >
               <span>{dateLabel}</span>
-              <span style={{ letterSpacing: 1 }}>
-                {lang === "en" ? "Vol. TODAY · EDITION 1" : "今日 · 第一期"}
-              </span>
+              <span style={{ letterSpacing: 1 }}>{t("pl.announce.editionNo", { n: editionNo })}</span>
             </div>
           </header>
 

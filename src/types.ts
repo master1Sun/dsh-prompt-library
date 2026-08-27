@@ -36,6 +36,26 @@ export interface TrashItem extends Prompt {
   deletedAt: number;
 }
 
+/** 会话级技能：独立于普通词库（prompts）的另一套技能，供「会话级词库管理」与「技能管理」使用。 */
+export interface SessionPrompt {
+  /** 稳定标识（UUID）。 */
+  id: string;
+  /** 在列表中显示的简短标题。 */
+  title: string;
+  /** 注入到系统提示/输入框的技能正文。 */
+  body: string;
+  /** 可选的自定义标签（仅保留单个）。 */
+  tags?: string[];
+  /** 是否启用（禁用的技能不会被注入，即使被临时注入或路径绑定）。 */
+  enabled: boolean;
+  /** 最后一次修改的纪元毫秒时间戳。 */
+  updatedAt: number;
+  /** 使用次数。 */
+  usageCount: number;
+  /** 最后一次使用的纪元毫秒时间戳。 */
+  lastUsedAt: number;
+}
+
 /** 持久化文件的磁盘结构。 */
 export interface PromptStoreFile {
   /** 存储文件的 schema 版本。 */
@@ -97,7 +117,7 @@ export interface PersonaMeta {
 export interface PersonaView extends PersonaMeta {
   /** 是否为内置默认人格（不可删除/重命名）。 */
   isDefault: boolean;
-  /** SOUL 正文（默认人格存于 character/SOUL.md，自定义人格存于 character/personas/<id>/SOUL.md）。 */
+  /** SOUL 正文（默认人格存于 character/SOUL.md，自定义人格存于 character/personas/<id>.md）。 */
   content: string;
 }
 
@@ -107,7 +127,24 @@ export interface PersonaBinding {
   personaId: string;
 }
 
-/** 工作区/项目树节点：供人格管理的「树形选择工作区/项目并绑定」使用。 */
+/** 会话（会话 id 维度绑定）：会话在树中挂载到其工作目录 cwd 命中的工作区/项目节点下。 */
+export interface SessionNode {
+  /** 会话 id（持久绑定的 key，也即注入时的 context.scope）。 */
+  id: string;
+  /** 展示名（有标题用标题，否则回落为「会话 + id 片段」）。 */
+  title: string;
+  /** 会话工作目录（header.cwd），用于归属到工作区/项目树。 */
+  cwd: string;
+  /** 该会话精确绑定的人格 id（'' 表示未绑定，回落默认/上层）。 */
+  boundPersonaId: string;
+  /** 该会话精确绑定的技能 id 列表。 */
+  boundPromptIds: string[];
+}
+
+/** 「其他会话」分组的合成路径 key（未命中任何工作区/项目的会话归入该分组，前端据此本地化标题）。 */
+export const UNMATCHED_SCOPE_PATH = "__pl_unmatched__";
+
+/** 工作区/项目树节点：供人格管理的「树形选择工作区/项目/会话并绑定」使用。 */
 export interface ScopeNode {
   /** 绝对路径（绑定的 key）。 */
   path: string;
@@ -117,6 +154,10 @@ export interface ScopeNode {
   kind: "workspace" | "project";
   /** 该层精确绑定的人格 id（'' 表示未精确绑定，回落默认/上层）。 */
   bound: string;
+  /** 该路径精确绑定的技能 id 列表（会话级技能注入弹窗用）。 */
+  boundPromptIds?: string[];
+  /** 归属到本节点的会话（按 cwd 最深的路径前缀匹配）。 */
+  sessions?: SessionNode[];
   /** 子项目节点（工作区下）或空数组（项目无下级）。 */
   children: ScopeNode[];
 }
@@ -177,6 +218,8 @@ export interface PluginSettings {
   levelAnnouncementEnabled: boolean;
   /** 是否启用「人格管理」入口（词库助手右键菜单项）。仅当词库助手显示时可开关，默认开启。 */
   personaEnabled: boolean;
+  /** 是否启用「技能管理」入口（词库助手右键菜单项，管理会话级技能并绑定到工作区/项目）。仅当词库助手显示时可开关，默认开启。 */
+  injectEnabled: boolean;
   /** 是否启用「看板」入口（词库助手右键菜单项，打开统计可视化面板）。仅当词库助手显示时可开关，默认开启。 */
   dashboardEnabled: boolean;
   /** 是否启用「数据管理」入口（词库助手右键菜单项，含导入导出/标签/回收站）。仅当词库助手显示时可开关，默认开启。 */
@@ -226,6 +269,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   levelEnabled: true, // 等级助手：助手等级徽章与右键菜单「成就」入口
   levelAnnouncementEnabled: true, // 我的等级公告：新成就解锁时的气泡播报
   personaEnabled: true, // 人格管理：词库助手右键菜单展示「人格管理」入口
+  injectEnabled: true, // 技能管理：词库助手右键菜单展示「技能管理」入口
   dashboardEnabled: true, // 看板：词库助手右键菜单展示「看板」入口（统计可视化）
   dataManagementEnabled: true, // 数据管理：词库助手右键菜单展示「数据管理」入口
   backupEnabled: true, // 是否启用自动备份（启动时及按周期备份数据库）

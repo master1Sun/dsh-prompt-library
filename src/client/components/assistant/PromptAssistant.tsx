@@ -33,6 +33,7 @@ import { useThemeSync } from "../../utils/theme.js";
 import { AnnouncementModal } from "./AnnouncementModal.js";
 import { AchievementModal } from "./AchievementModal.js";
 import { PersonaManagerModal } from "./PersonaManagerModal.js";
+import { PromptInjectPanel } from "./PromptInjectPanel.js";
 import { WhaleStage } from "./WhaleStage.js";
 import { DashboardModal } from "./DashboardModal.js";
 import { ImportExportModal } from "../settings/modules/ImportExportModal.js";
@@ -309,11 +310,13 @@ export function PromptAssistant(props: Props): ReactNode {
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mousedown", markActive);
     window.addEventListener("keydown", markActive);
-    // 每 2s 检查一次空闲；贴边期间暂停自动冒泡，避免打扰
+    // 每 2s 检查一次空闲；贴边期间暂停自动冒泡，避免打扰；
+    // 会话弹窗（阶段气泡）或简介气泡显示中不贴边，避免提示被打断
     const iv = window.setInterval(() => {
       if (
         !dockedRef.current &&
         !bubbleRefId.current &&
+        !phaseActiveRef.current &&
         !hoverRef.current &&
         Date.now() - lastActiveRef.current >= IDLE_MS
       ) {
@@ -720,6 +723,13 @@ export function PromptAssistant(props: Props): ReactNode {
   const phaseActiveRef = useRef(phaseActive);
   useEffect(() => {
     phaseActiveRef.current = phaseActive;
+    // 会话弹窗出现时若已处于贴边状态，取消贴边恢复原位，确保提示完整展示
+    if (phaseActive && dockedRef.current) {
+      dockedRef.current = false;
+      setDocked(false);
+      if (preDockRef.current) setPos(preDockRef.current);
+      preDockRef.current = null;
+    }
   }, [phaseActive]);
 
   // 气泡显示时测量实际宽高；内容变化（简介轮播 / 阶段内容 / toast）时同步更新
@@ -742,6 +752,8 @@ export function PromptAssistant(props: Props): ReactNode {
   const [achievementOpen, setAchievementOpen] = useState(false);
   // 人格管理弹窗：右键菜单入口打开（多人格 CRUD + 会话绑定说明）
   const [personaOpen, setPersonaOpen] = useState(false);
+  // 技能注入弹窗：右键菜单「技能注入」入口打开（当前会话临时注入 / 工作区项目持久绑定）
+  const [injectOpen, setInjectOpen] = useState(false);
   // 看板弹窗：右键菜单「看板」入口打开（统计可视化）
   const [dashboardOpen, setDashboardOpen] = useState(false);
   // 数据管理弹窗：右键菜单「数据管理」→ 三个子项分别打开
@@ -769,16 +781,9 @@ export function PromptAssistant(props: Props): ReactNode {
     setDashboardOpen(true);
   };
 
-  // 右键菜单显隐规则：词库助手自常驻以来始终启用；工具面板 / 公告 / 成就 / 人格管理 /
-  // 看板 / 数据管理 入口全部关闭时同样不显示（菜单里没有任何可点项）。
-  const ctxMenuEnabled =
-    (settings?.rightPanelEnabled ?? DEFAULT_SETTINGS.rightPanelEnabled) ||
-      (settings?.announcementEnabled ?? DEFAULT_SETTINGS.announcementEnabled) ||
-      levelEnabled ||
-      (settings?.personaEnabled ?? DEFAULT_SETTINGS.personaEnabled) ||
-      (settings?.dashboardEnabled ?? DEFAULT_SETTINGS.dashboardEnabled) ||
-      (settings?.dataManagementEnabled ??
-        DEFAULT_SETTINGS.dataManagementEnabled);
+  // 右键菜单显隐规则：词库助手自常驻以来始终启用；「技能注入」为常驻入口（无开关），
+  // 因此右键菜单始终显示（其余工具面板 / 公告 / 成就 / 人格管理 / 看板 / 数据管理均可单独关闭）。
+  const ctxMenuEnabled = true;
 
   // 右键菜单弹出后，测量真实宽高并把菜单完整限制在视口内（防止内容变长后底部溢出）。
   // 依赖 ctxMenu 打开与 dataMenuOpen 子菜单展开，两者变化都重新结算位置。
@@ -1684,6 +1689,22 @@ export function PromptAssistant(props: Props): ReactNode {
                   {T("pl.ctx.personas")}
                 </div>
               )}
+              {/* 技能管理入口：管理会话级技能 + 工作区/项目绑定；仅当「技能管理」开关开启时显示 */}
+              {(settings?.injectEnabled ??
+                DEFAULT_SETTINGS.injectEnabled) && (
+                <div
+                  className="pl-ctx-item"
+                  onClick={() => {
+                    setCtxMenu(null);
+                    setInjectOpen(true);
+                  }}
+                >
+                  <CtxIcon bg="rgba(139, 92, 246, .12)" color="#8b5cf6">
+                    <path d="M4 5.5h9M4 8.5h5.5M4 11.5h9" />
+                  </CtxIcon>
+                  {T("pl.ctx.inject")}
+                </div>
+              )}
               {/* 看板入口：统计可视化；仅当「看板」开关开启时显示 */}
               {(settings?.dashboardEnabled ??
                 DEFAULT_SETTINGS.dashboardEnabled) && (
@@ -1744,6 +1765,12 @@ export function PromptAssistant(props: Props): ReactNode {
       <PersonaManagerModal
         open={personaOpen}
         onClose={() => setPersonaOpen(false)}
+        t={T}
+      />
+      {/* 技能注入弹窗：右键菜单「技能注入」打开（当前会话临时注入 / 工作区项目持久绑定） */}
+      <PromptInjectPanel
+        open={injectOpen}
+        onClose={() => setInjectOpen(false)}
         t={T}
       />
       {/* 看板弹窗：右键菜单「看板」打开（统计可视化） */}

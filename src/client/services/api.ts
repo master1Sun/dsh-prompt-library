@@ -12,11 +12,13 @@ import type {
   PromptInput,
   PromptPatch,
   ScopeNode,
+  SessionPrompt,
   TrashItem,
 } from "../../types.js";
 
 const BASE = "/api/prompt-library/prompts";
 const PERSONAS_BASE = "/api/prompt-library/personas";
+const SESSION_PROMPTS_BASE = "/api/prompt-library/session-prompts";
 
 interface ApiResponse<T> {
   ok: boolean;
@@ -343,6 +345,11 @@ export function listScopeTree(): Promise<ScopeNode[]> {
   return send<ScopeNode[]>("GET", `${PERSONAS_BASE}/scopes`);
 }
 
+/** 读取「工作区 → 项目 → 会话」树（工作区/项目节点下挂会话，会话自带人格与技能绑定）。 */
+export function listSessionScopeTree(): Promise<ScopeNode[]> {
+  return send<ScopeNode[]>("GET", `${PERSONAS_BASE}/scopes/sessions`);
+}
+
 /** 读取某路径精确绑定的自定义人格 id（无绑定返回空串，表示使用默认人格）。 */
 export function getPersonaBinding(path: string): Promise<PersonaBinding> {
   return send<PersonaBinding>("GET", `${PERSONAS_BASE}/scopes/binding?path=${encodeURIComponent(path)}`);
@@ -351,6 +358,96 @@ export function getPersonaBinding(path: string): Promise<PersonaBinding> {
 /** 设置某路径绑定的人格（传入 'default'/空串 → 回落默认/上层），返回实际生效的人格 id。 */
 export function setPersonaBinding(path: string, personaId: string): Promise<PersonaBinding> {
   return send<PersonaBinding>("PUT", `${PERSONAS_BASE}/scopes/binding`, { path, personaId });
+}
+
+// ── 会话级技能与技能注入 ────────────────────────────────────────────────
+
+/** 列出全部会话级技能。 */
+export function listSessionPrompts(): Promise<SessionPrompt[]> {
+  return send<SessionPrompt[]>("GET", SESSION_PROMPTS_BASE);
+}
+
+/** 新建一条会话级技能。 */
+export function createSessionPrompt(input: PromptInput): Promise<SessionPrompt> {
+  return send<SessionPrompt>("POST", SESSION_PROMPTS_BASE, input);
+}
+
+/** 更新一条会话级技能（会话级技能额外支持启用状态）。 */
+export function updateSessionPrompt(
+  id: string,
+  patch: PromptPatch & { enabled?: boolean },
+): Promise<SessionPrompt> {
+  return send<SessionPrompt>("PUT", `${SESSION_PROMPTS_BASE}/${encodeURIComponent(id)}`, patch);
+}
+
+/** 删除一条会话级技能（同时清理绑定与临时注入引用）。 */
+export function deleteSessionPrompt(id: string): Promise<{ id: string }> {
+  return send<{ id: string }>("DELETE", `${SESSION_PROMPTS_BASE}/${encodeURIComponent(id)}`);
+}
+
+/** 列出全部路径 → 会话级技能 绑定。 */
+export function listSessionPromptBindings(): Promise<Array<{ path: string; promptIds: string[] }>> {
+  return send<Array<{ path: string; promptIds: string[] }>>("GET", `${SESSION_PROMPTS_BASE}/bindings`);
+}
+
+/** 读取某路径精确绑定的会话级技能 id 列表。 */
+export function getSessionPromptBinding(path: string): Promise<{ promptIds: string[] }> {
+  return send<{ promptIds: string[] }>(
+    "GET",
+    `${SESSION_PROMPTS_BASE}/bindings/path?path=${encodeURIComponent(path)}`,
+  );
+}
+
+/** 设置某路径绑定的会话级技能 id 列表（空数组 → 解除绑定）。 */
+export function setSessionPromptBinding(path: string, promptIds: string[]): Promise<{ promptIds: string[] }> {
+  return send<{ promptIds: string[] }>("PUT", `${SESSION_PROMPTS_BASE}/bindings`, { path, promptIds });
+}
+
+/** 清除某路径的会话级技能绑定。 */
+export function clearSessionPromptBinding(path: string): Promise<{ cleared: boolean }> {
+  return send<{ cleared: boolean }>(
+    "DELETE",
+    `${SESSION_PROMPTS_BASE}/bindings?path=${encodeURIComponent(path)}`,
+  );
+}
+
+/** 读取某会话 scope 临时注入的会话级技能 id 列表。 */
+export function getSessionActivePrompts(scope: string): Promise<{ promptIds: string[] }> {
+  return send<{ promptIds: string[] }>(
+    "GET",
+    `${SESSION_PROMPTS_BASE}/active?scope=${encodeURIComponent(scope)}`,
+  );
+}
+
+/** 设置某会话 scope 临时注入的会话级技能 id 列表（空数组 → 清除该会话的临时注入）。 */
+export function setSessionActivePrompts(scope: string, promptIds: string[]): Promise<{ promptIds: string[] }> {
+  return send<{ promptIds: string[] }>("PUT", `${SESSION_PROMPTS_BASE}/active`, { scope, promptIds });
+}
+
+/** 读取最近活跃的会话 scope（「技能注入」弹窗「当前会话」Tab 用；无会话时为 null）。 */
+export function getCurrentSessionScope(): Promise<{ scope: string | null }> {
+  return send<{ scope: string | null }>("GET", `${SESSION_PROMPTS_BASE}/current-scope`);
+}
+
+/** 设置某会话绑定的自定义人格（传 'default'/空串 → 回落默认/上层），返回实际生效的人格 id。 */
+export function setSessionPersonaBinding(sessionId: string, personaId: string): Promise<{ personaId: string }> {
+  return send<{ personaId: string }>("PUT", `${SESSION_PROMPTS_BASE}/session/persona`, { sessionId, personaId });
+}
+
+/** 设置某会话持久绑定的会话级技能 id 列表（空数组 → 解除该会话的技能绑定）。 */
+export function setSessionPromptBindingForSession(
+  sessionId: string,
+  promptIds: string[],
+): Promise<{ promptIds: string[] }> {
+  return send<{ promptIds: string[] }>("PUT", `${SESSION_PROMPTS_BASE}/session/prompts`, { sessionId, promptIds });
+}
+
+/** 清除某会话的全部持久绑定（人格回落默认、技能不再注入）。 */
+export function clearSessionBinding(sessionId: string): Promise<{ cleared: boolean }> {
+  return send<{ cleared: boolean }>(
+    "DELETE",
+    `${SESSION_PROMPTS_BASE}/session?sessionId=${encodeURIComponent(sessionId)}`,
+  );
 }
 
 // ── 词库助手活动状态 ────────────────────────────────────────────────────

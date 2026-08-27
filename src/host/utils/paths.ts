@@ -93,14 +93,14 @@ export function soulPath(): string {
   return join(characterDir(), "SOUL.md");
 }
 
-/** 多人格目录：~/.dsh/prompt-library/character/personas/（每个自定义人格一个子目录） */
+/** 多人格目录：~/.dsh/prompt-library/character/personas/（每个自定义人格一个 <id>.md 文件，不建子目录） */
 export function personasDir(): string {
   return join(characterDir(), "personas");
 }
 
-/** 某个人格（非默认）的 SOUL 文件路径：~/.dsh/prompt-library/character/personas/<id>/SOUL.md */
+/** 某个人格（非默认）的 SOUL 文件路径：~/.dsh/prompt-library/character/personas/<id>.md */
 export function personaSoulPath(personaId: string): string {
-  return join(personasDir(), personaId, "SOUL.md");
+  return join(personasDir(), `${personaId}.md`);
 }
 
 // ── 会话上下文（harness 文件化）────────────────────────────────────────────
@@ -113,4 +113,16 @@ export function promptsDir(): string {
 /** harness 会话上下文文件：~/.dsh/prompt-library/prompts/HARNESS.md */
 export function harnessPath(): string {
   return join(promptsDir(), "HARNESS.md");
+}
+
+// ── 会话级技能（MD 文件化，不走数据库）────────────────────────────────────
+
+/** 会话级技能目录：~/.dsh/prompt-library/session-prompts/（每个技能一个 <id>.md） */
+export function sessionPromptsDir(): string {
+  return join(dataDir(), "session-prompts");
+}
+
+/** 某条会话级技能的 MD 文件路径：~/.dsh/prompt-library/session-prompts/<id>.md */
+export function sessionPromptPath(id: string): string {
+  return join(sessionPromptsDir(), `${id}.md`);
 }

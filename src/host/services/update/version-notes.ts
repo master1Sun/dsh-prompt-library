@@ -33,6 +33,36 @@ export interface VersionNote {
  */
 export const VERSION_NOTES: VersionNote[] = [
   {
+    version: "0.9.1",
+    date: "2026-08-27",
+    zh: {
+      title: "每日日报 · 鲸鱼形象 · 成就与洞察升级",
+      items: [
+        "每日日报：公告弹窗新增「词库日报」与「成就速报」，每日推荐与历史期数可切换，一键阅读原文。",
+        "鲸鱼新形象：新增「鲸鱼款」助手形象（静态 / 动效两种），与小白兔随时切换。",
+        "洞察视图：统计面板新增「洞察」页，含词库健康评分、成长曲线、使用高峰洞察、热门标签与本周热词。",
+        "成就详情：成就弹窗可展开等级详情，展示各等级所需积分、积分获取来路与衰减规则。",
+        "每日幸运签：打开成就页随机抽取好运签，六种签文点缀每日心情。",
+        "稀有度补全：成就稀有度体系加入「神话」档位，集齐传说与神话更添收集乐趣。",
+        "默认人格完整模板：默认人格开箱即含词库助手完整设定；新建自定义人格仍只留标题占位，由你自行填写。",
+        "纯图标默认：词库与 AI 优化按钮默认改为纯图标显示，界面更清爽，可在设置中随时改回图文模式。",
+      ],
+    },
+    en: {
+      title: "Daily report · Whale look · Achievements & insights",
+      items: [
+        "Daily report: the announcement dialog gains \"The Prompt Daily\" and \"Achievement Briefs\" — daily picks with a history list and a read-article link.",
+        "Whale look: new \"Whale\" assistant appearance (static / animated), switchable with the rabbit and the husky anytime.",
+        "Insights tab: the stats panel adds an \"Insights\" view — library health score, growth curve, peak-hour insights, hot tags and weekly hot words.",
+        "Achievement details: the dialog can expand level details, showing points per level, how to earn points and the decay rule.",
+        "Daily lucky draw: opening the achievements page draws a fortune slip, six flavors to brighten the day.",
+        "Rarity filled out: the achievement rarity ladder gains a \"Mythic\" tier to deepen the collection fun.",
+        "Full default persona: the default SOUL ships with a complete assistant setup; new custom personas still start with a blank title-only template for you to fill in.",
+        "Icon-only by default: the library and AI-polish buttons now default to icon-only for a cleaner UI, switchable back in settings.",
+      ],
+    },
+  },
+  {
     version: "0.9.0",
     date: "2026-08-26",
     zh: {

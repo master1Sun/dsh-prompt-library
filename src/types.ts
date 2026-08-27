@@ -213,9 +213,9 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   assistantEnabled: true, // 词库助手显隐（主开关，关闭后右侧面板也无法启用）
   rightPanelEnabled: true, // 是否启用右侧侧边栏展开/折叠（需先开启词库助手）
   showComposerButton: true, // 是否在聊天框工具栏显示词库按钮
-  composerButtonIconOnly: false, // 词库按钮用纯图标显示（隐藏文字，仅保留图标）
+  composerButtonIconOnly: true, // 词库按钮用纯图标显示（隐藏文字，仅保留图标）
   showAIPolishButton: true, // 是否在聊天框工具栏显示 AI 润色按钮
-  aiPolishButtonIconOnly: false, // AI 润色按钮用纯图标显示（隐藏文字，仅保留图标）
+  aiPolishButtonIconOnly: true, // AI 润色按钮用纯图标显示（隐藏文字，仅保留图标）
   tildaTriggerEnabled: true, // 是否启用输入 ~ 触发词库选择
   hoverDetailEnabled: true, // 是否启用鼠标移入列表显示详情
   selectionAddEnabled: true, // 是否启用选中文本后浮动「添加提示词」入口

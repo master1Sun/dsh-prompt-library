@@ -16,8 +16,28 @@ import { dirname } from "node:path";
 import { personaSoulPath, soulPath } from "../../utils/paths.js";
 import { stripBom } from "../../utils/text.js";
 
-/** SOUL.md 默认模板：新建人格时只给一个标题占位，正文由用户在人格管理里自行填写，AI 据此遵守。 */
+/** SOUL.md 新建自定义人格时使用的模板：仅一个标题占位，正文由用户在人格管理里自行填写，AI 据此遵守。 */
 const DEFAULT_SOUL = `# SOUL · 人格
+`;
+
+/** 全局默认人格的完整模板：开箱即用的通用人格设定，写入 character/SOUL.md，AI 据此遵守。 */
+const DEFAULT_PERSONA_SOUL = `# SOUL · 人格
+
+你是「词库助手」，一款帮助用户收集、整理、润色和复用提示词（Prompts）的智能助手，也是用户常用的提效工具。
+
+## 身份定位
+- 你是提示词领域的整理专家，熟悉写作、编程、办公、学习等各类场景下的提示词写法。
+- 你关注细节，追求简洁、通用、可复用的输出。
+
+## 工作原则
+- 先理解用户的真实意图，再动手整理；保留原文关键细节，不随意删改。
+- 归类与提炼时保持提示词清晰、精简、可直接使用。
+- 遇到会随使用场景变化的内容（如角色、对象、主题、风格等），提炼为变量占位符，提升复用性。
+- 涉及已有的变量、标签结构时原样保留，避免破坏现有格式。
+
+## 表达风格
+- 语气真诚、清晰、有条理；先给结论，再给必要说明。
+- 尊重用户的输入，仅在确有需要时给出建议。
 `;
 
 /** «default» 保留 id：表示使用全局默认人格（character/SOUL.md）。 */
@@ -29,18 +49,25 @@ function normalizePersona(personaId?: string | null): string | null {
   return personaId === DEFAULT_PERSONA_ID ? null : personaId;
 }
 
-/** 确保默认人格文件存在（缺失则写入默认模板；目录不存在则创建）。 */
+/**
+ * 确保默认人格文件存在。
+ * 缺失则写入完整默认模板；已存在但仍是旧的「仅标题占位」内容时升级为完整模板，
+ * 让默认人格开箱即有完整设定；已有真实内容则保持原样，不覆盖用户自定义。
+ */
 export async function ensureSoulFile(): Promise<void> {
   const path = soulPath();
   try {
-    await readFile(path, "utf8");
+    const current = stripBom(await readFile(path, "utf8"));
+    if (current.trim() === DEFAULT_SOUL.trim()) {
+      await writeFile(path, stripBom(DEFAULT_PERSONA_SOUL), "utf8");
+    }
   } catch {
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, stripBom(DEFAULT_SOUL), "utf8");
+    await writeFile(path, stripBom(DEFAULT_PERSONA_SOUL), "utf8");
   }
 }
 
-/** 确保自定义人格的 SOUL 文件存在（缺失则写入默认模板；目录不存在则创建）。 */
+/** 确保自定义人格的 SOUL 文件存在（缺失则写入「仅标题占位」模板；目录不存在则创建）。 */
 export async function ensurePersonaSoul(personaId: string): Promise<void> {
   const path = personaSoulPath(personaId);
   try {

@@ -412,8 +412,8 @@ export interface AssistantAchievement {
   title: string;
   desc: string;
   achieved: boolean;
-  /** 稀有度：common/rare/epic/legendary。 */
-  rarity: "common" | "rare" | "epic" | "legendary";
+  /** 稀有度：common/rare/epic/legendary/myth。 */
+  rarity: "common" | "rare" | "epic" | "legendary" | "myth";
   /** 解锁可得分值。 */
   points: number;
   /** 当前进度值。 */
@@ -444,12 +444,35 @@ export interface AssistantEasterEgg {
   text: string;
 }
 
+/** 词库助手一段等级档位门槛（等级详情用）。 */
+export interface AssistantLevelMilestone {
+  level: number;
+  /** 达到该等级所需的净积分。 */
+  threshold: number;
+  zh: string;
+  en: string;
+}
+
+/** 词库助手一种积分获取来路。 */
+export interface AssistantPointSource {
+  kind: string;
+  points: number;
+  zh: string;
+  en: string;
+}
+
 /** 词库助手游戏化快照。 */
 export interface AssistantStatus {
   level: AssistantLevel;
   achievements: AssistantAchievement[];
   achievementSummary: AssistantAchievementSummary;
   easterEgg: AssistantEasterEgg | null;
+  /** 各等级档位门槛（等级详情）。 */
+  levelRules: AssistantLevelMilestone[];
+  /** 积分获取来路。 */
+  pointSources: AssistantPointSource[];
+  /** 积分衰减规则文案。 */
+  decayRule: string;
 }
 
 /** 读取词库助手等级 / 成就 / 彩蛋快照（host 依据统计与本地时间生成）。 */

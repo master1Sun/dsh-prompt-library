@@ -562,7 +562,7 @@ export function PromptAssistant(props: Props): ReactNode {
     };
   }, [showToast]);
 
-  // 点击助手的互动反馈：随机俏皮话；2 秒内连点 5 次触发「晕」
+  // 点击助手的互动反馈：随机「彩蛋抽奖」或俏皮话；2 秒内连点 5 次触发「晕」
   const triggerTap = useCallback(() => {
     const now = Date.now();
     const recent = tapTimesRef.current.filter((t) => now - t < 2000);
@@ -573,16 +573,28 @@ export function PromptAssistant(props: Props): ReactNode {
       showToast({ kind: "tap", text: tRef.current("pl.tap.dizzy") });
       return;
     }
-    const msgs = [
+    // 抽奖：应景彩蛋（host 推送）+ 幸运彩蛋池混合，50% 概率开出一条彩蛋，否则回落到俏皮话
+    const egg = statusRef.current?.easterEgg ? statusRef.current.easterEgg.text : "";
+    const lucky = [
+      tRef.current("pl.lucky.0"),
+      tRef.current("pl.lucky.1"),
+      tRef.current("pl.lucky.2"),
+      tRef.current("pl.lucky.3"),
+      tRef.current("pl.lucky.4"),
+      tRef.current("pl.lucky.5"),
+    ].filter((x, i) => x && x !== `pl.lucky.${i}`); // 过滤缺失的翻译键（t 会原样返回键名）
+    const pool = egg ? [egg, ...lucky] : lucky;
+    const taps = [
       tRef.current("pl.tap.0"),
       tRef.current("pl.tap.1"),
       tRef.current("pl.tap.2"),
       tRef.current("pl.tap.3"),
     ];
-    showToast({
-      kind: "tap",
-      text: msgs[Math.floor(Math.random() * msgs.length)],
-    });
+    const useEgg = pool.length > 0 && Math.random() < 0.5;
+    const text = useEgg
+      ? pool[Math.floor(Math.random() * pool.length)]
+      : taps[Math.floor(Math.random() * taps.length)];
+    showToast({ kind: "tap", text });
     setClickRev((c) => c + 1); // 触发鲸鱼点击回应动画
   }, [showToast]);
 

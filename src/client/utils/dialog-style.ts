@@ -21,4 +21,20 @@ export const PL_DIALOG_OVERLAY = "pl-dialog-overlay";
 export const PL_DIALOG_CSS = `
 .pl-dialog{box-sizing:border-box;display:flex;flex-direction:column;border-radius:24px;background:var(--dsw-specific-sidebar-fill,#f5f6f7);border:1px solid var(--dsw-alias-border-l2,rgba(17,24,39,.14));box-shadow:0 10px 32px rgba(2,6,23,.2),0 2px 8px rgba(2,6,23,.1),inset 0 1px 0 rgba(255,255,255,.55);padding:18px 7px 18px 10px;color:var(--dsw-alias-label-primary,#f2f6fc);font-family:var(--dsw-font-family,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif)}
 .pl-dialog-overlay{position:fixed;inset:0;z-index:2147483647;box-sizing:border-box;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.35)}
+/* 解锁塔罗牌：卡片表面流动高光扫光 */
+.pl-card-sheen{position:absolute;inset:0;border-radius:11px;pointer-events:none;overflow:hidden;background:linear-gradient(115deg,transparent 40%,rgba(255,255,255,.5) 50%,transparent 60%);background-size:250% 250%;animation:plCardSheen 4.2s ease-in-out infinite;z-index:3}
+@keyframes plCardSheen{0%{background-position:130% 0}62%{background-position:-130% 0}100%{background-position:-130% 0}}
+/* 史诗及以上：炫彩流动金边（遮罩抽成细环） */
+.pl-card-gold{position:absolute;inset:-2px;border-radius:14px;padding:2px;pointer-events:none;background:linear-gradient(120deg,#ffd700 0%,#ff9d00 16%,#ff2ed1 34%,#7a5cff 52%,#00d9ff 70%,#ffd700 100%);background-size:280% 100%;-webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);-webkit-mask-composite:xor;mask-composite:exclude;animation:plGoldShimmer 4.5s linear infinite;z-index:2}
+@keyframes plGoldShimmer{0%{background-position:0% 50%}100%{background-position:280% 50%}}
+/* 等级详情（QQ 式等级介绍）：每行一条横向扫光，从低级到高级逐行错峰点亮 */
+.pl-lv-row{position:relative;border-radius:8px;overflow:hidden}
+.pl-lv-row::before{content:"";position:absolute;inset:0;background:linear-gradient(115deg,transparent 42%,rgba(255,255,255,.16) 50%,transparent 58%);background-size:250% 250%;animation:plLvRowSweep 2.6s ease-in-out infinite;pointer-events:none}
+@keyframes plLvRowSweep{0%{background-position:130% 0}60%{background-position:-130% 0}100%{background-position:-130% 0}}
+/* 等级详情：当前等级徽章脉冲光环（模仿 QQ 点亮呼吸） */
+.pl-lv-cur{animation:plLvPulse 2.1s ease-out infinite}
+@keyframes plLvPulse{0%{box-shadow:0 0 0 0 var(--pl-lv-glow,#ffb428a0)}75%{box-shadow:0 0 0 7px transparent}100%{box-shadow:0 0 0 0 transparent}}
+/* 等级详情：等级进度条由左向右生长填充 */
+.pl-lv-fill{transform-origin:left;animation:plLvFillGrow .65s cubic-bezier(.2,.7,.3,1) both}
+@keyframes plLvFillGrow{0%{transform:scaleX(0)}100%{transform:scaleX(1)}}
 `;

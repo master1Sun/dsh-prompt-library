@@ -57,7 +57,7 @@ function Legend({ color, label }: { color: string; label: string }): ReactNode {
   );
 }
 
-/** 概览统计卡片：数值 + 标签 + 可选副文案。 */
+/** 概览统计卡片：标签 + 大号数值 + 可选副文案。 */
 function StatCard({ label, value, sub }: { label: string; value: ReactNode; sub?: string }): ReactNode {
   const TONE = getTone();
   return (
@@ -66,7 +66,7 @@ function StatCard({ label, value, sub }: { label: string; value: ReactNode; sub?
         display: "flex",
         flexDirection: "column",
         gap: 3,
-        padding: "9px 10px",
+        padding: "9px 11px",
         background: TONE.row,
         border: `1px solid ${TONE.border}`,
         borderRadius: 8,
@@ -83,6 +83,31 @@ function StatCard({ label, value, sub }: { label: string; value: ReactNode; sub?
 }
 
 /** 区块标题。 */
+/** 核心 KPI 大数字卡：用于概览页定位最关键指标，突出大号数字。 */
+function KpiCard({ label, value, sub }: { label: string; value: ReactNode; sub?: string }): ReactNode {
+  const TONE = getTone();
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 2,
+        padding: "10px 12px",
+        background: TONE.row,
+        border: `1px solid ${TONE.border}`,
+        borderRadius: 8,
+        minWidth: 0,
+      }}
+    >
+      <span style={{ fontSize: 10, color: TONE.quiet, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+        {label}
+      </span>
+      <span style={{ fontSize: 26, fontWeight: 700, color: TONE.text, lineHeight: 1.15 }}>{value}</span>
+      {sub ? <span style={{ fontSize: 10, color: TONE.muted }}>{sub}</span> : null}
+    </div>
+  );
+}
+
 function Section({ title, children }: { title: string; children?: ReactNode }): ReactNode {
   const TONE = getTone();
   return (
@@ -95,12 +120,12 @@ function Section({ title, children }: { title: string; children?: ReactNode }): 
           color: TONE.text,
           display: "flex",
           alignItems: "center",
-          justifyContent: "space-between",
-          gap: 6,
+          gap: 8,
         }}
       >
-        {title}
-        
+        {/* 主题色引导条：统一各 tab 区块标题的可读层级 */}
+        <span style={{ width: 3, height: 13, borderRadius: 2, background: TONE.accent, flexShrink: 0 }} />
+        <span style={{ flex: 1, minWidth: 0 }}>{title}</span>
       </h3>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{children}</div>
     </section>
@@ -206,7 +231,7 @@ function TrendChart({ snapshots, T }: { snapshots: StatsSnapshot[]; T: PLT }): R
                 height={Math.max(0, ah)}
                 rx={1.5}
                 fill={TONE.accent}
-                opacity={0.85}
+                opacity={0.88}
                 data-tip={`${T("pl.stats.trendAdded")}: ${a}`}
               >
               </rect>
@@ -217,7 +242,7 @@ function TrendChart({ snapshots, T }: { snapshots: StatsSnapshot[]; T: PLT }): R
                 height={Math.max(0, uh)}
                 rx={1.5}
                 fill={TONE.mint}
-                opacity={0.85}
+                opacity={0.88}
                 data-tip={`${T("pl.stats.trendUsage")}: ${u}`}
               >
               </rect>
@@ -256,16 +281,24 @@ export function StatsContent({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* 概览重点卡片（两列网格，只保留最核心的指标） */}
+      {/* 概览核心 KPI：大数字仪表盘，一眼定位关键指标 */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-        <StatCard label={T("pl.stats.total")} value={stats.total} />
-        <StatCard label={T("pl.stats.totalUsage")} value={stats.totalUsage} />
-        <StatCard
+        <KpiCard label={T("pl.stats.total")} value={stats.total} />
+        <KpiCard label={T("pl.stats.totalUsage")} value={stats.totalUsage} />
+        <KpiCard
           label={T("pl.stats.usedRate")}
           value={`${usedRate}%`}
           sub={T("pl.stats.usedCount", { count: stats.usedCount })}
         />
-        <StatCard label={T("pl.stats.aiRefined")} value={`${stats.aiRefinedPct}%`} sub={T("pl.stats.aiRefinedCount", { count: stats.aiRefinedCount })} />
+        <KpiCard
+          label={T("pl.stats.aiRefined")}
+          value={`${stats.aiRefinedPct}%`}
+          sub={T("pl.stats.aiRefinedCount", { count: stats.aiRefinedCount })}
+        />
+      </div>
+
+      {/* 近 7 天速览副指标 */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
         <StatCard label={T("pl.stats.added7")} value={stats.addedIn7Days} />
         <StatCard label={T("pl.stats.used7")} value={stats.usedIn7Days} />
       </div>

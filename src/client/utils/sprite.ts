@@ -24,7 +24,7 @@ export type SpriteTopic = "code" | "writing" | "translate" | "qa" | "general";
 
 /** 生成雪碧图的可选差异项。 */
 export interface SpriteOptions {
-  /** 程序化款型：经典米兔 / 哈士奇（鲸鱼款用静态素材，不传）。 */
+  /** 程序化款型：经典米兔（鲸鱼款走 dsh-pet webm 动画，不参与绘制）。 */
   character?: DrawnCharacter;
   /** 等级 1-6：决定胸前徽章色。 */
   level?: number;
@@ -110,11 +110,12 @@ export const HOVER_SEQUENCE: SpriteTrack[] = ["wave", "idle"];
 // 词库助手全部轨道语义保留（待机/等待/思考/忙碌/整理/完成/失败/打招呼），
 // 只是把每个轨道映射到鲸鱼素材的行，并按鲸鱼素材的帧数与时长为每帧定位。
 
-/** 词库助手助手款型（与 host 的 assistantCharacter 设置保持一致）。 */
-export type PetCharacter = "classic" | "husky" | "whale";
+/** 词库助手助手款型（与 host 的 assistantCharacter 设置保持一致）。
+ *  classic：经典米兔（程序化）；whale：鲸鱼款（静态雪碧图）；dshpet：dsh-pet 动态鲸鱼（webm 动画）。 */
+export type PetCharacter = "classic" | "whale" | "dshpet";
 
-/** 程序化绘制款型（鲸鱼款用静态素材，不参与此枚举）。 */
-export type DrawnCharacter = "classic" | "husky";
+/** 程序化绘制款型：经典米兔（鲸鱼款走静态素材 / dsh-pet 走 webm，均不参与程序化绘制）。 */
+export type DrawnCharacter = "classic";
 
 /** 鲸鱼款雪碧图几何：每帧 192×208、每行 8 帧、共 9 行。
  * 素材由 host 路由按字节返回（见 routes.ts 的 /assets/whale）。 */
@@ -303,8 +304,8 @@ function drawEyes(ctx: CanvasRenderingContext2D, blink: number, pal: Palette): v
   }
 }
 
-/** 米兔红：嘴部统一用亮红色（米兔标志性红唇），覆盖深色五官描边。 */
-const MOUTH_RED = "#e5444b";
+/** 米兔嘴：统一用珊瑚橙红（比亮红更活泼，米兔标志性嘴色）。 */
+const MOUTH_RED = "#ff6b5e";
 
 function drawMouth(ctx: CanvasRenderingContext2D, mouth: Pose["mouth"]): void {
   ctx.strokeStyle = MOUTH_RED;
@@ -312,9 +313,14 @@ function drawMouth(ctx: CanvasRenderingContext2D, mouth: Pose["mouth"]): void {
   ctx.lineCap = "round";
   ctx.fillStyle = MOUTH_RED;
   if (mouth === "open") {
-    // 开心的「o」形嘴
+    // 张开的「o」形嘴（比闭合更大的开口，营造开合说话感）；高度压低，唇显薄
     ctx.beginPath();
-    ctx.ellipse(36, 41.5, 3.6, 3.2, 0, 0, Math.PI * 2);
+    ctx.ellipse(36, 42, 3.9, 3.0, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // 口腔暗部：让「张开」更分明
+    ctx.fillStyle = "#e0553f";
+    ctx.beginPath();
+    ctx.ellipse(36, 42.7, 2.4, 1.5, 0, 0, Math.PI * 2);
     ctx.fill();
   } else if (mouth === "frown") {
     ctx.beginPath();
@@ -517,8 +523,7 @@ function drawCell(
   ctx.scale(1, p.squashY);
   ctx.translate(-36, -47);
 
-  if ((opts.character ?? "classic") === "husky") drawHuskyBody(ctx, p, pal, opts);
-  else drawBunnyBody(ctx, p, pal, opts);
+  drawBunnyBody(ctx, p, pal, opts);
   ctx.restore();
 }
 
@@ -607,222 +612,6 @@ function drawBunnyBody(
   // 职业装扮（换装人格化）
   drawCostume(ctx, opts.topic, pal);
   // 等级胸前星章（QQ 式成长标识，等级色仅作小点缀不改全身）
-  drawLevelBadge(ctx, opts.level);
-}
-
-/** 哈士奇：灰白毛色、深色三角耳、冰蓝双瞳、浅色口鼻（米兔的等级星章/职业装扮/心情通用）。 */
-function drawHuskyBody(
-  ctx: CanvasRenderingContext2D,
-  p: Pose,
-  pal: Palette,
-  opts: SpriteOptions,
-): void {
-  const dark = "#434a54"; // 哈士奇深灰/黑毛（耳朵、额头、背部）
-  const gray = "#c7cdd3"; // 浅灰毛
-  const cream = "#f4f0ea"; // 米白脸毛/胸腹
-  const ice = "#7fb3d8"; // 冰蓝眼瞳
-  const nose = "#2f3540"; // 鼻头
-  const line = pal.outline; // 描边
-
-  // 尾巴（左侧一小截灰毛，垂到底部）
-  ctx.fillStyle = gray;
-  ctx.strokeStyle = line;
-  ctx.lineWidth = 0.8;
-  ctx.beginPath();
-  ctx.ellipse(22, 50, 4.6, 3, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-
-  // 小脚（四只灰爪，前后各一对略分高低）
-  ctx.fillStyle = gray;
-  ctx.strokeStyle = line;
-  ctx.lineWidth = 0.8;
-  ctx.beginPath();
-  ctx.ellipse(33, 49, 3.4, 2.7, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.ellipse(39, 49, 3.4, 2.7, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.ellipse(29, 52, 4.2, 3.4, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.ellipse(43, 52, 4.2, 3.4, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-
-  // 身体（浅灰圆润小身板 + 米白胸腹）
-  ctx.fillStyle = gray;
-  ctx.strokeStyle = line;
-  ctx.lineWidth = 0.9;
-  ctx.beginPath();
-  ctx.ellipse(36, 42, 12.5, 9.5, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-  ctx.fillStyle = cream;
-  ctx.beginPath();
-  ctx.ellipse(36, 45, 7.5, 5.5, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // 小手（绕身体底部摆动，使用米兔同款手掌）
-  ctx.save();
-  ctx.translate(36, 47);
-  ctx.rotate(p.arm);
-  ctx.fillStyle = gray;
-  ctx.beginPath();
-  ctx.ellipse(0, 5, 12, 9, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = line;
-  ctx.lineWidth = 0.8;
-  ctx.stroke();
-  ctx.fillStyle = nose;
-  ctx.beginPath();
-  ctx.ellipse(-11, 4, 5, 4, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-
-  // 双耳（尖立三角耳：深色外耳 + 粉芯内耳，耳根被头盖住，先画）
-  ctx.fillStyle = dark;
-  ctx.strokeStyle = line;
-  ctx.lineWidth = 0.9;
-  // 左耳
-  ctx.beginPath();
-  ctx.moveTo(23.5, 10.5);
-  ctx.quadraticCurveTo(19.5, 24, 29.5, 22.8);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  // 右耳
-  ctx.beginPath();
-  ctx.moveTo(48.5, 10.5);
-  ctx.quadraticCurveTo(52.5, 24, 42.5, 22.8);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  // 内耳（哈士奇粉嫩耳芯）
-  ctx.fillStyle = "#f2a0b0";
-  ctx.globalAlpha = 0.85;
-  ctx.beginPath();
-  ctx.moveTo(25.6, 12.5);
-  ctx.quadraticCurveTo(22.6, 22, 28.6, 21.6);
-  ctx.closePath();
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(46.4, 12.5);
-  ctx.quadraticCurveTo(49.4, 22, 43.4, 21.6);
-  ctx.closePath();
-  ctx.fill();
-  ctx.globalAlpha = 1;
-
-  // 头（米白圆脸 + 描边）
-  ctx.fillStyle = cream;
-  ctx.strokeStyle = line;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.arc(36, 34, 15, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-
-  // 额头倒三角深色斑纹（哈士奇标志性黑额斑，自头顶汇向鼻梁上方）
-  ctx.fillStyle = dark;
-  ctx.beginPath();
-  ctx.moveTo(22.8, 20);
-  ctx.quadraticCurveTo(36, 14.6, 49.2, 20);
-  ctx.lineTo(45.2, 25.8);
-  ctx.quadraticCurveTo(36, 29.2, 26.8, 25.8);
-  ctx.closePath();
-  ctx.fill();
-  // 白眉心纹（倒三角下缘露出的两撮白毛，衬在眼睛上方）
-  ctx.fillStyle = "#fbfaf6";
-  ctx.beginPath();
-  ctx.ellipse(30.4, 29.4, 3, 1.8, 0.25, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.ellipse(41.6, 29.4, 3, 1.8, -0.25, 0, Math.PI * 2);
-  ctx.fill();
-
-  // 吻部（口鼻处米白椭圆）
-  ctx.fillStyle = cream;
-  ctx.beginPath();
-  ctx.ellipse(36, 40, 8.4, 6.4, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // 冰蓝眼睛（带深色描边与高光，随眨动隐藏）
-  if (p.blink >= 0.4) {
-    ctx.strokeStyle = dark;
-    ctx.lineWidth = 1.2;
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.moveTo(29.6, 33.4); ctx.lineTo(32.4, 33.4);
-    ctx.moveTo(39.6, 33.4); ctx.lineTo(42.4, 33.4);
-    ctx.stroke();
-  } else {
-    ctx.fillStyle = ice;
-    ctx.strokeStyle = dark;
-    ctx.lineWidth = 1.1;
-    ctx.beginPath();
-    ctx.ellipse(31, 33, 3, 3.1, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.ellipse(41, 33, 3, 3.1, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = "#ffffff";
-    ctx.beginPath();
-    ctx.arc(32, 31.6, 1.1, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(42, 31.6, 1.1, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // 鼻头（黑色小圆）
-  ctx.fillStyle = nose;
-  ctx.beginPath();
-  ctx.ellipse(36, 38.6, 2.4, 1.9, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // 嘴（根据心情：开心 o 形→深色小口、低落下垂、平常微笑）
-  ctx.strokeStyle = "#2f3540";
-  ctx.lineWidth = 1.4;
-  ctx.lineCap = "round";
-  ctx.fillStyle = "#2f3540";
-  if (p.mouth === "open") {
-    ctx.beginPath();
-    ctx.ellipse(36, 43.4, 2.4, 2, 0, 0, Math.PI * 2);
-    ctx.fill();
-  } else if (p.mouth === "frown") {
-    ctx.beginPath();
-    ctx.moveTo(32, 42.4); ctx.quadraticCurveTo(36, 40.6, 40, 42.4);
-    ctx.stroke();
-  } else if (p.mouth === "flat") {
-    ctx.beginPath();
-    ctx.moveTo(33.5, 42); ctx.lineTo(38.5, 42);
-    ctx.stroke();
-  } else {
-    ctx.beginPath();
-    ctx.moveTo(32.5, 41.8); ctx.quadraticCurveTo(36, 44.2, 39.5, 41.8);
-    ctx.stroke();
-  }
-
-  // 腮红（开心更浓）
-  ctx.globalAlpha = 0.45 * p.cheek;
-  ctx.fillStyle = "#f2a0b0";
-  ctx.beginPath();
-  ctx.arc(28.5, 37.5, 2.4, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.arc(43.5, 37.5, 2.4, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.globalAlpha = 1;
-
-  // 职业装扮（帽子/贝雷帽/领带/眼镜通用）
-  drawCostume(ctx, opts.topic, pal);
-  // 等级胸前星章（等级色小点缀）
   drawLevelBadge(ctx, opts.level);
 }
 

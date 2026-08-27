@@ -48,6 +48,11 @@ export function dbPath(): string {
   return join(dbDir(), "prompts.db");
 }
 
+/** 报纸 Markdown 记录目录：~/.dsh/prompt-library/newspapers/<zh|en>/（每个语言每日一个 YYYY-MM-DD.md，按北京时间日期命名） */
+export function newspapersDir(): string {
+  return join(dataDir(), "newspapers");
+}
+
 /** 宿主存储目录：~/.dsh/storages/（workspace.json 等宿主级数据） */
 export function storageDir(): string {
   return join(dshHome(), "storages");

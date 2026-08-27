@@ -453,7 +453,7 @@ const WEEK_KEYS = [
 ] as const;
 
 /** 统计页相互独立的视图 Tab。 */
-type StatsTab = "overview" | "heatmap" | "lifecycle" | "details";
+type StatsTab = "overview" | "heatmap" | "lifecycle" | "details" | "insight";
 
 /** 使用热力图：7×24 网格，按本地时区「星期 × 小时」展示使用频率。 */
 function HeatmapChart({ heatmap, T }: { heatmap: HeatmapCell[]; T: PLT }): ReactNode {
@@ -559,6 +559,248 @@ function LifecycleSection({ stats, T }: { stats: LibraryStats; T: PLT }): ReactN
   );
 }
 
+// ── 「洞察」tab：词库健康评分 / 成长曲线 / 使用高峰 / 词库热榜 ──────────────
+
+/** 词库健康评分卡：综合「利用率 / 近30天活跃 / AI完善率」算 0-100 分并分档。 */
+function HealthCard({ stats, T }: { stats: LibraryStats; T: PLT }): ReactNode {
+  const TONE = getTone();
+  const util = stats.total > 0 ? Math.round((stats.usedCount / stats.total) * 100) : 0;
+  const active30 = stats.total > 0 ? Math.round((stats.usedIn30Days / stats.total) * 100) : 0;
+  const ai = stats.aiRefinedPct;
+  const score = Math.round(util * 0.45 + active30 * 0.35 + ai * 0.2);
+  const lv =
+    score >= 85 ? "great" : score >= 70 ? "good" : score >= 50 ? "ok" : "poor";
+  const color = lv === "great" ? TONE.mint : lv === "good" ? TONE.accent : lv === "ok" ? "#f59e0b" : TONE.red;
+  const label =
+    lv === "great" ? T("pl.stats.healthGreat") : lv === "good" ? T("pl.stats.healthGood") : lv === "ok" ? T("pl.stats.healthOk") : T("pl.stats.healthPoor");
+  const dims = [
+    { key: "util", label: T("pl.stats.healthDimUtil"), val: util },
+    { key: "act", label: T("pl.stats.healthDimActive"), val: active30 },
+    { key: "ai", label: T("pl.stats.healthDimAi"), val: ai },
+  ];
+  return (
+    <div
+      style={{
+        display: "flex",
+        gap: 14,
+        padding: "12px 14px",
+        background: TONE.row,
+        border: `1px solid ${TONE.border}`,
+        borderRadius: 10,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 2,
+          width: 74,
+          flexShrink: 0,
+        }}
+      >
+        <span style={{ fontSize: 30, fontWeight: 700, lineHeight: 1, color }}>{score}</span>
+        <span style={{ fontSize: 11, color, fontWeight: 560 }}>{label}</span>
+      </div>
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
+        {dims.map((d) => (
+          <div key={d.key} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: TONE.muted }}>
+              <span>{d.label}</span>
+              <span>{d.val}%</span>
+            </div>
+            <div style={{ height: 5, background: TONE.accentSoft, borderRadius: 3, overflow: "hidden" }}>
+              <div
+                style={{
+                  height: "100%",
+                  width: `${Math.min(100, d.val)}%`,
+                  background: color,
+                  borderRadius: 3,
+                  transition: "width .3s ease",
+                }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** 成长曲线：把每周快照的「新增 / 使用」累计成两条面积折线，看长期成长。 */
+function GrowthChart({ snapshots, T }: { snapshots: StatsSnapshot[]; T: PLT }): ReactNode {
+  const TONE = getTone();
+  if (snapshots.length === 0) {
+    return (
+      <div style={{ padding: "14px 12px", color: TONE.quiet, fontSize: 12, textAlign: "center" }}>
+        {T("pl.stats.trendEmpty")}
+      </div>
+    );
+  }
+  let ca = 0;
+  let cu = 0;
+  const added: number[] = [];
+  const used: number[] = [];
+  snapshots.forEach((s) => {
+    ca += s.stats.addedCount;
+    cu += s.stats.usageCount;
+    added.push(ca);
+    used.push(cu);
+  });
+  const W = 340;
+  const H = 120;
+  const TOP = 8;
+  const BOT = 16;
+  const innerH = H - TOP - BOT;
+  const max = Math.max(1, ...added, ...used);
+  const n = snapshots.length;
+  const x = (i: number): number => (n === 1 ? W / 2 : (i / (n - 1)) * W);
+  const y = (v: number): number => TOP + innerH - (v / max) * innerH;
+  const linePath = (arr: number[]): string =>
+    arr.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const areaPath = (arr: number[]): string =>
+    `${linePath(arr)} L${x(n - 1).toFixed(1)},${y(0).toFixed(1)} L${x(0).toFixed(1)},${y(0).toFixed(1)} Z`;
+  const lastAdded = added[added.length - 1];
+  const lastUsed = used[used.length - 1];
+  const dayLabel = (i: number): string =>
+    new Date(snapshots[i].createdAt).toLocaleDateString(undefined, { month: "2-digit", day: "2-digit" });
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height="auto" role="img" aria-label={T("pl.stats.growthTitle")}>
+        {[0, 0.5, 1].map((f) => {
+          const yy = TOP + innerH - innerH * f;
+          return <line key={f} x1={0} x2={W} y1={yy} y2={yy} stroke={TONE.border} strokeWidth={1} />;
+        })}
+        <path d={areaPath(used)} fill={TONE.mint} opacity={0.18} />
+        <path d={linePath(used)} stroke={TONE.mint} strokeWidth={1.8} fill="none" />
+        <path d={areaPath(added)} fill={TONE.accent} opacity={0.16} />
+        <path d={linePath(added)} stroke={TONE.accent} strokeWidth={1.8} fill="none" />
+        {n > 1 && (
+          <>
+            <text x={x(0)} y={H - 4} textAnchor="start" fontSize={8} fill={TONE.quiet}>
+              {dayLabel(0)}
+            </text>
+            <text x={x(n - 1)} y={H - 4} textAnchor="end" fontSize={8} fill={TONE.quiet}>
+              {dayLabel(n - 1)}
+            </text>
+          </>
+        )}
+      </svg>
+      <div style={{ display: "flex", gap: 14, justifyContent: "center", alignItems: "center" }}>
+        <Legend color={TONE.accent} label={`${T("pl.stats.cumAdded")} · ${lastAdded}`} />
+        <Legend color={TONE.mint} label={`${T("pl.stats.cumUsed")} · ${lastUsed}`} />
+      </div>
+    </div>
+  );
+}
+
+/** 使用高峰洞察：从热力图取最高频时段 + 高频时段小榜。 */
+function PeakInsight({ heatmap, T }: { heatmap: HeatmapCell[]; T: PLT }): ReactNode {
+  const TONE = getTone();
+  if (heatmap.length === 0) {
+    return (
+      <div style={{ padding: "14px 12px", color: TONE.quiet, fontSize: 12, textAlign: "center" }}>
+        {T("pl.stats.emptyList")}
+      </div>
+    );
+  }
+  const sorted = [...heatmap].sort((a, b) => b.count - a.count);
+  const p1 = sorted[0];
+  const p2 = sorted.find((c) => !(c.weekday === p1.weekday && c.hour === p1.hour));
+  const top5 = sorted.slice(0, 5);
+  const max5 = Math.max(1, top5[0].count);
+  const hourLabel = (h: number): string => `${String(h).padStart(2, "0")}:00`;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 4,
+          padding: "9px 11px",
+          background: TONE.row,
+          border: `1px solid ${TONE.border}`,
+          borderRadius: 8,
+        }}
+      >
+        <span style={{ fontSize: 12, fontWeight: 560, color: TONE.accent }}>
+          {T("pl.stats.peakPrimary", { day: T(WEEK_KEYS[p1.weekday]), hour: hourLabel(p1.hour), n: p1.count })}
+        </span>
+        {p2 ? (
+          <span style={{ fontSize: 11, color: TONE.muted }}>
+            {T("pl.stats.peakSecondary", { day: T(WEEK_KEYS[p2.weekday]), hour: hourLabel(p2.hour) })}
+          </span>
+        ) : null}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+        {top5.map((c) => (
+          <div key={`${c.weekday}:${c.hour}`} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: TONE.muted }}>
+              <span>
+                {T(WEEK_KEYS[c.weekday])} {hourLabel(c.hour)}
+              </span>
+              <span>{c.count} {T("pl.stats.times")}</span>
+            </div>
+            <div style={{ height: 5, background: TONE.accentSoft, borderRadius: 3, overflow: "hidden" }}>
+              <div
+                style={{
+                  height: "100%",
+                  width: `${(c.count / max5) * 100}%`,
+                  background: TONE.accent,
+                  borderRadius: 3,
+                  transition: "width .3s ease",
+                }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** 词库热榜：最热标签 + 本周最热词条。 */
+function HotRank({ stats, T }: { stats: LibraryStats; T: PLT }): ReactNode {
+  const tagRows: Array<{ key: string; label: string; value: number }> = stats.tagStats
+    .slice(0, 8)
+    .map((t) => ({ key: t.name, label: t.name, value: t.count }));
+  const weekRows: Array<{ key: string; label: string; value: number }> = (stats.topUsed7 ?? []).map((p) => ({
+    key: p.title,
+    label: p.title,
+    value: p.count,
+  }));
+  return (
+    <>
+      <Section title={T("pl.stats.hotRankTags")}>
+        <BarList rows={tagRows} T={T} />
+      </Section>
+      <Section title={T("pl.stats.hotRankWeek")}>
+        <BarList rows={weekRows} T={T} />
+      </Section>
+    </>
+  );
+}
+
+/** 「洞察」视图：健康评分 + 成长曲线 + 使用高峰 + 词库热榜。 */
+function InsightSection({ data, T }: { data: PromptStatsData; T: PLT }): ReactNode {
+  useThemeSync();
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <Section title={T("pl.stats.healthTitle")}>
+        <HealthCard stats={data.stats} T={T} />
+      </Section>
+      <Section title={T("pl.stats.growthTitle")}>
+        <GrowthChart snapshots={data.snapshots} T={T} />
+      </Section>
+      <Section title={T("pl.stats.peakTitle")}>
+        <PeakInsight heatmap={data.heatmap ?? []} T={T} />
+      </Section>
+      <HotRank stats={data.stats} T={T} />
+    </div>
+  );
+}
+
 /** 统计页顶部的视图切换（胶囊式 Tab，样式对齐现有按钮）。 */
 function StatsTabBar({ active, onChange, T }: { active: StatsTab; onChange: (t: StatsTab) => void; T: PLT }): ReactNode {
   const TONE = getTone();
@@ -567,6 +809,7 @@ function StatsTabBar({ active, onChange, T }: { active: StatsTab; onChange: (t: 
     { id: "heatmap", label: T("pl.stats.tabHeatmap") },
     { id: "lifecycle", label: T("pl.stats.tabLifecycle") },
     { id: "details", label: T("pl.stats.tabDetails") },
+    { id: "insight", label: T("pl.stats.tabInsight") },
   ];
   const activeStyle: CSSProperties = {
     background: TONE.accentSoft,
@@ -730,6 +973,7 @@ export function StatsPanel({ t, onBack }: { t?: PLT; onBack?: () => void }): Rea
           {tab === "heatmap" && <HeatmapChart heatmap={data.heatmap ?? []} T={T} />}
           {tab === "lifecycle" && <LifecycleSection stats={data.stats} T={T} />}
           {tab === "details" && <StatsDetails stats={data.stats} snapshots={data.snapshots} T={T} />}
+          {tab === "insight" && <InsightSection data={data} T={T} />}
         </>
       )}
       </div>

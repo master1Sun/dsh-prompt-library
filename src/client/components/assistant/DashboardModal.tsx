@@ -3,7 +3,7 @@
  *
  * 内嵌统计可视化面板（StatsPanel），提供词库概览、近 7 天分析、每周趋势、
  * 标签分布与近期/沉睡提示词等统计视角。
- * 与其它弹窗交互保持一致：只能通过右上角关闭按钮关闭，禁止点击遮罩/外部区域关闭。
+ * 交互：点击遮罩/外部区域或右上角关闭按钮均可关闭。
  */
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -35,6 +35,7 @@ export function DashboardModal({ open, onClose, t }: Props): ReactNode {
       aria-modal="true"
       aria-label={t("pl.ctx.dashboard")}
       className={PL_DIALOG_OVERLAY}
+      onClick={onClose}
     >
       <style>{PL_DIALOG_CSS}</style>
       <div

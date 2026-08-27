@@ -7,8 +7,7 @@
  * - 成就区块：奖牌墙（每项一枚圆形奖牌，已解锁金色奖杯 / 未解锁灰色锁）。
  *
  * 数据来自 host 的 `/assistant/status`（等级、成就均已按系统语言翻译）。
- * 与其它弹窗交互保持一致：只能通过右上角关闭按钮或底部「知道了」按钮关闭，
- * 禁止点击遮罩/外部区域关闭。
+ * 交互：点击遮罩/外部区域、右上角关闭按钮或底部「知道了」按钮均可关闭。
  */
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -308,13 +307,40 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
     };
   }, [open, lang]);
 
-  if (!open) return null;
-
   const level = status?.level;
   const achievements = status?.achievements ?? [];
   const achievedCount = achievements.filter((a) => a.achieved).length;
   const summary = status?.achievementSummary;
   const overallPct = summary && summary.total > 0 ? Math.round((summary.unlocked / summary.total) * 100) : 0;
+
+  // 近期待解锁：未解锁且进度 ≥ 60% 的成就，按完成度降序取前 4
+  const upNext = useMemo(() => {
+    return achievements
+      .filter((a) => !a.achieved && a.target > 0 && a.progress / a.target >= 0.6)
+      .sort((x, y) => y.progress / y.target - x.progress / x.target)
+      .slice(0, 4);
+  }, [achievements]);
+
+  // 成就稀有度筛选（all = 全部）
+  const [filter, setFilter] = useState<"all" | AssistantAchievement["rarity"]>("all");
+  // 各稀有度的收集完成度统计（仅统计存在该稀有度成就的档位）
+  const RARITIES: AssistantAchievement["rarity"][] = ["common", "rare", "epic", "legendary"];
+  const rarityStats = useMemo(
+    () =>
+      RARITIES.map((r) => {
+        const list = achievements.filter((a) => a.rarity === r);
+        return { rarity: r, total: list.length, unlocked: list.filter((a) => a.achieved).length };
+      }).filter((s) => s.total > 0),
+    [achievements],
+  );
+
+  // 按当前稀有度筛选后的成就列表与解锁数
+  const filteredAchievements =
+    filter === "all" ? achievements : achievements.filter((a) => a.rarity === filter);
+  const filteredAchieved = filteredAchievements.filter((a) => a.achieved).length;
+
+  // 关闭时不渲染弹窗。注意：该提前返回必须位于所有 hooks 之后，避免渲染期间 hook 数量变化（React #310）
+  if (!open) return null;
 
   return createPortal(
     <div
@@ -322,6 +348,7 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
       aria-modal="true"
       aria-label={t("pl.achievements.title")}
       className={PL_DIALOG_OVERLAY}
+      onClick={onClose}
     >
       <style>{PL_DIALOG_CSS}</style>
       <div
@@ -510,10 +537,18 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
                       {t("pl.achievements.decayed").replace("{days}", String(level.inactiveDays))}
                     </div>
                   )}
+                  {/* 距上一档的衰减警示：已衰减且非初始档时，提示距再回落还有多少积分空间 */}
+                  {level.decayed && level.level > 1 && level.dropGap !== undefined && level.prevTitle && (
+                    <div style={{ fontSize: 11.5, color: TONE.red, fontWeight: 500 }}>
+                      {t("pl.achievements.dropGap")
+                        .replace("{prev}", level.prevTitle)
+                        .replace("{n}", String(level.dropGap))}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
-            {/* 满级解锁「词库助手」开关的激励提示：未满级激励升级，满级提示已解锁 */}
+            {/* 等级激励提示（彩蛋式）：未满级以神秘语气激励升级，满级告知尘封惊喜已苏醒 */}
             {level && (
               <div
                 style={{
@@ -545,15 +580,119 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
             )}
           </section>
 
+          {/* 近期待解锁：进度最高的未解锁成就，增强目标感 */}
+          {status && upNext.length > 0 && (
+            <section>
+              <div style={{ ...sectionTitleStyle, display: "flex", alignItems: "center" }}>
+                <span style={{ flex: 1 }}>{t("pl.achievements.upNext")}</span>
+                <span style={{ fontSize: 11, color: TONE.quiet, fontWeight: 500 }}>
+                  {t("pl.achievements.collected").replace("{n}", String(achievedCount))} · {achievedCount} /{" "}
+                  {achievements.length}
+                </span>
+              </div>
+              <ul
+                style={{
+                  margin: 0,
+                  padding: 0,
+                  listStyle: "none",
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(248px, 1fr))",
+                  gap: 8,
+                }}
+              >
+                {upNext.map((a) => (
+                  <AchievementCard key={a.id} achievement={a} t={t} TONE={TONE} />
+                ))}
+              </ul>
+            </section>
+          )}
+
           {/* 成就奖牌墙：标题行含解锁计数 */}
           <section>
             <div style={{ ...sectionTitleStyle, display: "flex", alignItems: "center" }}>
               <span style={{ flex: 1 }}>{t("pl.achievements.title")}</span>
               <span style={{ fontSize: 11, color: TONE.quiet, fontWeight: 500 }}>
                 {t("pl.achievements.count")
-                  .replace("{n}", String(achievedCount))
-                  .replace("{total}", String(achievements.length))}
+                  .replace("{n}", String(filteredAchieved))
+                  .replace("{total}", String(filteredAchievements.length))}
               </span>
+            </div>
+            {/* 按稀有度分组的收集完成度统计条 */}
+            {rarityStats.length > 0 && (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 7,
+                  margin: "2px 0 10px",
+                  padding: "10px 11px",
+                  borderRadius: 9,
+                  background: TONE.row,
+                  border: `1px solid ${TONE.border}`,
+                }}
+              >
+                {rarityStats.map((s) => {
+                  const c = RARITY_COLORS[s.rarity] ?? RARITY_COLORS.common;
+                  const p = s.total > 0 ? Math.round((s.unlocked / s.total) * 100) : 0;
+                  return (
+                    <div key={s.rarity} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5 }}>
+                      <span style={{ width: 44, flexShrink: 0, color: c.text, fontWeight: 600 }}>
+                        {rarityLabel(s.rarity, t)}
+                      </span>
+                      <div
+                        style={{
+                          flex: 1,
+                          height: 6,
+                          borderRadius: 3,
+                          background: TONE.panel,
+                          border: `1px solid ${TONE.border}`,
+                          overflow: "hidden",
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: `${p}%`,
+                            height: "100%",
+                            borderRadius: 3,
+                            background: `linear-gradient(90deg, ${c.base}, ${c.high})`,
+                            transition: "width .3s ease",
+                          }}
+                        />
+                      </div>
+                      <span style={{ flexShrink: 0, color: TONE.quiet, fontWeight: 600, whiteSpace: "nowrap" }}>
+                        {s.unlocked}/{s.total}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {/* 稀有度筛选 tab */}
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "0 0 10px" }}>
+              {(["all", ...RARITIES] as ("all" | AssistantAchievement["rarity"])[]).map((r) => {
+                const active = filter === r;
+                const c = r === "all" ? { deep: TONE.accent, border: TONE.border } : RARITY_COLORS[r] ?? RARITY_COLORS.common;
+                return (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => setFilter(r)}
+                    style={{
+                      padding: "3px 10px",
+                      borderRadius: 999,
+                      fontSize: 11.5,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      border: `1px solid ${active ? c.deep : TONE.border}`,
+                      color: active ? "#fff" : TONE.quiet,
+                      background: active ? c.deep : TONE.row,
+                      transition: "background .16s ease, color .16s ease, border-color .16s ease",
+                    }}
+                  >
+                    {r === "all" ? t("pl.achievements.all") : rarityLabel(r, t)}
+                  </button>
+                );
+              })}
             </div>
             {!status ? (
               <div
@@ -570,7 +709,7 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
               >
                 {t("pl.achievements.loading")}
               </div>
-            ) : achievements.length === 0 ? (
+            ) : filteredAchievements.length === 0 ? (
               <div
                 style={{
                   fontSize: 12.5,
@@ -595,7 +734,7 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
                   gap: 8,
                 }}
               >
-                {achievements.map((a) => (
+                {filteredAchievements.map((a) => (
                   <AchievementCard key={a.id} achievement={a} t={t} TONE={TONE} />
                 ))}
               </ul>

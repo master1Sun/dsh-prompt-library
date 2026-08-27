@@ -400,6 +400,10 @@ export interface AssistantLevel {
   decayed?: boolean;
   /** 距上次使用的天数（本地时区），用于解释回落原因。 */
   inactiveDays?: number;
+  /** 距回落到上一档的净积分差（level>1 时有效，否则 0）。 */
+  dropGap?: number;
+  /** 上一档称号（按语言；level=1 时为空串）。 */
+  prevTitle?: string;
 }
 
 /** 词库助手单条成就（含稀有度、进度与分值）。 */
@@ -487,6 +491,53 @@ export function getAnnouncement(lang?: string): Promise<AnnouncementData> {
     ? `/api/prompt-library/announcement?lang=${encodeURIComponent(lang)}`
     : "/api/prompt-library/announcement";
   return send<AnnouncementData>("GET", url);
+}
+
+// ── 公告报纸「今日」动态（每日日报 + 科技快讯）──────────────────────────
+
+/** 报纸「今日词库日报」单条。 */
+export interface DailyReportItem {
+  /** 醒目短标题。 */
+  headline: string;
+  /** 一句话展开说明。 */
+  body: string;
+}
+
+/** 报纸「今日科技快讯」单条。 */
+export interface TechNewsItem {
+  /** 新闻标题。 */
+  title: string;
+  /** 一句话摘要。 */
+  summary: string;
+  /** 原文链接（IT之家链接；AI 回退/缺失时可能为空）。 */
+  url: string;
+}
+
+/** 报纸「今日/历史」一期动态内容。 */
+export interface DailyExtras {
+  /** 语言（zh / en）。 */
+  lang: "zh" | "en";
+  /** 内容日期 YYYY-MM-DD（本地时区）。 */
+  date: string;
+  /** 每日日报要点；不可用或失败时为 null（显示「今日暂无推荐」）。 */
+  report: DailyReportItem[] | null;
+  /** 科技快讯条目；不可用或失败时为 null（显示「今日暂无推荐」）。 */
+  news: TechNewsItem[] | null;
+  /** 科技快讯来源：本地成就速报。 */
+  newsSource?: "achievement" | null;
+  /** 所有已存档报纸日期（时间倒序，最新在前），用于历史翻页导航。 */
+  availableDates: string[];
+  /** 当期是否为今天。 */
+  isToday: boolean;
+}
+
+/** 拉取公告报纸某一期（date 省略取今天；lang 可省略默认 zh）。 */
+export function getAnnouncementDaily(lang?: string, date?: string): Promise<DailyExtras> {
+  const params: string[] = [];
+  if (lang) params.push(`lang=${encodeURIComponent(lang)}`);
+  if (date) params.push(`date=${encodeURIComponent(date)}`);
+  const qs = params.length > 0 ? `?${params.join("&")}` : "";
+  return send<DailyExtras>("GET", `/api/prompt-library/announcement/daily${qs}`);
 }
 
 // ── 词库统计（供统计可视化面板）────────────────────────────────────────

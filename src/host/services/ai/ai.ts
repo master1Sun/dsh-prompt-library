@@ -769,6 +769,105 @@ export async function generateIntro(
   return lines.slice(0, 5);
 }
 
+/** 报纸「今日词库日报」单条。 */
+export interface DailyReportItem {
+  /** 醒目短标题（10 字内）。 */
+  headline: string;
+  /** 一句话展开说明（40 字内）。 */
+  body: string;
+}
+
+/** 报纸「今日科技快讯」单条。 */
+export interface TechNewsItem {
+  /** 新闻标题。 */
+  title: string;
+  /** 一句话摘要。 */
+  summary: string;
+  /** 新闻原文链接（AI 自选权威科技媒体地址）。 */
+  url: string;
+}
+
+/** 从 AI 输出里解析 JSON 数组（容忍 ```json 包裹与首尾杂质），解析失败返回 undefined。 */
+function parseJsonArray(text: string): unknown[] | undefined {
+  const t = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+  const start = t.indexOf("[");
+  const end = t.lastIndexOf("]");
+  if (start < 0 || end <= start) return undefined;
+  try {
+    const v = JSON.parse(t.slice(start, end + 1));
+    return Array.isArray(v) ? v : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 当前本地日期 YYYY-MM-DD（本地时区），用于日报/新闻的「今日」语义与缓存键。 */
+export function todayLocalDate(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * 依据「当日词库使用统计」文本调用 AI 生成「今日词库日报」要点列表。
+ * 供公告报纸「每日日报」栏目；AI 不可用或失败时返回 undefined（前端显示「今日暂无推荐」）。
+ */
+export async function generateDailyReport(
+  statsText: string,
+  settings: PluginSettings,
+  lang: "zh" | "en" = "zh",
+): Promise<DailyReportItem[] | undefined> {
+  if (!llm) return undefined;
+  const candidates = await resolveCandidates(llm, settings);
+  if (candidates.length === 0) return undefined;
+  const zhMode = lang !== "en";
+  const system = zhMode
+    ? [
+        "你是一名「词库日报」编辑，根据当日的词库使用数据，为使用者撰写一份简明、有温度的今日词库日报。",
+        "",
+        "要求：",
+        "- 基于给出的统计数据，提炼 3~5 条核心要点（不宜过多）；",
+        "- 每条要点为一个 JSON 对象 { headline, body }：headline 是 10 字以内的醒目短标题，body 是一句话展开说明（40 字内）；",
+        "- 语气自然亲切、接地气，避免套话与空洞鼓励；",
+        "- 只输出一个 JSON 数组，例如 [{\"headline\":\"使用渐入佳境\",\"body\":\"今日共使用 12 次提示词，较此前更频繁。\"}]；不要任何解释或 Markdown 代码块。",
+      ].join("\n")
+    : [
+        "You are the editor of a \"daily library report\" (词库日报). Based on today's library usage data, write a brief and warm report for the user.",
+        "",
+        "Requirements:",
+        "- Distill 3-5 core points from the given stats (not too many);",
+        "- Each point is a JSON object { headline, body }: headline is a punchy short title (within 10 words), body is a one-sentence explanation (within 40 words);",
+        "- Keep the tone natural, friendly and down-to-earth; avoid clichés and empty praise;",
+        "- Output only a JSON array, e.g. [{\"headline\":\"Usage on the rise\",\"body\":\"Used 12 prompts today, more than before.\"}]; no explanation or Markdown fences.",
+        "- IMPORTANT: reply entirely in English, even though the stats may be described in Chinese.",
+      ].join("\n");
+  const text = await collectTextWithFallback(
+    llm,
+    candidates,
+    system,
+    zhMode
+      ? `以下是今日词库的统计数据：\n\n${statsText}`
+      : `Here are today's library usage stats:\n\n${statsText}\n\nWrite the daily report in English.`,
+  );
+  if (!text) return undefined;
+  const arr = parseJsonArray(text);
+  if (!arr) return undefined;
+  const items: DailyReportItem[] = [];
+  for (const x of arr) {
+    if (typeof x !== "object" || x === null) continue;
+    const o = x as Record<string, unknown>;
+    const headline = String(o.headline ?? "").trim();
+    const body = String(o.body ?? "").trim();
+    if (!headline || !body) continue;
+    items.push({ headline, body });
+  }
+  if (items.length === 0) return undefined;
+  logAI(aiLogCopy().introDone(items.length));
+  return items.slice(0, 5);
+}
+
 /** 由 AI 依据提示词内容生成的技能描述符。 */
 export interface SkillDescriptor {
   name: string;

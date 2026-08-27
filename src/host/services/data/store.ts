@@ -122,6 +122,18 @@ function getDb(): DatabaseSync {
       updatedAt INTEGER NOT NULL
     );
   `);
+  // 等级积分账本：记录每一笔积分事件（使用/AI完善/自学习/新增收藏/每日活跃），
+  // 供词库助手等级积分制「每日加积分 + 长期未用时按周期衰减」使用。
+  next.exec(`
+    CREATE TABLE IF NOT EXISTS pl_points_log (
+      id        INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind      TEXT NOT NULL,
+      points    INTEGER NOT NULL,
+      createdAt INTEGER NOT NULL,
+      dayKey    TEXT NOT NULL
+    );
+  `);
+  next.exec("CREATE INDEX IF NOT EXISTS idx_pl_points_createdAt ON pl_points_log (createdAt)");
   // 统计历史表：每 7 天自动生成的词库统计快照（含 AI 点评）。
   next.exec(`
     CREATE TABLE IF NOT EXISTS stats_history (
@@ -155,6 +167,9 @@ function getDb(): DatabaseSync {
   // 首次使用（词库为空）时写入一条默认提示词与标签，作为上手引导。
   seedDefaultPromptIfEmpty(next);
   db = next;
+  // 一次性回填等级积分账本：从历史记录折算历史积分，保证老用户升级积分制后等级不回退。
+  // 之后只按新增活动实时累计，不再重复回填。
+  seedPointsLedger(next);
   // 一次性迁移历史 JSON 数据（失败静默，不影响使用）。
   migrateLegacyJsonIfNeeded().catch(() => {});
   return next;
@@ -689,6 +704,8 @@ export function createPrompt(input: {
       );
     // 用用户配置的真实上限做后台淘汰（getSettingsSync 只回默认值）
     void getSettings().then((s) => enforceMaxCount(s.maxPromptCount, s.autoLearnTag));
+    // 等级积分：新增收藏 +1
+    void addPoints("collect");
     return Promise.resolve(prompt);
   } catch (e) {
     return Promise.reject(e);
@@ -757,6 +774,8 @@ export function updatePrompt(
         next.lastUsedAt,
         id,
       );
+    // 等级积分：首次 AI 完善时 +3（重复完善不加，只记一次）
+    if (aiRefined && !current.aiRefined) void addPoints("ai");
     return Promise.resolve(next);
   } catch (e) {
     return Promise.reject(e);
@@ -776,6 +795,8 @@ export function recordUsage(id: string): Promise<Prompt | undefined> {
       .run(ts, ts, id);
     // 写入使用历史，供每周统计精确统计「近 7 天使用次数 / 活跃提示词 / 最常使用」
     cur.prepare("INSERT INTO usage_log (promptId, usedAt) VALUES (?, ?)").run(id, ts);
+    // 等级积分：使用 +1
+    void addPoints("use");
     const row = cur.prepare("SELECT * FROM prompts WHERE id = ?").get(id) as unknown as PromptRow | undefined;
     if (!row) return Promise.resolve(undefined);
     return Promise.resolve(rowToPrompt(row));
@@ -953,6 +974,8 @@ export function autoLearn(body: string, tag?: string, skipEnrich?: boolean): Pro
       .run(prompt.id, prompt.title, prompt.body, tagsToJson(prompt.tags), prompt.aiRefined ? 1 : 0, now, 0, 0, now);
     // 用用户配置的真实上限做后台淘汰（getSettingsSync 只回默认值）
     void getSettings().then((s) => enforceMaxCount(s.maxPromptCount, s.autoLearnTag));
+    // 等级积分：自动学习入库 +2（仅新入库时记；近似去重/回收站恢复不重复记）
+    void addPoints("learn");
     void continueEnrich(prompt, !!skipEnrich);
     emitDataChanged();
     return Promise.resolve(prompt);
@@ -1660,6 +1683,124 @@ export async function computeInactiveDays(): Promise<number> {
     const lastUTC = Date.UTC(last.getFullYear(), last.getMonth(), last.getDate());
     const diff = Math.floor((todayUTC - lastUTC) / (24 * 60 * 60 * 1000));
     return diff < 0 ? 0 : diff;
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+// ── 等级积分账本（词库助手等级积分制）───────────────────────────────────
+
+/**
+ * 一次性回填等级积分账本：从历史记录折算历史积分。
+ * - 使用：每 fs.count 次计 1 分（避免历史海量使用把等级拉爆，按比例折算）
+ * - AI 完善：每条 +3
+ * - 自动学习：每条（auto-learned 标签）+2
+ * - 新增收藏：每条 +1（按总词条数，过长库按比例折算）
+ * 已回填过则跳过（幂等）。
+ */
+function seedPointsLedger(cur: DatabaseSync): void {
+  try {
+    if (getMetaValue("pl:points-seeded") === "1") return;
+    const now = Date.now();
+    const day = localDayKey(now);
+    const all = (cur.prepare("SELECT * FROM prompts").all() as unknown as PromptRow[]).map(rowToPrompt) ?? [];
+    const useCount = cur
+      .prepare("SELECT COALESCE(SUM(usageCount), 0) AS c FROM prompts")
+      .get() as { c: number };
+    // 历史使用次数按每 3 次折算 1 分，兼顾留存与避免刷量放大；其余维度按条计
+    const usePoints = Math.min(2000, Math.round((useCount?.c ?? 0) / 3));
+    const aiPoints = all.filter((p) => p.aiRefined).length * POINTS_WEIGHT.ai;
+    const learnPoints = all.filter((p) => (p.tags ?? []).includes("auto-learned")).length * POINTS_WEIGHT.learn;
+    const collectPoints = Math.min(500, all.length * POINTS_WEIGHT.collect);
+    const insert = cur.prepare(
+      "INSERT INTO pl_points_log (kind, points, createdAt, dayKey) VALUES (?, ?, ?, ?)",
+    );
+    const cap = (kind: PointsKind, c: number) => {
+      for (let i = 0; i < c; i++) insert.run(kind, POINTS_WEIGHT[kind], now - i, day);
+    };
+    cap("ai", aiPoints > 0 ? Math.ceil(aiPoints / POINTS_WEIGHT.ai) : 0);
+    cap("learn", learnPoints > 0 ? Math.ceil(learnPoints / POINTS_WEIGHT.learn) : 0);
+    cap("collect", collectPoints > 0 ? Math.ceil(collectPoints / POINTS_WEIGHT.collect) : 0);
+    cap("use", usePoints > 0 ? usePoints : 0);
+    setMetaValue("pl:points-seeded", "1");
+  } catch {
+    /* 回填失败不影响使用，下次重启重试 */
+  }
+}
+
+/** 积分事件类型。 */
+export type PointsKind = "use" | "ai" | "learn" | "collect" | "active";
+
+/** 各维度单次基础权重：使用 +1 · AI完善 +3 · 自学习 +2 · 新增收藏 +1 · 每日活跃 +2。 */
+export const POINTS_WEIGHT: Record<PointsKind, number> = {
+  use: 1,
+  ai: 3,
+  learn: 2,
+  collect: 1,
+  active: 2,
+};
+
+/** 记入一笔积分事件（自动处理「每日活跃」加成：当天首笔任意活动额外加活跃分）。 */
+export function addPoints(kind: PointsKind): Promise<void> {
+  try {
+    const cur = getDb();
+    const now = Date.now();
+    const day = localDayKey(now);
+    const base = POINTS_WEIGHT[kind];
+    cur
+      .prepare("INSERT INTO pl_points_log (kind, points, createdAt, dayKey) VALUES (?, ?, ?, ?)")
+      .run(kind, base, now, day);
+    // 当天首次活动：额外计入「每日活跃」+2，驱动持续使用而非一次高强度刷量
+    const todayActive = cur
+      .prepare("SELECT COUNT(*) AS c FROM pl_points_log WHERE kind = 'active' AND dayKey = ?")
+      .get(day) as { c: number };
+    if (todayActive.c === 0) {
+      cur
+        .prepare("INSERT INTO pl_points_log (kind, points, createdAt, dayKey) VALUES ('active', ?, ?, ?)")
+        .run(POINTS_WEIGHT.active, now, day);
+    }
+    return Promise.resolve();
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+/** 等级积分账本快照：累计积分、按「连续未活跃周期」的衰减量、净积分与未活跃天数。 */
+export interface PointsSnapshot {
+  /** 原始累计积分（不衰减）。 */
+  gross: number;
+  /** 因长期未活跃而产生的衰减扣分。 */
+  decay: number;
+  /** 净积分 = gross - decay（等级按此分档），不低于 0。 */
+  net: number;
+  /** 距最近一次积分事件的天数（本地时区），用于解释衰减。 */
+  inactiveDays: number;
+  /** 最近一次积分事件时间戳，无记录时为 0。 */
+  lastActiveAt: number;
+}
+
+/** 每连续未活跃周期（10 天）衰减的固定分值。 */
+const POINT_DECAY_CYCLE_DAYS = 10;
+const POINT_DECAY_PER_CYCLE = 3;
+
+/**
+ * 计算等级积分账本快照。
+ * 衰减规则：自最近一笔积分事件起，每连续 10 天未产生任何活动，扣 3 分；净积分低于 0 归 0。
+ */
+export async function computePoints(): Promise<PointsSnapshot> {
+  try {
+    const cur = getDb();
+    const sumRow = cur.prepare("SELECT COALESCE(SUM(points), 0) AS s FROM pl_points_log").get() as { s: number };
+    const lastRow = cur
+      .prepare("SELECT MAX(createdAt) AS last FROM pl_points_log")
+      .get() as { last: number | null };
+    const gross = sumRow?.s ?? 0;
+    const lastActiveAt = lastRow?.last ?? 0;
+    const inactiveDays =
+      lastActiveAt > 0 ? Math.max(0, Math.floor((Date.now() - lastActiveAt) / (24 * 60 * 60 * 1000))) : 0;
+    const decay = Math.floor(inactiveDays / POINT_DECAY_CYCLE_DAYS) * POINT_DECAY_PER_CYCLE;
+    const net = Math.max(0, gross - decay);
+    return Promise.resolve({ gross, decay, net, inactiveDays, lastActiveAt });
   } catch (e) {
     return Promise.reject(e);
   }

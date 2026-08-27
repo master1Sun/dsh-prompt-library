@@ -213,11 +213,15 @@ function useChatWindow(panelRef: { current: HTMLElement | null }): {
   return rect;
 }
 
-function useSettings(): PluginSettings {
+function useSettings(): { settings: PluginSettings; ready: boolean } {
   const [settings, setSettings] = useState<PluginSettings>(DEFAULT_SETTINGS);
+  const [ready, setReady] = useState(false);
 
   const load = useCallback(() => {
-    apiGetSettings().then(setSettings).catch(() => {});
+    apiGetSettings().then((s) => {
+      setSettings(s);
+      setReady(true);
+    }).catch(() => {});
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -226,14 +230,16 @@ function useSettings(): PluginSettings {
   useEffect(() => {
     const onChanged = (e: Event) => {
       const detail = (e as CustomEvent).detail as PluginSettings | undefined;
-      if (detail) setSettings(detail);
-      else load();
+      if (detail) {
+        setSettings(detail);
+        setReady(true);
+      } else load();
     };
     window.addEventListener("pl:settings-changed", onChanged);
     return () => window.removeEventListener("pl:settings-changed", onChanged);
   }, [load]);
 
-  return settings;
+  return { settings, ready };
 }
 
 export function SidebarPromptLibrary(props?: {
@@ -243,7 +249,7 @@ export function SidebarPromptLibrary(props?: {
 }): ReactNode {
   const { inputActions, draft, t } = props ?? {};
   const T = usePLT(t);
-  const settings = useSettings();
+  const { settings, ready: settingsReady } = useSettings();
   // 浮动面板状态：位置/尺寸/折叠持久化到 localStorage；默认折叠，显示助手
   const [float, setFloat] = useState<FloatState>(loadFloatState);
   const collapsed = float.collapsed;
@@ -875,6 +881,7 @@ export function SidebarPromptLibrary(props?: {
       <PromptAssistant
           t={T}
           settings={settings}
+          settingsReady={settingsReady}
           onTogglePanel={() => updateFloat({ collapsed: !float.collapsed })}
         />
         <section

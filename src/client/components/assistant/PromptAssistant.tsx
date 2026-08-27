@@ -14,6 +14,7 @@ import {
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
@@ -32,6 +33,7 @@ import { useThemeSync } from "../../utils/theme.js";
 import { AnnouncementModal } from "./AnnouncementModal.js";
 import { AchievementModal } from "./AchievementModal.js";
 import { PersonaManagerModal } from "./PersonaManagerModal.js";
+import { WhaleStage } from "./WhaleStage.js";
 import { DashboardModal } from "./DashboardModal.js";
 import { ImportExportModal } from "../settings/modules/ImportExportModal.js";
 import { TagsModal } from "../settings/modules/TagsModal.js";
@@ -142,8 +144,10 @@ function saveMood(m: { happy: number; sad: number }): void {
 
 interface Props {
   t?: PLTranslate;
-  /** 冒泡频率/时长设置；缺省时用默认值。 */
+  /** 冒泡频率/时长设置；加载完成前为占位默认值，配合 settingsReady 区分真实值是否已就绪。 */
   settings?: PluginSettings;
+  /** 设置是否已从 host 拉取完成。未就绪前不渲染助手形象，避免初始化时闪默认款（米兔）。 */
+  settingsReady?: boolean;
   /** 打开/收起右侧面板的回调（仅右键菜单「打开工具面板」触发；左键不联动面板）。 */
   onTogglePanel?: () => void;
 }
@@ -192,8 +196,19 @@ function loadPos(): Pos {
   return def;
 }
 
+/** 成就解锁彩带配置：左偏移 / 下落距离 / 旋转 / 延迟 / 颜色（模块级固定，避免重渲染抖动）。 */
+const CONFETTI_COLORS = ["#f59e0b", "#8b5cf6", "#3b82f6", "#22c55e", "#f43f5e", "#06b6d4", "#facc15"];
+const CONFETTI_PIECES: Array<{ left: string; fall: number; spin: number; delay: number; color: string }> =
+  Array.from({ length: 12 }, (_, i) => ({
+    left: `${8 + i * 8.5}%`,
+    fall: 60 + ((i * 13) % 50),
+    spin: (i % 2 === 0 ? 1 : -1) * (240 + ((i * 47) % 320)),
+    delay: 0 + ((i * 90) % 320) / 1000,
+    color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+  }));
+
 export function PromptAssistant(props: Props): ReactNode {
-  const { t, settings, onTogglePanel } = props;
+  const { t, settings, settingsReady, onTogglePanel } = props;
   const T = usePLT(t);
   // 当前是否黑夜模式：等级徽章等硬编码高对比色需随主题切换
   const dark = useThemeSync();
@@ -568,12 +583,16 @@ export function PromptAssistant(props: Props): ReactNode {
       kind: "tap",
       text: msgs[Math.floor(Math.random() * msgs.length)],
     });
+    setClickRev((c) => c + 1); // 触发鲸鱼点击回应动画
   }, [showToast]);
 
   // ── 雪碧图助手：把蓝脸助手渲染成运行时生成的雪碧图，用 background-position 帧播放 ──
   // 轨道 = 行、帧 = 列，配合每轨道时长与阶段序列实现帧播放；鼠标移入播放打招呼小动画。
   // 差异化按「等级-主题-心情」组合生成，任一变化时重新取对应雪碧图（内部按组合缓存）。
+  // 动效鲸鱼（dshpet）走 WhaleStage 的 dsh-pet webm 双缓冲 video；素材失败时回退此处经典雪碧图。
   const [sheet, setSheet] = useState<SpriteSheet | null>(null);
+  const [whaleBroken, setWhaleBroken] = useState(false); // 鲸鱼 webm 加载失败时回退经典助手
+  const [clickRev, setClickRev] = useState(0); // 鲸鱼点击回应动画触发计数
   const spriteRef = useRef<HTMLDivElement | null>(null);
   // 鼠标是否悬停在助手上：悬停时播放打招呼序列（小动画）
   const [hovering, setHovering] = useState(false);
@@ -582,28 +601,30 @@ export function PromptAssistant(props: Props): ReactNode {
   // 等级助手关闭时不展示任何等级差异化（身体回到底色、无星章、无 Lv 徽章）
   const levelEnabled = settings?.levelEnabled ?? DEFAULT_SETTINGS.levelEnabled;
   const spriteLevel = levelEnabled ? status?.level?.level : undefined;
-  // 助手款型：经典米兔 / 哈士奇（程序化）+ 鲸鱼款（静态素材）。鲸鱼款沿用全部轨道语义。
+  // 助手款型：经典米兔（程序化）/ 鲸鱼款·静态（whale）/ 鲸鱼款·动效（dsh-pet webm）。
   const character: PetCharacter = settings?.assistantCharacter ?? DEFAULT_SETTINGS.assistantCharacter;
-  // 程序化款型按「款型-等级-主题-心情」差异化；鲸鱼款不参与（走静态素材）。
+  // 经典与鲸鱼·静态都走雪碧图渲染：经典按「款型-等级-主题-心情」差异化生成；
+  // 鲸鱼·静态用随包分发的静态素材；动效鲸鱼（dshpet）仅保留经典底作为 webm 失败回退。
   const spriteOpts = useMemo<SpriteOptions>(
     () => ({
-      character: character === "whale" ? "classic" : character,
+      character: "classic",
       level: spriteLevel,
       topic: spriteTopic,
       mood,
     }),
-    [character, spriteLevel, spriteTopic, mood],
+    [spriteLevel, spriteTopic, mood],
   );
   useEffect(() => {
     let alive = true;
-    const load = character === "whale" ? getWhaleSpriteSheet() : getSpriteSheet(spriteOpts);
+    const load =
+      character === "whale" ? getWhaleSpriteSheet() : getSpriteSheet(spriteOpts);
     load
       .then((s) => {
         if (!alive) return;
         if (s === null) return;
         setSheet(s);
       })
-      // 鲸鱼素材加载失败时回退：清空雪碧图，保持经典助手不打断现有展示
+      // 经典雪碧图生成失败时回退：清空，保持经典 SVG 不打断现有展示
       .catch(() => {
         if (alive) setSheet(null);
       });
@@ -1022,6 +1043,7 @@ export function PromptAssistant(props: Props): ReactNode {
 @keyframes pl-person-bob { 0%,100% { transform: translateY(0) scale(1,1); } 50% { transform: translateY(-5px) scale(1.03,.97); } }
 @keyframes pl-person-shadow { 0%,100% { transform: scaleX(1); opacity: .22; } 50% { transform: scaleX(.82); opacity: .14; } }
 @keyframes pl-person-blink { 0%,88%,100% { transform: scaleY(1); } 94% { transform: scaleY(.08); } }
+@keyframes pl-person-talk { 0%,100% { transform: scaleY(.22); } 20% { transform: scaleY(.9); } 40% { transform: scaleY(.3); } 60% { transform: scaleY(1); } 80% { transform: scaleY(.26); } }
 @keyframes pl-bubble-in { from { opacity: 0; transform: translateY(6px) scale(.9); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes pl-bubble-intro { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
@@ -1047,6 +1069,11 @@ export function PromptAssistant(props: Props): ReactNode {
 .pl-ctx-sub:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, .12)); }
 .pl-ctx-sub:active { background: var(--dsw-alias-interactive-bg-active, rgba(127, 127, 127, .2)); transform: scale(.97); }
 .pl-ctx-ic { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 7px; flex-shrink: 0; }
+/* 成就解锁彩带：细条从气泡顶部两侧飘落，配合摆动与淡出 */
+@keyframes pl-confetti-fall { 0% { transform: translateY(0) rotate(0deg); opacity: 1; } 100% { transform: translateY(var(--fall, 84px)) rotate(var(--spin, 300deg)); opacity: 0; } }
+.pl-confetti { position: absolute; top: -6px; width: 6px; height: 11px; border-radius: 2px; pointer-events: none; animation: pl-confetti-fall 1.1s cubic-bezier(.2,.6,.4,1) forwards; }
+@keyframes pl-shine-pop { 0%,30% { opacity: 0; transform: rotate(var(--tilt, -20deg)) scale(.5); } 45% { opacity: 1; transform: rotate(var(--tilt, -20deg)) scale(1.15); } 60%,100% { opacity: 0; transform: rotate(var(--tilt, -20deg)) scale(1); } }
+.pl-shine { position: absolute; width: 34px; height: 34px; left: 50%; top: 2px; margin-left: -17px; pointer-events: none; color: #fde68a; filter: drop-shadow(0 0 6px rgba(245,158,11,.7)); animation: pl-shine-pop 1s ease forwards; }
 `}</style>
       {/* 助手：始终显示，可独立拖动，悬停显示气泡；点击回调由父级决定是否联动面板 */}
       {/* 用 React Portal 渲染到 document.body：既突破祖先层叠/transform 容器显示在最上层，
@@ -1119,6 +1146,32 @@ export function PromptAssistant(props: Props): ReactNode {
             >
               {toast ? (
                 <>
+                  {/* 成就解锁彩带特效：顶部闪光星 + 两侧飘落彩带（仅成就解锁时） */}
+                  {toast.kind === "achievement" && (
+                    <>
+                      {CONFETTI_PIECES.map((c, i) => (
+                        <span
+                          key={i}
+                          className="pl-confetti"
+                          style={
+                            {
+                              left: c.left,
+                              background: c.color,
+                              boxShadow: `0 0 4px ${c.color}`,
+                              animationDelay: `${c.delay}s`,
+                              "--fall": `${c.fall}px`,
+                              "--spin": `${c.spin}deg`,
+                            } as CSSProperties
+                          }
+                        />
+                      ))}
+                      <div className="pl-shine" aria-hidden="true">
+                        <svg width="34" height="34" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M12 1l2.6 6.5L21 9l-5 4.3 1.5 6.7L12 16.9 6.5 20l1.5-6.7L3 9l6.4-1.5z" />
+                        </svg>
+                      </div>
+                    </>
+                  )}
                   {/* 临时提示：成就解锁 / 点击互动 */}
                   {toast.title && (
                     <div
@@ -1285,7 +1338,17 @@ export function PromptAssistant(props: Props): ReactNode {
               pointerEvents: "none",
             }}
           >
-            {sheet ? (
+            {settingsReady &&
+            (character === "dshpet" && !whaleBroken ? (
+              /* 鲸鱼款·动效：dsh-pet webm 双缓冲 video 动效；加载失败回退下方经典雪碧图/SVG */
+              <WhaleStage
+                phase={activity.phase}
+                hovering={hovering}
+                clickRev={clickRev}
+                size={PERSON_SIZE}
+                onFail={() => setWhaleBroken(true)}
+              />
+            ) : sheet ? (
               <div
                 ref={spriteRef}
                 style={{
@@ -1305,64 +1368,6 @@ export function PromptAssistant(props: Props): ReactNode {
                     "drop-shadow(0 2px 7px color-mix(in srgb, var(--dsw-alias-label-primary, #1f2937) 45%, transparent))",
                 }}
               />
-            ) : character === "husky" ? (
-              <svg
-                width={PERSON_SIZE}
-                height={PERSON_SIZE}
-                viewBox="0 0 72 72"
-                fill="none"
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  animation: personAnim,
-                  pointerEvents: "none",
-                  filter:
-                    "drop-shadow(0 2px 7px color-mix(in srgb, var(--dsw-alias-label-primary, #1f2937) 45%, transparent))",
-                }}
-              >
-                <title>{T("pl.title")}</title>
-                {/* 尾巴 */}
-                <ellipse cx="22" cy="50" rx="4.6" ry="3" fill="#c7cdd3" stroke="#c9c2b4" strokeWidth="0.8" />
-                {/* 四只脚 */}
-                <ellipse cx="33" cy="49" rx="3.4" ry="2.7" fill="#c7cdd3" stroke="#c9c2b4" strokeWidth="0.8" />
-                <ellipse cx="39" cy="49" rx="3.4" ry="2.7" fill="#c7cdd3" stroke="#c9c2b4" strokeWidth="0.8" />
-                <ellipse cx="29" cy="52" rx="4.2" ry="3.4" fill="#c7cdd3" stroke="#c9c2b4" strokeWidth="0.8" />
-                <ellipse cx="43" cy="52" rx="4.2" ry="3.4" fill="#c7cdd3" stroke="#c9c2b4" strokeWidth="0.8" />
-                {/* 身体 + 米白胸腹 */}
-                <ellipse cx="36" cy="42" rx="12.5" ry="9.5" fill="#c7cdd3" stroke="#c9c2b4" strokeWidth="0.9" />
-                <ellipse cx="36" cy="45" rx="7.5" ry="5.5" fill="#f4f0ea" />
-                {/* 小手 */}
-                <g className="pl-person-arm">
-                  <ellipse cx="36" cy="52" rx="12" ry="9" fill="#c7cdd3" stroke="#c9c2b4" strokeWidth="0.8" />
-                  <ellipse cx="26" cy="50" rx="5" ry="4" fill="#2f3540" />
-                </g>
-                {/* 双耳（尖立三角耳：深色外耳 + 粉芯内耳） */}
-                <path d="M23.5,10.5 Q19.5,24 29.5,22.8 Z" fill="#434a54" stroke="#c9c2b4" strokeWidth="0.9" />
-                <path d="M48.5,10.5 Q52.5,24 42.5,22.8 Z" fill="#434a54" stroke="#c9c2b4" strokeWidth="0.9" />
-                <path d="M25.6,12.5 Q22.6,22 28.6,21.6 Z" fill="#f2a0b0" opacity=".85" />
-                <path d="M46.4,12.5 Q49.4,22 43.4,21.6 Z" fill="#f2a0b0" opacity=".85" />
-                {/* 头 */}
-                <circle cx="36" cy="34" r="15" fill="#f4f0ea" stroke="#c9c2b4" strokeWidth="1" />
-                {/* 额头倒三角深色斑纹（哈士奇标志性黑额斑） */}
-                <path d="M22.8,20 Q36,14.6 49.2,20 L45.2,25.8 Q36,29.2 26.8,25.8 Z" fill="#434a54" />
-                {/* 白眉心纹 */}
-                <ellipse cx="30.4" cy="29.4" rx="3" ry="1.8" transform="rotate(14 30.4 29.4)" fill="#fbfaf6" />
-                <ellipse cx="41.6" cy="29.4" rx="3" ry="1.8" transform="rotate(-14 41.6 29.4)" fill="#fbfaf6" />
-                {/* 吻部 */}
-                <ellipse cx="36" cy="40" rx="8.4" ry="6.4" fill="#f4f0ea" />
-                {/* 冰蓝眼睛 */}
-                <ellipse cx="31" cy="33" rx="3" ry="3.1" fill="#7fb3d8" stroke="#434a54" strokeWidth="1.1" />
-                <ellipse cx="41" cy="33" rx="3" ry="3.1" fill="#7fb3d8" stroke="#434a54" strokeWidth="1.1" />
-                <circle cx="32" cy="31.6" r="1.1" fill="#ffffff" />
-                <circle cx="42" cy="31.6" r="1.1" fill="#ffffff" />
-                {/* 鼻头 */}
-                <ellipse cx="36" cy="38.6" rx="2.4" ry="1.9" fill="#2f3540" />
-                {/* 嘴 */}
-                <path d="M32.5,41.8 Q36,44.2 39.5,41.8" stroke="#2f3540" strokeWidth="1.4" strokeLinecap="round" />
-                {/* 腮红 */}
-                <circle cx="28.5" cy="37.5" r="2.4" fill="#f2a0b0" opacity=".45" />
-                <circle cx="43.5" cy="37.5" r="2.4" fill="#f2a0b0" opacity=".45" />
-              </svg>
             ) : (
               <svg
                 width={PERSON_SIZE}
@@ -1430,15 +1435,13 @@ export function PromptAssistant(props: Props): ReactNode {
                   <circle cx="32" cy="33.2" r="1" fill="#ffffff" />
                   <circle cx="42" cy="33.2" r="1" fill="#ffffff" />
                 </g>
-                {/* 微笑 */}
-                <path
-                  d="M30 39.5 Q36 43.5 42 39.5"
-                  stroke="#e5444b"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                />
+                {/* 嘴：珊瑚橙红，用 scaleY 周期性开合（闭合≈一条线，张开≈o形） */}
+                <g style={{ transformOrigin: "36px 43.5px", animation: "pl-person-talk 1.4s ease-in-out infinite" }}>
+                  <ellipse cx="36" cy="42.6" rx="3.6" ry="2.4" fill="#ff6b5e" />
+                  <ellipse cx="36" cy="43.2" rx="2.2" ry="1.2" fill="#e0553f" />
+                </g>
               </svg>
-            )}
+            ))}
             {/* 地面影子 */}
             <div
               style={{

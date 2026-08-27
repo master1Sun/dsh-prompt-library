@@ -12,8 +12,8 @@ import type { ActivityPhase } from "./activity.js";
 /** 聊天主题风格。 */
 export type TopicStyle = "code" | "writing" | "translate" | "qa" | "general";
 
-/** 助手形象：经典款 / 哈士奇 / 鲸鱼款。 */
-export type CharacterKey = "classic" | "husky" | "whale";
+/** 助手形象：经典款 / 鲸鱼款（静态）、鲸鱼款·动效（dsh-pet）。 */
+export type CharacterKey = "classic" | "whale" | "dshpet";
 
 /** 规范化语言：zh / en。 */
 export type CopyLang = "zh" | "en";
@@ -349,7 +349,7 @@ const PHASE_COPY_WHALE: Record<ActivityPhase, Record<CopyLang, string[]>> = {
 /**
  * 取某个阶段应展示的文案（组内按序号轮换）。
  * counter 为累计命中次数（同一阶段每次出现递增），取模后轮换。
- * char 指定助手形象：whale 用鲸鱼款无主题文案，其余（classic / husky）用分主题文案。
+ * char 指定助手形象：whale / dshpet 用鲸鱼款无主题文案，其余（classic）用分主题文案。
  */
 export function pickPhaseCopy(
   lang: CopyLang,
@@ -359,7 +359,7 @@ export function pickPhaseCopy(
   char: CharacterKey = "classic",
 ): string {
   const group =
-    char === "whale"
+    char === "whale" || char === "dshpet"
       ? PHASE_COPY_WHALE[phase][lang]
       : PHASE_COPY_CLASSIC[style][phase][lang];
   return group[counter % group.length];

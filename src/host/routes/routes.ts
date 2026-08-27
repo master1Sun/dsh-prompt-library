@@ -15,7 +15,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import type { WebRoute } from "@deepseek-ai/dsh-host-webserver";
 import type { ApiResponse, PluginSettings, Prompt, PromptInput, PromptPatch } from "../../types.js";
-import { commentOnStats, generateIntro, generateSkillDescriptor, listAiSelectables, polishPromptBody } from "../services/ai/ai.js";
+import { commentOnStats, generateIntro, generateSkillDescriptor, listAiSelectables, polishPromptBody, todayLocalDate } from "../services/ai/ai.js";
 import {
   exportPromptsAsSkills,
   importSkillEntries,
@@ -27,7 +27,7 @@ import {
   autoLearn,
   computeHeatmap,
   computeLibraryStats,
-  computeInactiveDays,
+  computePoints,
   computeStreak,
   createPrompt,
   createTag,
@@ -53,6 +53,7 @@ import { checkUpdate, getVersionInfo, restartService, upgradePlugin } from "../s
 import { getActivity } from "../services/assistant/activity.js";
 import { buildAssistantStatus } from "../services/assistant/gamification.js";
 import { getAnnouncement } from "../services/update/announcement.js";
+import { getIssue, listIssueDates } from "../services/update/daily.js";
 import { deleteBackup, listBackups, restoreBackup, runBackup, type BackupFormat } from "../services/data/backup.js";
 import {
   bindPersonaToScope,
@@ -523,12 +524,18 @@ export function makePromptRoutes(): WebRoute[] {
         } catch {
           /* 解析失败用默认 zh */
         }
-        const [stats, streak, inactiveDays] = await Promise.all([
+        const [stats, streak, points] = await Promise.all([
           computeLibraryStats().catch(() => undefined),
           computeStreak().catch(() => 0),
-          computeInactiveDays().catch(() => 0),
+          computePoints().catch(() => ({
+            gross: 0,
+            decay: 0,
+            net: 0,
+            inactiveDays: 0,
+            lastActiveAt: 0,
+          })),
         ]);
-        const data = buildAssistantStatus(stats, streak, inactiveDays, lang.toLowerCase().startsWith("en") ? "en" : "zh");
+        const data = buildAssistantStatus(stats, streak, lang.toLowerCase().startsWith("en") ? "en" : "zh", points);
         return json(res, 200, { ok: true, data });
       }
 
@@ -546,6 +553,36 @@ export function makePromptRoutes(): WebRoute[] {
         }
         const data = getAnnouncement(lang);
         return json(res, 200, { ok: true, data });
+      }
+
+      // GET /announcement/daily — 公告报纸「今日/历史」动态。
+      // 每日日报由 AI 依据当日词库统计生成（中英各一版）；成就速报为本地成就进度。
+      // ?date=YYYY-MM-DD 指定某一期；缺省取今天。每期以 Markdown（中英双语）落盘 newspapers/，支持历史翻页。
+      if (method === "GET" && tail === "/announcement/daily") {
+        let lang = "zh";
+        let date: string | undefined;
+        try {
+          const raw = req.url ?? "";
+          const q = raw.includes("?") ? raw.slice(raw.indexOf("?") + 1) : "";
+          const params = new URLSearchParams(q);
+          const lv = params.get("lang");
+          if (lv) lang = lv;
+          const dv = params.get("date");
+          if (dv && /^\\d{4}-\\d{2}-\\d{2}$/.test(dv)) date = dv;
+        } catch {
+          /* 解析失败忽略，默认 zh / 今天 */
+        }
+        const settings = await getSettings();
+        const issue = await getIssue(date ?? todayLocalDate(), lang, settings);
+        const availableDates = listIssueDates();
+        return json(res, 200, {
+          ok: true,
+          data: {
+            ...issue,
+            availableDates,
+            isToday: issue.date === todayLocalDate(),
+          },
+        });
       }
 
       // GET /stats — 词库统计（供统计可视化面板展示）
@@ -712,6 +749,28 @@ export function makePromptRoutes(): WebRoute[] {
           const buf = await readFile(fileURLToPath(fileUrl));
           res.writeHead(200, {
             "content-type": "image/webp",
+            "content-length": String(buf.byteLength),
+            "cache-control": "public, max-age=604800",
+          });
+          res.end(buf);
+          return;
+        } catch (err) {
+          return json(res, 404, {
+            ok: false,
+            error: err instanceof Error ? err.message : "asset not found",
+          });
+        }
+      }
+
+      // GET /assets/whale-webm/:name.webm — 词库助手「鲸鱼款·动效」的 webm 动画（随插件自带，不依赖 dsh-pet）。
+      // 素材随插件构建产物随包分发（lib/assets/whale-webm/*.webm），WhaleStage 用 base 路由 + 编码名 + ".webm" 拼接。
+      if (method === "GET" && segments[0] === "assets" && segments[1] === "whale-webm" && segments.length === 3 && (segments[2] ?? "").endsWith(".webm")) {
+        try {
+          const name = decodeURIComponent(segments[2] ?? "");
+          const fileUrl = new URL("./assets/whale-webm/" + name, import.meta.url);
+          const buf = await readFile(fileURLToPath(fileUrl));
+          res.writeHead(200, {
+            "content-type": "video/webm",
             "content-length": String(buf.byteLength),
             "cache-control": "public, max-age=604800",
           });

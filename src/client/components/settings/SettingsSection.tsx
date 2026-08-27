@@ -726,7 +726,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             flexDirection: "column",
           }}
         >
-          {/* 助手形象：经典助手 / 哈士奇 / 鲸鱼款；仅当词库助手显示时可配置 */}
+          {/* 助手形象：经典助手 / 鲸鱼款（静态）/ 鲸鱼款（dsh-pet 动效）；仅当词库助手显示时可配置 */}
           <SelectRow
             label={T("pl.set.character")}
             desc={T("pl.set.characterDesc")}
@@ -734,13 +734,13 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             disabled={assistantMaxed && !draft.assistantEnabled}
             onChange={(v) =>
               updateAndSave({
-                assistantCharacter: v === "whale" ? "whale" : v === "husky" ? "husky" : "classic",
+                assistantCharacter: v === "dshpet" ? "dshpet" : v === "whale" ? "whale" : "classic",
               })
             }
             options={[
               { value: "classic", label: T("pl.set.characterClassic") },
-              { value: "husky", label: T("pl.set.characterHusky") },
               { value: "whale", label: T("pl.set.characterWhale") },
+              { value: "dshpet", label: T("pl.set.characterDshpet") },
             ]}
           />
           {/* 公告控制：仅当词库助手显示时可开关，默认开启；关闭后词库助手右键菜单不显示「公告」 */}

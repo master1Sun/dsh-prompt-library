@@ -189,8 +189,8 @@ export interface PluginSettings {
   backupSchedule: "daily" | "weekly" | "monthly";
   /** 自动备份文件格式：db（复制数据库文件）/ json（导出为 JSON 备份文件）。 */
   backupFormat: "db" | "json";
-  /** 词库助手助手形象：classic（经典米兔）/ husky（哈士奇）/ whale（鲸鱼款）。 */
-  assistantCharacter: "classic" | "husky" | "whale";
+  /** 词库助手助手形象：classic（经典米兔）/ whale（鲸鱼款，静态雪碧图）/ dshpet（鲸鱼款，dsh-pet 动态动画）。 */
+  assistantCharacter: "classic" | "whale" | "dshpet";
 }
 
 /** 设置的默认值。 */

@@ -26,7 +26,7 @@ writeFileSync(
   "utf8",
 );
 await build({
-  entryPoints: ["src/host/services/session-prompts/session-prompts.ts"],
+  entryPoints: ["src/host/session-prompts.ts"],
   bundle: true,
   platform: "node",
   format: "esm",

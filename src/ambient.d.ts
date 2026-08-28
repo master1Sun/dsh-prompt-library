@@ -18,3 +18,9 @@ declare module "@deepseek-ai/dsh-client-ui-slots" {
   /** 供 i18n.ts 内部的 module augmentation 合并使用的类型表。 */
   interface LocaleNamespaceMap {}
 }
+
+/**
+ * 构建时注入的开发/生产标志（esbuild define）：
+ * 开发构建（--dev）为 true，生产构建为 false。用于控制诊断日志输出。
+ */
+declare const __DEV__: boolean;

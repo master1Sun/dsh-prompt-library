@@ -12,7 +12,7 @@ export interface Prompt {
   body: string;
   /** 可选的自定义标签，用于分组/筛选。 */
   tags?: string[];
-  /** AI 生成的用途摘要/使用说明（显示在悬停详情）。 */
+  /** AI 生成的用途摘要/使用说明。 */
   summary?: string;
   /** AI 优化改写前的原始正文（仅当正文被改写时存在）。 */
   sourceBody?: string;
@@ -192,8 +192,6 @@ export interface PluginSettings {
   tildaTriggerEnabled: boolean;
   /** 提示词最大存储数量。 */
   maxPromptCount: number;
-  /** 是否启用鼠标移入显示详情。 */
-  hoverDetailEnabled: boolean;
   /** 是否启用聊天内容选中文字后浮动「添加提示词」入口。 */
   selectionAddEnabled: boolean;
   /** 是否启用基于聊天上下文的提示词推荐（显示在输入框上方，输入框为空时展示）。 */
@@ -232,8 +230,8 @@ export interface PluginSettings {
   backupSchedule: "daily" | "weekly" | "monthly";
   /** 自动备份文件格式：db（复制数据库文件）/ json（导出为 JSON 备份文件）。 */
   backupFormat: "db" | "json";
-  /** 词库助手助手形象：classic（经典米兔）/ whale（鲸鱼款，静态雪碧图）/ dshpet（鲸鱼款，dsh-pet 动态动画）。 */
-  assistantCharacter: "classic" | "whale" | "dshpet";
+  /** 词库助手助手形象：whale（鲸鱼款，静态雪碧图）/ dshpet（鲸鱼款，dsh-pet 动态动画）。 */
+  assistantCharacter: "whale" | "dshpet";
 }
 
 /** 设置的默认值。 */
@@ -250,7 +248,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   backupRetention: 15, // 自动备份保留的备份文件份数（超出自动清理最旧的）
   backupSchedule: "weekly", // 自动备份周期：daily / weekly / monthly
   backupFormat: "db", // 自动备份文件格式：db（数据库副本）/ json（JSON 导出）
-  assistantCharacter: "classic", // 词库助手助手形象：经典米兔（默认）
+  assistantCharacter: "whale", // 词库助手助手形象：鲸鱼款·静态（默认）
   autoLearnEnabled: true, // 是否开启自动学习
   autoLearnManualConfirm: true, // 自动学习是否需手动确认（捕获到提示词后弹保存/取消）
   assistantEnabled: true, // 词库助手显隐（主开关，关闭后右侧面板也无法启用）
@@ -260,7 +258,6 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   showAIPolishButton: true, // 是否在聊天框工具栏显示 AI 润色按钮
   aiPolishButtonIconOnly: true, // AI 润色按钮用纯图标显示（隐藏文字，仅保留图标）
   tildaTriggerEnabled: true, // 是否启用输入 ~ 触发词库选择
-  hoverDetailEnabled: true, // 是否启用鼠标移入列表显示详情
   selectionAddEnabled: true, // 是否启用选中文本后浮动「添加提示词」入口
   contextRecommendEnabled: true, // 是否启用基于聊天上下文的提示词推荐
   aiEnrichEnabled: true, // 是否启用 AI 智能完善（生成标题/标签/摘要并改写正文）

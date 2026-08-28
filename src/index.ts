@@ -6,9 +6,9 @@
  *（无头 profile 得到一个空操作插件——那里没有 UI 来驱动）。
  */
 import type { Context } from "@deepseek-ai/cordis";
-import { makePromptRoutes } from "./host/routes/routes.js";
-import { registerActivity } from "./host/services/assistant/activity.js";
-import { dataChangedRoute, emitExportDownload } from "./host/services/sse/events.js";
+import { makePromptRoutes } from "./host/routes.js";
+import { registerActivity } from "./host/activity.js";
+import { dataChangedRoute, emitExportDownload } from "./host/events.js";
 import {
   autoLearn,
   computeLibraryStats,
@@ -21,30 +21,30 @@ import {
   readGlobalLocale,
   saveStatsSnapshot,
   welcomePromptOnce,
-} from "./host/services/data/store.js";
+} from "./host/store.js";
 import {
   getSessionActivePromptIds,
   getSessionPromptsByIds,
   resolveSessionPromptBindingIds,
   seedDefaultSessionPromptsIfEmpty,
   setCurrentSessionScope,
-} from "./host/services/session-prompts/session-prompts.js";
-import type { WeeklyStats } from "./host/services/data/store.js";
-import { commentOnStats, enrichPromptProfessional, isAiAvailable, logAiInjected, polishPromptBody, registerLlm } from "./host/services/ai/ai.js";
-import { disabledHarnessSkillsInstruction } from "./host/services/ai/skills.js";
-import { soulSystemSync, ensureSoulFile } from "./host/services/assistant/character.js";
-import { resolvePersonaForSession } from "./host/services/persona/persona-service.js";
-import { ensureHarnessFile, harnessSystemSync } from "./host/services/harness/harness.js";
+} from "./host/session-prompts.js";
+import type { WeeklyStats } from "./host/store.js";
+import { commentOnStats, enrichPromptProfessional, isAiAvailable, logAiInjected, polishPromptBody, registerLlm } from "./host/ai.js";
+import { disabledHarnessSkillsInstruction } from "./host/skills.js";
+import { soulSystemSync, ensureSoulFile } from "./host/character.js";
+import { resolvePersonaForSession } from "./host/persona-service.js";
+import { ensureHarnessFile, harnessSystemSync } from "./host/harness.js";
 import {
   registerSessionListProvider,
   type SessionQueryRecord,
-} from "./host/services/session-scope/session-scope.js";
-import { autoUpdateDaily } from "./host/services/update/update.js";
-import { autoBackup } from "./host/services/data/backup.js";
+} from "./host/session-scope.js";
+import { autoUpdateDaily } from "./host/update.js";
+import { autoBackup } from "./host/backup.js";
 // 操作手册：纯文本字符串，聊天消息按纯文本渲染（markdown/HTML 都无法解析），用换行符排版
 import { manualEn, manualZh } from "./manual.js";
 // 历史版本更新说明：供 `/prompts -v` 按宿主语言输出
-import { getAllVersionNotes } from "./host/services/update/version-notes.js";
+import { getAllVersionNotes } from "./host/version-notes.js";
 
 export const name = "prompt-library";
 

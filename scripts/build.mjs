@@ -23,6 +23,10 @@ const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 const PLUGIN_ID = pkg.name;
 const PLUGIN_VERSION = pkg.version;
 
+// 构建环境：显式传入 `--dev` 时为开发构建（写入 AI/版本诊断日志），
+// 否则为生产构建（不写日志，日志代码会被 esbuild 消除）。
+const IS_DEV = process.argv.includes("--dev");
+
 const libDir = join(root, "lib");
 await rm(libDir, { recursive: true, force: true });
 await mkdir(libDir, { recursive: true });
@@ -56,6 +60,8 @@ await esbuildBuild({
   define: {
     // 构建时注入插件版本号，供服务端上报自身运行版本（服务端/客户端版本比对用）
     __PLUGIN_VERSION__: JSON.stringify(PLUGIN_VERSION),
+    // 开发/生产构建标志：开发构建输出诊断日志，生产构建不输出
+    __DEV__: String(IS_DEV),
   },
   sourcemap: true,
   logLevel: "info",
@@ -87,7 +93,7 @@ const clientFooter = [
 ].join("\n");
 
 await esbuildBuild({
-  entryPoints: [join(root, "src/client/index.ts")],
+  entryPoints: [join(root, "src/client/utils/index.ts")],
   outfile: join(libDir, "client.js"),
   bundle: true,
   format: "cjs",
@@ -98,6 +104,8 @@ await esbuildBuild({
   define: {
     // 构建时注入插件版本号，供客户端「关于」页展示及服务端/客户端版本比对使用
     __PLUGIN_VERSION__: JSON.stringify(PLUGIN_VERSION),
+    // 开发/生产构建标志（与 host 保持一致）
+    __DEV__: String(IS_DEV),
   },
   banner: { js: clientBanner },
   footer: { js: clientFooter },

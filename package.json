@@ -54,8 +54,9 @@
   "scripts": {
     "link-dsh-deps": "node scripts/link-dsh-deps.mjs",
     "build": "node scripts/build.mjs",
+    "build:dev": "node scripts/build.mjs --dev",
     "sync": "node scripts/sync-to-profile.mjs",
-    "deploy": "npm run build && npm run sync",
+    "deploy": "npm run build:dev && npm run sync",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "node scripts/build.mjs",
     "npm-publish": "npm publish --access public",

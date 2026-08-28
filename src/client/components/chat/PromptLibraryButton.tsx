@@ -352,6 +352,9 @@ function useTildaTrigger(
   }, [settings.tildaTriggerEnabled, t]);
 }
 
+/** 未输入筛选词时，输入 # 浮层默认展示的提示词条数（按使用次数取前 N，不做分页）。 */
+const INPUT_SELECT_PAGE_SIZE = 20;
+
 let highlightIndex = 0;
 
 function removeOverlay(): void {
@@ -372,15 +375,18 @@ function showOverlay(
   removeOverlay();
   if (prompts.length === 0) return;
 
-  // 按「#」之后的筛选内容实时过滤（标题/正文/标签任意包含）
-  // 每一项保留其在完整列表中的真实下标 idx，供 Enter/点击按完整数组回查
+  // 按「#」之后的筛选内容准备数据：
+  // - 未输入筛选词时，仅展示“使用最多”的前 INPUT_SELECT_PAGE_SIZE 条（按 usageCount 降序，不分页）；
+  // - 输入筛选词时，从全部词库中实时过滤（标题/正文/标签任意包含），展示所有匹配项。
   const q = query.trim().toLowerCase();
-  const filtered = (q
+  const source = q
     ? prompts.filter((p) =>
         `${p.title} ${p.body} ${(p.tags ?? []).join(" ")}`.toLowerCase().includes(q),
       )
-    : prompts
-  ).map((p, idx) => ({ p, idx }));
+    : [...prompts]
+        .sort((a, b) => (b.usageCount ?? 0) - (a.usageCount ?? 0))
+        .slice(0, INPUT_SELECT_PAGE_SIZE);
+  const filtered = source.map((p) => ({ p }));
 
   // 用光标（或选中区）在视口内的位置来定位浮层。
   // 输入框内容过多时其自身矩形可能远超视口（top 为负），用它定位会错位/跳顶。
@@ -404,7 +410,7 @@ function showOverlay(
     "font-size: 12px",
     "padding: 4px",
   ].join(";");
-  // 候选列表的独立滚动容器：底部快捷键不随列表滚动
+  // 候选列表的独立滚动容器：底部快捷键/翻页条不随列表滚动
   const listBox = document.createElement("div");
   listBox.style.cssText = ["overflow-y: auto", "flex: 1 1 auto", "min-height: 0"].join(";");
   overlay.appendChild(listBox);
@@ -439,10 +445,9 @@ function showOverlay(
     listBox.appendChild(empty);
   }
 
-  filtered.forEach(({ p, idx }, i) => {
+  filtered.forEach(({ p }, i) => {
     const item = document.createElement("div");
     item.dataset.promptLibraryItem = "";
-    item.dataset.index = String(idx);
     // 把 prompt 对象直接绑定到该行，避免用下标回查全局数组（筛选/排序后容易错位）
     (item as unknown as { _prompt: Prompt })._prompt = p;
     item.style.cssText = [

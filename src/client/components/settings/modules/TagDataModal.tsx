@@ -47,6 +47,7 @@ const TONE = {
   accent: "var(--dsw-alias-brand-primary, #8ec5ff)",
   accentSoft: "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 18%, transparent)",
   red: "var(--dsw-alias-state-error-primary, #ff6b6b)",
+  mint: "var(--dsw-alias-state-success-primary, #34d399)",
 } as const;
 
 const inputStyle: CSSProperties = {
@@ -111,7 +112,7 @@ export function TagDataModal(props: {
   const [trashQuery, setTrashQuery] = useState("");
 
   // ── 通用：操作反馈 + 自定义确认弹窗 ─────────────────────────────
-  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  const [msg, setMsg] = useState<{ text: string; kind?: "success" | "info" | "error" } | null>(null);
   const msgTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [pendingConfirm, setPendingConfirm] = useState<{
@@ -123,8 +124,8 @@ export function TagDataModal(props: {
     setPendingConfirm({ message, danger, action });
   }, []);
 
-  const showMsg = useCallback((text: string, error = false) => {
-    setMsg({ text, error });
+  const showMsg = useCallback((text: string, kind: "success" | "info" | "error" = "success") => {
+    setMsg({ text, kind });
     if (msgTimerRef.current) clearTimeout(msgTimerRef.current);
     msgTimerRef.current = setTimeout(() => setMsg(null), 2600);
   }, []);
@@ -140,7 +141,7 @@ export function TagDataModal(props: {
   const refreshTags = useCallback(() => {
     apiListTags().then(
       (list) => setTagList(list),
-      (e: unknown) => showMsg(e instanceof Error ? e.message : String(e), true),
+      (e: unknown) => showMsg(e instanceof Error ? e.message : String(e), "error"),
     );
   }, [showMsg]);
 
@@ -148,7 +149,7 @@ export function TagDataModal(props: {
   const addTag = useCallback(() => {
     const name = newTag.trim();
     if (!name) {
-      showMsg(T("pl.createTagEmpty"), true);
+      showMsg(T("pl.createTagEmpty"), "error");
       return;
     }
     apiCreateTag(name).then(
@@ -161,7 +162,7 @@ export function TagDataModal(props: {
         ]);
         notifyDataChanged();
       },
-      (e: unknown) => showMsg(e instanceof Error ? e.message : String(e), true),
+      (e: unknown) => showMsg(e instanceof Error ? e.message : String(e), "error"),
     );
   }, [newTag, showMsg, T]);
 
@@ -171,11 +172,11 @@ export function TagDataModal(props: {
     const from = renamingTag.from;
     const to = renamingTag.value.trim();
     if (!to) {
-      showMsg(T("pl.renameTagEmpty"), true);
+      showMsg(T("pl.renameTagEmpty"), "error");
       return;
     }
     if (to === from) {
-      showMsg(T("pl.renameTagNoChange"), true);
+      showMsg(T("pl.renameTagNoChange"), "info");
       return;
     }
     apiRenameTag(from, to).then(
@@ -185,7 +186,7 @@ export function TagDataModal(props: {
         setTagList((prev) => prev.map((x) => (x.name === from ? { name: to, count: x.count } : x)));
         notifyDataChanged();
       },
-      (e: unknown) => showMsg(e instanceof Error ? e.message : String(e), true),
+      (e: unknown) => showMsg(e instanceof Error ? e.message : String(e), "error"),
     );
   }, [renamingTag, showMsg, T]);
 
@@ -194,7 +195,7 @@ export function TagDataModal(props: {
     (name: string) => {
       const used = tagList.find((x) => x.name === name)?.count ?? 0;
       if (used > 0) {
-        showMsg(T("pl.deleteTagInUse", { name, count: used }), true);
+        showMsg(T("pl.deleteTagInUse", { name, count: used }), "error");
         return;
       }
       requestConfirm(T("pl.deleteTagConfirm", { name }), true, () => {
@@ -204,7 +205,7 @@ export function TagDataModal(props: {
             setTagList((prev) => prev.filter((x) => x.name !== name));
             notifyDataChanged();
           },
-          (e: unknown) => showMsg(e instanceof Error ? e.message : String(e), true),
+          (e: unknown) => showMsg(e instanceof Error ? e.message : String(e), "error"),
         );
       });
     },
@@ -221,7 +222,7 @@ export function TagDataModal(props: {
         setTrashLoading(false);
       },
       (e: unknown) => {
-        showMsg(e instanceof Error ? e.message : String(e), true);
+        showMsg(e instanceof Error ? e.message : String(e), "error");
         setTrashLoading(false);
       },
     );
@@ -280,7 +281,7 @@ export function TagDataModal(props: {
         notifyDataChanged();
         refreshTrash();
       },
-      (e: unknown) => showMsg(e instanceof Error ? e.message : String(e), true),
+      (e: unknown) => showMsg(e instanceof Error ? e.message : String(e), "error"),
     );
   }, [trashSelected, showMsg, T, refreshTrash]);
 
@@ -294,7 +295,7 @@ export function TagDataModal(props: {
           showMsg(T("pl.trashDeleteDone", { count: res.deleted }));
           refreshTrash();
         },
-        (e: unknown) => showMsg(e instanceof Error ? e.message : String(e), true),
+        (e: unknown) => showMsg(e instanceof Error ? e.message : String(e), "error"),
       );
     });
   }, [trashSelected, showMsg, T, refreshTrash, requestConfirm]);
@@ -309,7 +310,7 @@ export function TagDataModal(props: {
             notifyDataChanged();
             refreshTrash();
           },
-          (e: unknown) => showMsg(e instanceof Error ? e.message : String(e), true),
+          (e: unknown) => showMsg(e instanceof Error ? e.message : String(e), "error"),
         );
       });
     },
@@ -325,7 +326,7 @@ export function TagDataModal(props: {
             showMsg(T("pl.trashDeleteDone", { count: res.deleted }));
             refreshTrash();
           },
-          (e: unknown) => showMsg(e instanceof Error ? e.message : String(e), true),
+          (e: unknown) => showMsg(e instanceof Error ? e.message : String(e), "error"),
         );
       });
     },
@@ -381,20 +382,35 @@ export function TagDataModal(props: {
           {T("pl.moduleTagDataDesc")}
         </div>
 
-        {/* 操作反馈 */}
-        {msg && (
-          <div
-            style={{
-              flexShrink: 0,
-              fontSize: 12,
-              lineHeight: 1.5,
-              color: msg.error ? TONE.red : TONE.text,
-              marginTop: 8,
-            }}
-          >
-            {msg.text}
-          </div>
-        )}
+        {/* 操作反馈：预留固定行高，避免显示/隐藏时改变布局引起窗口抖动；按类型区分颜色 */}
+        <div
+          style={{
+            flexShrink: 0,
+            height: 18,
+            marginTop: 2,
+            display: "flex",
+            alignItems: "center",
+            gap: 5,
+            fontSize: 12,
+            lineHeight: 1.5,
+            color: msg ? (msg.kind === "error" ? TONE.red : msg.kind === "info" ? TONE.accent : TONE.mint) : "transparent",
+            overflow: "hidden",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {msg && (
+            <span
+              style={{
+                flexShrink: 0,
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                background: msg.kind === "error" ? TONE.red : msg.kind === "info" ? TONE.accent : TONE.mint,
+              }}
+            />
+          )}
+          {msg?.text ?? ""}
+        </div>
 
         {/* 内容区：左标签 / 右回收站，左右两栏各自独立滚动 */}
         <div
@@ -404,7 +420,7 @@ export function TagDataModal(props: {
             display: "flex",
             gap: 14,
             paddingTop: 14,
-            marginTop: 8,
+            marginTop: -8,
           }}
         >
           {/* 左栏：标签 */}
@@ -421,7 +437,7 @@ export function TagDataModal(props: {
               overflowY: "auto",
             }}
           >
-            {/* 顶部标题：左侧内容向上滚动时悬浮固定 */}
+            {/* 顶部标题 + 新建标签：左侧内容向上滚动时悬浮固定，仅列表滚动 */}
             <div
               style={{
                 position: "sticky",
@@ -438,11 +454,8 @@ export function TagDataModal(props: {
                   {T("pl.moduleTags")}
                 </span>
               </div>
-            </div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: 10 }}>
               {/* 新建标签 */}
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0, marginTop: 8 }}>
                 <input
                   value={newTag}
                   onChange={(e) => setNewTag(clampTag(e.target.value))}
@@ -456,8 +469,10 @@ export function TagDataModal(props: {
                   {T("pl.createTag")}
                 </Button>
               </div>
+            </div>
 
-              {/* 标签列表 */}
+            {/* 标签列表：仅此区域滚动 */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: 10 }}>
               {tagList.length === 0 ? (
                 <div style={{ padding: "10px 0", fontSize: 12, color: TONE.muted }}>
                   {T("pl.tagsNone")}
@@ -584,7 +599,7 @@ export function TagDataModal(props: {
               overflowY: "auto",
             }}
           >
-            {/* 顶部标题：右侧内容向上滚动时悬浮固定 */}
+            {/* 顶部标题 + 搜索 + 工具栏：右侧内容向上滚动时悬浮固定，仅列表滚动 */}
             <div
               style={{
                 position: "sticky",
@@ -601,11 +616,8 @@ export function TagDataModal(props: {
                   {T("pl.moduleTrash")}
                 </span>
               </div>
-            </div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: 10 }}>
               {/* 搜索 */}
-              <div style={{ position: "relative", flexShrink: 0 }}>
+              <div style={{ position: "relative", flexShrink: 0, marginTop: 8 }}>
                 <svg
                   width="13"
                   height="13"
@@ -667,7 +679,7 @@ export function TagDataModal(props: {
                 )}
               </div>
               {/* 工具栏 */}
-              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", flexShrink: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", flexShrink: 0, marginTop: 8 }}>
                 <label
                   style={{
                     display: "inline-flex",
@@ -712,8 +724,10 @@ export function TagDataModal(props: {
                   {trashSelected.size > 0 ? `${trashSelected.size}/${trashList.length}` : ""}
                 </span>
               </div>
+            </div>
 
-              {/* 回收内容列表 */}
+            {/* 回收内容列表：仅此区域滚动 */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: 10 }}>
               {trashLoading ? (
                 <div style={{ padding: "12px 0", fontSize: 12, color: TONE.muted }}>
                   {T("pl.loading")}

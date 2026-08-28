@@ -176,10 +176,14 @@ export function ImportEditModal(props: {
   const [validation, setValidation] = useState<ValidateResult | null>(null);
   const [fixLog, setFixLog] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  const [msg, setMsg] = useState<{ text: string; kind?: "success" | "info" | "error" } | null>(null);
   const bodyRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
   const seqRef = useRef(0);
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  // 右栏编辑窗口当前选中的条目 key
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  // 浮动反馈气泡开关与定时器（如聊天气泡，一段时间后自动消失）
+  const [toastOpen, setToastOpen] = useState(false);
+  const toastTimer = useRef<number | null>(null);
   // 下拉可选标签（既有标签名列表），打开时拉取
   const [tagOptions, setTagOptions] = useState<string[]>([]);
   // 导入完成后的逐条结果（展示成功/失败/跳过，用户点击「完成」后关闭）
@@ -217,7 +221,7 @@ export function ImportEditModal(props: {
     setValidation(null);
     setFixLog([]);
     setMsg(null);
-    setCollapsed({});
+    setSelectedKey(null);
     setSaving(false);
     setResult(null);
   }, [open]);
@@ -237,13 +241,9 @@ export function ImportEditModal(props: {
   /** 移除条目。 */
   const removeEntry = useCallback((key: string) => {
     setEntries((prev) => prev.filter((e) => e.key !== key));
+    setSelectedKey((cur) => (cur === key ? null : cur));
     setValidation(null);
     setFixLog([]);
-  }, []);
-
-  /** 折叠 / 展开单条卡片。 */
-  const toggleCollapse = useCallback((key: string) => {
-    setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
   }, []);
 
   /** 全选 / 取消全选。 */
@@ -315,7 +315,7 @@ export function ImportEditModal(props: {
   /** 校验所有勾选条目并展示结果。 */
   const handleValidate = useCallback(() => {
     if (entries.filter((e) => e.checked).length === 0) {
-      setMsg({ text: T("pl.skillModal.emptyChecked"), error: true });
+      setMsg({ text: T("pl.skillModal.emptyChecked"), kind: "error" });
       return;
     }
     setValidation(validateEntries(entries));
@@ -343,7 +343,7 @@ export function ImportEditModal(props: {
     if (!validation?.ok || saving) return;
     const checked = entries.filter((e) => e.checked);
     if (checked.length === 0) {
-      setMsg({ text: T("pl.skillModal.emptyChecked"), error: true });
+      setMsg({ text: T("pl.skillModal.emptyChecked"), kind: "error" });
       return;
     }
     setSaving(true);
@@ -390,15 +390,46 @@ export function ImportEditModal(props: {
       },
       (err: unknown) => {
         setSaving(false);
-        setMsg({ text: err instanceof Error ? err.message : String(err), error: true });
+        setMsg({ text: err instanceof Error ? err.message : String(err), kind: "error" });
       },
     );
   }, [validation, saving, entries, onImported, T]);
 
-  if (!open) return null;
-
   const checkedCount = entries.filter((e) => e.checked).length;
   const allChecked = entries.length > 0 && checkedCount === entries.length;
+  // 右栏编辑窗口当前选中的条目（被删除或不存在时为 null）
+  const selected = entries.find((e) => e.key === selectedKey) ?? null;
+  // 是否存在需要浮动提示的反馈内容（校验结果 / 修复记录 / 操作信息）
+  const hasFeedback = !result && (msg != null || validation != null || fixLog.length > 0);
+
+  // 反馈内容变化时浮出气泡；气泡常开则启动自动消失定时
+  // 依赖反馈内容本身（而非仅 hasFeedback 布尔值）：手动关闭气泡后 validation 等仍非空，
+  // 布尔值不变，导致再次点击校验等操作时不重新浮出气泡；内容引用变化即可重新弹出。
+  // 注意：这两个 useEffect 必须放在条件 return 之前，保证弹窗开/关切换时 hooks 数量一致，
+  // 否则会触发 React #310「rendered fewer hooks than expected」崩溃。
+  useEffect(() => {
+    setToastOpen(hasFeedback);
+  }, [hasFeedback, msg, validation, fixLog, result]);
+
+  useEffect(() => {
+    if (!toastOpen) return;
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToastOpen(false), 30000);
+    return () => {
+      if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    };
+  }, [toastOpen]);
+
+  if (!open) return null;
+
+  /** 鼠标移入气泡：暂停自动消失；移出：重新开始计时。 */
+  const pauseToast = () => {
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+  };
+  const resumeToast = () => {
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToastOpen(false), 30000);
+  };
 
   return (
     <div
@@ -443,372 +474,325 @@ export function ImportEditModal(props: {
           {T("pl.importEdit.subtitle")}
         </div>
 
-        {/* 工具栏：全选 / 取消全选 + 勾选计数 */}
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0, marginTop: 10 }}>
-          <label
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 5,
-              fontSize: 12,
-              color: TONE.muted,
-              cursor: "pointer",
-              userSelect: "none",
-            }}
-          >
-            <input type="checkbox" checked={allChecked} onChange={toggleAll} disabled={entries.length === 0} />
-            {allChecked ? T("pl.importEdit.deselectAll") : T("pl.exportSelectAll")}
-          </label>
-          <span style={{ fontSize: 11, color: TONE.quiet }}>
-            {T("pl.skillModal.selectHint")} · {checkedCount}/{entries.length}
-          </span>
-        </div>
-
-        {/* 条目卡片列表：可滚动 */}
+        {/* 左右分栏主体：左栏列表 / 右栏编辑窗口 */}
         <div
           style={{
             flex: 1,
             minHeight: 0,
-            overflow: "auto",
-            /* 内容与滚动条之间预留 10px 间距（与官方一致） */
-            paddingRight: 10,
-            display: "flex",
-            flexDirection: "column",
-            gap: 10,
             marginTop: 10,
+            display: "flex",
+            gap: 12,
+            alignItems: "stretch",
+            position: "relative",
           }}
         >
-          {entries.length === 0 ? (
+          {/* 左栏：工具栏 + 紧凑条目列表 */}
+          <div
+            style={{
+              flex: "1 1 0",
+              minWidth: 0,
+              display: "flex",
+              flexDirection: "column",
+              minHeight: 0,
+              boxSizing: "border-box",
+              background: TONE.row,
+              border: `1px solid ${TONE.border}`,
+              borderRadius: 10,
+              padding: 10,
+            }}
+          >
+            {/* 左栏 sticky 工具栏：全选 + 勾选计数 */}
             <div
               style={{
-                padding: "22px 0",
-                textAlign: "center",
-                fontSize: 12,
-                color: TONE.quiet,
-                border: `1px dashed ${TONE.border}`,
-                borderRadius: 8,
+                flexShrink: 0,
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                paddingBottom: 8,
+                borderBottom: `1px solid ${TONE.border}`,
+                background: TONE.row,
+                position: "sticky",
+                top: -10,
+                zIndex: 1,
               }}
             >
-              {T("pl.importEdit.noEntry")}
-            </div>
-          ) : (
-            entries.map((entry) => (
-              <div
-                key={entry.key}
+              <label
                 style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  padding: "10px 12px",
-                  background: TONE.row,
-                  border: `1px solid ${TONE.border}`,
-                  borderRadius: 8,
-                  opacity: entry.checked ? 1 : 0.55,
-                  transition: "opacity .18s",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 5,
+                  fontSize: 12,
+                  color: TONE.muted,
+                  cursor: "pointer",
+                  userSelect: "none",
                 }}
               >
-                {/* 首行：折叠 + 勾选 + 标题 + 来源徽标 + 移除 */}
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <button
-                    type="button"
-                    onClick={() => toggleCollapse(entry.key)}
-                    data-tip={collapsed[entry.key] ? T("pl.skillModal.expand") : T("pl.skillModal.collapse")}
-                    aria-expanded={!collapsed[entry.key]}
-                    style={{
-                      flexShrink: 0,
-                      display: "inline-flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      width: 24,
-                      height: 24,
-                      border: "none",
-                      outline: "none",
-                      borderRadius: 6,
-                      background: "transparent",
-                      color: TONE.muted,
-                      cursor: "pointer",
-                      transition: "background-color .18s, color .18s",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = "var(--dsw-alias-interactive-bg-hover)";
-                      e.currentTarget.style.color = TONE.text;
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = "transparent";
-                      e.currentTarget.style.color = TONE.muted;
-                    }}
-                  >
-                    <svg
-                      width="12"
-                      height="12"
-                      viewBox="0 0 16 16"
-                      style={{
-                        flexShrink: 0,
-                        transform: collapsed[entry.key] ? "rotate(-90deg)" : "rotate(0deg)",
-                        transition: "transform .2s ease",
-                      }}
-                    >
-                      <path
-                        d="M4 6l4 4 4-4"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.6"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </button>
-                  <input
-                    type="checkbox"
-                    checked={entry.checked}
-                    onChange={() => toggleChecked(entry.key)}
-                    data-tip={T("pl.skillModal.selectHint")}
-                    style={{ flexShrink: 0, accentColor: TONE.accent }}
-                  />
-                  <input
-                    type="text"
-                    value={entry.title}
-                    onChange={(e) => updateEntry(entry.key, { title: e.target.value })}
-                    placeholder={T("pl.skillModal.titleLabel")}
-                    disabled={!entry.checked}
-                    style={{ ...inputStyle, flex: 1, minWidth: 0 }}
-                  />
-                  <span
-                    style={{
-                      flexShrink: 0,
-                      fontSize: 10,
-                      lineHeight: 1,
-                      color: TONE.accent,
-                      border: `1px solid var(--dsw-alias-brand-primary, #8ec5ff)`,
-                      borderRadius: 4,
-                      padding: "2px 5px",
-                    }}
-                  >
-                    {entry.source === "json"
-                      ? "JSON"
-                      : entry.source === "csv"
-                        ? "CSV"
-                        : entry.source === "md"
-                          ? "Markdown"
-                          : T("pl.importEdit.fromTxt")}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => removeEntry(entry.key)}
-                    data-tip={T("pl.skillModal.remove")}
-                    style={{
-                      flexShrink: 0,
-                      border: "none",
-                      outline: "none",
-                      background: "transparent",
-                      color: TONE.quiet,
-                      cursor: "pointer",
-                      fontSize: 12,
-                      fontFamily: MONO,
-                      padding: "2px 4px",
-                      borderRadius: 4,
-                      transition: "color .18s, background-color .18s",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.color = TONE.red;
-                      e.currentTarget.style.backgroundColor = "var(--dsw-alias-interactive-bg-hover)";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.color = TONE.quiet;
-                      e.currentTarget.style.backgroundColor = "transparent";
-                    }}
-                  >
-                    {T("pl.skillModal.remove")}
-                  </button>
-                </div>
-                {/* 可折叠区域：grid 行动画实现平滑折叠/展开 */}
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateRows: collapsed[entry.key] ? "0fr" : "1fr",
-                    transition: "grid-template-rows .22s ease",
-                    marginTop: collapsed[entry.key] ? 0 : 7,
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 7,
-                      minHeight: 0,
-                      overflow: "hidden",
-                    }}
-                  >
-                    {/* 标签（下拉选择既有标签 / 无标签） */}
-                    <select
-                      value={entry.tags}
-                      onChange={(e) => updateEntry(entry.key, { tags: e.target.value })}
-                      disabled={!entry.checked}
-                      style={{ ...inputStyle, cursor: "pointer" }}
-                    >
-                      <option value="">{T("pl.importEdit.tagsLabel")}</option>
-                      {tagOptions.map((tag) => (
-                        <option key={tag} value={tag}>
-                          {tag}
-                        </option>
-                      ))}
-                    </select>
-                    {/* 正文 + 插入变量 */}
-                    <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
-                      <textarea
-                        ref={(el) => {
-                          bodyRefs.current[entry.key] = el;
-                        }}
-                        value={entry.body}
-                        onChange={(e) => updateEntry(entry.key, { body: e.target.value })}
-                        placeholder={T("pl.skillModal.bodyLabel")}
-                        disabled={!entry.checked}
-                        spellCheck={false}
-                        style={{
-                          ...inputStyle,
-                          flex: 1,
-                          minHeight: 200,
-                          resize: "vertical",
-                          lineHeight: 1.6,
-                          whiteSpace: "pre-wrap",
-                        }}
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className={plBtn("ghost", "sm")}
-                        onClick={() => insertVar(entry.key)}
-                        disabled={!entry.checked}
-                        data-tip={T("pl.insertVariableTitle")}
-                        style={{ flexShrink: 0 }}
-                      >
-                        {T("pl.skillModal.insertVar")}
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-
-        {/* 操作反馈 */}
-        {!result && msg && (
-          <div
-            style={{
-              flexShrink: 0,
-              fontSize: 12,
-              lineHeight: 1.5,
-              color: msg.error ? TONE.red : TONE.text,
-              marginTop: 8,
-            }}
-          >
-            {msg.text}
-          </div>
-        )}
-        {/* 校验结果：错误清单 + 一键修复 */}
-        {!result && validation && (
-          <div
-            role="alert"
-            style={{
-              flexShrink: 0,
-              display: "flex",
-              flexDirection: "column",
-              gap: 6,
-              padding: "7px 10px",
-              borderRadius: 7,
-              fontSize: 12,
-              lineHeight: 1.5,
-              color: validation.ok ? TONE.success : TONE.red,
-              background: validation.ok
-                ? "color-mix(in srgb, var(--dsw-alias-state-success-primary, #78dda0) 8%, transparent)"
-                : "color-mix(in srgb, var(--dsw-alias-state-error-primary, #ff6b6b) 8%, transparent)",
-              border: `1px solid ${
-                validation.ok
-                  ? "color-mix(in srgb, var(--dsw-alias-state-success-primary, #78dda0) 40%, transparent)"
-                  : "color-mix(in srgb, var(--dsw-alias-state-error-primary, #ff6b6b) 40%, transparent)"
-              }`,
-            }}
-          >
-            {validation.ok ? (
-              <div>{T("pl.importEdit.validatePass")}</div>
-            ) : (
-              <>
-                <div>{T("pl.skillModal.issueCount", { count: validation.issues.length })}</div>
-                <ul
-                  style={{
-                    margin: 0,
-                    paddingLeft: 18,
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 3,
-                  }}
-                >
-                  {validation.issues.map((issue, idx) => (
-                    <li key={idx}>
-                      「{issue.entryTitle}」{issue.message}
-                    </li>
-                  ))}
-                </ul>
-                {validation.fixable && (
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <Button
-                      type="button"
-                      variant="primary"
-                      size="sm"
-                      className={plBtn("primary", "sm")}
-                      onClick={handleFix}
-                      data-tip={T("pl.skillModal.fixAll")}
-                    >
-                      {T("pl.skillModal.fixAll")}
-                    </Button>
-                    <span style={{ color: TONE.muted }}>
-                      {T("pl.skillModal.fixHint", {
-                        fixable: validation.issues.filter((i) => i.fixable).length,
-                      })}
-                    </span>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        )}
-        {/* 修复结果清单 */}
-        {!result && fixLog.length > 0 && (
-          <div
-            style={{
-              flexShrink: 0,
-              display: "flex",
-              flexDirection: "column",
-              gap: 4,
-              padding: "7px 10px",
-              borderRadius: 7,
-              fontSize: 12,
-              lineHeight: 1.5,
-              color: TONE.success,
-              background:
-                "color-mix(in srgb, var(--dsw-alias-state-success-primary, #78dda0) 8%, transparent)",
-              border:
-                "1px solid color-mix(in srgb, var(--dsw-alias-state-success-primary, #78dda0) 40%, transparent)",
-            }}
-          >
-            <div>{T("pl.skillModal.fixDone", { count: fixLog.length })}</div>
-            <ul
+                <input type="checkbox" checked={allChecked} onChange={toggleAll} disabled={entries.length === 0} />
+                {allChecked ? T("pl.importEdit.deselectAll") : T("pl.exportSelectAll")}
+              </label>
+              <span style={{ marginLeft: "auto", fontSize: 11, color: TONE.quiet }}>
+                {T("pl.skillModal.selectHint")} · {checkedCount}/{entries.length}
+              </span>
+            </div>
+            {/* 紧凑条目列表 */}
+            <div
               style={{
-                margin: 0,
-                paddingLeft: 18,
+                flex: 1,
+                minHeight: 0,
+                overflow: "auto",
+                paddingTop: 6,
                 display: "flex",
                 flexDirection: "column",
-                gap: 3,
+                gap: 5,
               }}
             >
-              {fixLog.map((f, idx) => (
-                <li key={idx}>{f}</li>
-              ))}
-            </ul>
+              {entries.length === 0 ? (
+                <div
+                  style={{
+                    padding: "22px 0",
+                    textAlign: "center",
+                    fontSize: 12,
+                    color: TONE.quiet,
+                    border: `1px dashed ${TONE.border}`,
+                    borderRadius: 8,
+                  }}
+                >
+                  {T("pl.importEdit.noEntry")}
+                </div>
+              ) : (
+                entries.map((entry) => (
+                  <div
+                    key={entry.key}
+                    onClick={() => setSelectedKey(entry.key)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "7px 9px",
+                      background:
+                        selectedKey === entry.key
+                          ? "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 16%, transparent)"
+                          : "transparent",
+                      border: `1px solid ${
+                        selectedKey === entry.key
+                          ? "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 45%, transparent)"
+                          : TONE.border
+                      }`,
+                      borderRadius: 8,
+                      cursor: "pointer",
+                      opacity: entry.checked ? 1 : 0.55,
+                      transition:
+                        "border-color .24s cubic-bezier(.22,1,.36,1), background-color .24s cubic-bezier(.22,1,.36,1), opacity .18s",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={entry.checked}
+                      onChange={(e) => {
+                        e.stopPropagation();
+                        toggleChecked(entry.key);
+                      }}
+                      data-tip={T("pl.skillModal.selectHint")}
+                      style={{ flexShrink: 0, accentColor: TONE.accent, margin: 0 }}
+                    />
+                    <span
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        fontSize: 12.5,
+                        color: TONE.text,
+                        overflow: "hidden",
+                        whiteSpace: "nowrap",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      {entry.title.trim() || T("pl.importEdit.untitledPrompt")}
+                    </span>
+                    <span
+                      style={{
+                        flexShrink: 0,
+                        fontSize: 10,
+                        lineHeight: 1,
+                        color: TONE.accent,
+                        border: "1px solid var(--dsw-alias-brand-primary, #8ec5ff)",
+                        borderRadius: 4,
+                        padding: "2px 5px",
+                      }}
+                    >
+                      {entry.source === "json"
+                        ? "JSON"
+                        : entry.source === "csv"
+                          ? "CSV"
+                          : entry.source === "md"
+                            ? "Markdown"
+                            : T("pl.importEdit.fromTxt")}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeEntry(entry.key);
+                      }}
+                      data-tip={T("pl.skillModal.remove")}
+                      style={{
+                        flexShrink: 0,
+                        border: "none",
+                        outline: "none",
+                        background: "transparent",
+                        color: TONE.quiet,
+                        cursor: "pointer",
+                        fontSize: 13,
+                        lineHeight: 1,
+                        fontFamily: MONO,
+                        padding: "2px 4px",
+                        borderRadius: 4,
+                        transition: "color .18s, background-color .18s",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.color = TONE.red;
+                        e.currentTarget.style.backgroundColor = "var(--dsw-alias-interactive-bg-hover)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.color = TONE.quiet;
+                        e.currentTarget.style.backgroundColor = "transparent";
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* 右栏：当前选中条目的编辑窗口 */}
+          <div
+            style={{
+              flex: "1.1 1 0",
+              minWidth: 0,
+              display: "flex",
+              flexDirection: "column",
+              minHeight: 0,
+              boxSizing: "border-box",
+              background: TONE.row,
+              border: `1px solid ${TONE.border}`,
+              borderRadius: 10,
+              padding: 10,
+            }}
+          >
+            {!selected ? (
+              <div
+                style={{
+                  flex: 1,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 12,
+                  color: TONE.quiet,
+                }}
+              >
+                {T("pl.previewEmpty")}
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 7, minHeight: 0, flex: 1, overflow: "hidden" }}>
+                <span style={{ fontSize: 12, color: TONE.muted }}>{T("pl.skillModal.titleLabel")}</span>
+                <input
+                  type="text"
+                  value={selected.title}
+                  onChange={(e) => updateEntry(selected.key, { title: e.target.value })}
+                  placeholder={T("pl.skillModal.titleLabel")}
+                  disabled={!selected.checked}
+                  style={{ ...inputStyle }}
+                />
+                <span style={{ fontSize: 12, color: TONE.muted, marginTop: 3 }}>{T("pl.skillModal.tagLabel")}</span>
+                <select
+                  value={selected.tags}
+                  onChange={(e) => updateEntry(selected.key, { tags: e.target.value })}
+                  disabled={!selected.checked}
+                  style={{ ...inputStyle, cursor: "pointer" }}
+                >
+                  <option value="">{T("pl.importEdit.tagsLabel")}</option>
+                  {tagOptions.map((tag) => (
+                    <option key={tag} value={tag}>
+                      {tag}
+                    </option>
+                  ))}
+                </select>
+                <span style={{ fontSize: 12, color: TONE.muted, marginTop: 3 }}>{T("pl.skillModal.bodyLabel")}</span>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flex: 1, minHeight: 0 }}>
+                  <textarea
+                    ref={(el) => {
+                      bodyRefs.current[selected.key] = el;
+                    }}
+                    value={selected.body}
+                    onChange={(e) => updateEntry(selected.key, { body: e.target.value })}
+                    placeholder={T("pl.skillModal.bodyLabel")}
+                    disabled={!selected.checked}
+                    spellCheck={false}
+                    style={{
+                      ...inputStyle,
+                      flex: 1,
+                      minHeight: 420,
+                      resize: "vertical",
+                      lineHeight: 1.6,
+                      whiteSpace: "pre-wrap",
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className={plBtn("ghost", "sm")}
+                    onClick={() => insertVar(selected.key)}
+                    disabled={!selected.checked}
+                    data-tip={T("pl.insertVariableTitle")}
+                    style={{ flexShrink: 0 }}
+                  >
+                    {T("pl.skillModal.insertVar")}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 操作反馈：预留固定行高，避免显示/隐藏时改变布局引起窗口抖动；按类型区分颜色 */}
+        {!result && (
+          <div
+            style={{
+              flexShrink: 0,
+              height: 18,
+              marginTop: 2,
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+              fontSize: 12,
+              lineHeight: 1.5,
+              color: msg
+                ? msg.kind === "error"
+                  ? TONE.red
+                  : msg.kind === "info"
+                  ? TONE.accent
+                  : TONE.success
+                : "transparent",
+              overflow: "hidden",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {msg && (
+              <span
+                style={{
+                  flexShrink: 0,
+                  width: 6,
+                  height: 6,
+                  borderRadius: "50%",
+                  background: msg.kind === "error" ? TONE.red : msg.kind === "info" ? TONE.accent : TONE.success,
+                }}
+              />
+            )}
+            {msg?.text ?? ""}
           </div>
         )}
-
         {/* 导入结果面板：逐条展示成功/失败/跳过 */}
         {result && (
           <ImportResultPanel
@@ -829,8 +813,133 @@ export function ImportEditModal(props: {
               justifyContent: "flex-end",
               alignItems: "center",
               flexShrink: 0,
+              position: "relative",
             }}
           >
+            {/* 浮动反馈层：校验/修复信息（嵌于底部按钮条上方悬浮，一段时间后自动消失） */}
+            {toastOpen && hasFeedback && (
+              <div
+                role={validation ? "alert" : undefined}
+                onMouseEnter={pauseToast}
+                onMouseLeave={resumeToast}
+                style={{
+                  position: "absolute",
+                  bottom: 2,
+                  left: 0,
+                  maxWidth: 360,
+                  maxHeight: 230,
+                  overflow: "auto",
+                  zIndex: 20,
+                  boxSizing: "border-box",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 6,
+                  padding: "9px 11px",
+                  borderRadius: 12,
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                  color: TONE.text,
+                  background: "color-mix(in srgb, var(--dsw-alias-bg-layer-1, #171f2b) 78%, transparent)",
+                  WebkitBackdropFilter: "blur(12px)",
+                  backdropFilter: "blur(12px)",
+                  border: `1px solid ${TONE.borderStrong}`,
+                  boxShadow: "0 8px 24px rgba(0, 0, 0, .22)",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontWeight: 560, fontSize: 12, flex: 1, minWidth: 0 }}>
+                    {T("pl.skillModal.notice")}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setToastOpen(false)}
+                    data-tip={T("pl.close")}
+                    style={{
+                      border: "none",
+                      outline: "none",
+                      background: "transparent",
+                      color: TONE.quiet,
+                      cursor: "pointer",
+                      fontSize: 14,
+                      lineHeight: 1,
+                      fontFamily: MONO,
+                      padding: "0 2px",
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+
+                {msg && (
+                  <div style={{ color: msg.kind === "error" ? TONE.red : msg.kind === "info" ? TONE.accent : TONE.text }}>
+                    {msg.text}
+                  </div>
+                )}
+
+                {validation &&
+                  (validation.ok ? (
+                    <div style={{ color: TONE.success }}>{T("pl.importEdit.validatePass")}</div>
+                  ) : (
+                    <>
+                      <div style={{ color: TONE.red }}>{T("pl.skillModal.issueCount", { count: validation.issues.length })}</div>
+                      <ul
+                        style={{
+                          margin: 0,
+                          paddingLeft: 18,
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 3,
+                          color: TONE.red,
+                        }}
+                      >
+                        {validation.issues.map((issue, idx) => (
+                          <li key={idx}>
+                            「{issue.entryTitle}」{issue.message}
+                          </li>
+                        ))}
+                      </ul>
+                      {validation.fixable && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <Button
+                            type="button"
+                            variant="primary"
+                            size="sm"
+                            className={plBtn("primary", "sm")}
+                            onClick={handleFix}
+                            data-tip={T("pl.skillModal.fixAll")}
+                          >
+                            {T("pl.skillModal.fixAll")}
+                          </Button>
+                          <span style={{ color: TONE.muted }}>
+                            {T("pl.skillModal.fixHint", {
+                              fixable: validation.issues.filter((i) => i.fixable).length,
+                            })}
+                          </span>
+                        </div>
+                      )}
+                    </>
+                  ))}
+
+                {fixLog.length > 0 && (
+                  <div style={{ color: TONE.success }}>
+                    <div>{T("pl.skillModal.fixDone", { count: fixLog.length })}</div>
+                    <ul
+                      style={{
+                        margin: "2px 0 0",
+                        paddingLeft: 18,
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 3,
+                      }}
+                    >
+                      {fixLog.map((f, idx) => (
+                        <li key={idx}>{f}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
             <Button
               type="button"
               variant="ghost"
@@ -847,7 +956,6 @@ export function ImportEditModal(props: {
               className={plBtn("primary", "sm")}
               onClick={handleSave}
               disabled={!validation?.ok || saving || checkedCount === 0}
-              data-tip={validation?.ok ? "" : T("pl.skillModal.selectHint")}
             >
               {saving ? T("pl.importEdit.importing") : T("pl.importEdit.import")}
             </Button>

@@ -54,7 +54,7 @@ export function dbPath(): string {
   return join(dbDir(), "prompts.db");
 }
 
-/** 报纸 Markdown 记录目录：~/.dsh/prompt-library/newspapers/<zh|en>/（每个语言每日一个 YYYY-MM-DD.md，按北京时间日期命名） */
+/** 报纸旧版 Markdown 记录目录：~/.dsh/prompt-library/newspapers/<zh|en>/（仅用于历史数据迁移读取，当前存储为 newspapers 表） */
 export function newspapersDir(): string {
   return join(dataDir(), "newspapers");
 }
@@ -87,24 +87,24 @@ export function backupDir(): string {
   return join(dataDir(), "backup");
 }
 
-// ── AI 人格文件 ─────────────────────────────────────────────────────────────
+// ── AI 人格文件（仅用于历史数据迁移读取，当前存储为数据库 personas 表 / meta 键）────
 
 /** 人格目录：~/.dsh/prompt-library/character/ */
 export function characterDir(): string {
   return join(dataDir(), "character");
 }
 
-/** AI 人格文件路径：~/.dsh/prompt-library/character/SOUL.md */
+/** 旧版默认人格文件路径：~/.dsh/prompt-library/character/SOUL.md（迁移读取用，当前存于 meta 表） */
 export function soulPath(): string {
   return join(characterDir(), "SOUL.md");
 }
 
-/** 多人格目录：~/.dsh/prompt-library/character/personas/（每个自定义人格一个 <id>.md 文件，不建子目录） */
+/** 旧版多人格目录：~/.dsh/prompt-library/character/personas/（迁移读取用） */
 export function personasDir(): string {
   return join(characterDir(), "personas");
 }
 
-/** 某个人格（非默认）的 SOUL 文件路径：~/.dsh/prompt-library/character/personas/<id>.md */
+/** 旧版某个人格（非默认）的 SOUL 文件路径：~/.dsh/prompt-library/character/personas/<id>.md（迁移读取用） */
 export function personaSoulPath(personaId: string): string {
   return join(personasDir(), `${personaId}.md`);
 }
@@ -121,14 +121,14 @@ export function harnessPath(): string {
   return join(promptsDir(), "HARNESS.md");
 }
 
-// ── 会话级技能（MD 文件化，不走数据库）────────────────────────────────────
+// ── 会话级技能（仅用于历史数据迁移读取，当前存储为数据库 session_prompts 表）────
 
-/** 会话级技能目录：~/.dsh/prompt-library/session-prompts/（每个技能一个 <id>.md） */
+/** 旧版会话级技能目录：~/.dsh/prompt-library/session-prompts/（迁移读取用） */
 export function sessionPromptsDir(): string {
   return join(dataDir(), "session-prompts");
 }
 
-/** 某条会话级技能的 MD 文件路径：~/.dsh/prompt-library/session-prompts/<id>.md */
+/** 旧版某条会话级技能的 MD 文件路径：~/.dsh/prompt-library/session-prompts/<id>.md（迁移读取用） */
 export function sessionPromptPath(id: string): string {
   return join(sessionPromptsDir(), `${id}.md`);
 }

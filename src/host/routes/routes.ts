@@ -74,7 +74,7 @@ import {
   setSessionPersonaBindingForSession,
   setSessionPromptBindingForSession,
 } from "../services/session-prompts/session-prompts.js";
-import { checkUpdate, getVersionInfo, restartService, upgradePlugin } from "../services/update/update.js";
+import { checkUpdate, getUpgradeState, getVersionInfo, restartService, startUpgrade } from "../services/update/update.js";
 import { getActivity } from "../services/assistant/activity.js";
 import { buildAssistantStatus } from "../services/assistant/gamification.js";
 import { getAnnouncement } from "../services/update/announcement.js";
@@ -690,10 +690,15 @@ export function makePromptRoutes(): WebRoute[] {
         return json(res, 200, { ok: true, data: info });
       }
 
-      // POST /update/apply — 点击气泡「更新」按钮后执行安装命令升级插件到最新版
+      // POST /update/apply — 点击气泡「更新」按钮后启动后台升级插件到最新版（实时进度见 /update/progress）
       if (method === "POST" && tail === "/update/apply") {
-        const result = await upgradePlugin();
+        const result = startUpgrade();
         return json(res, 200, { ok: result.ok, data: result });
+      }
+
+      // GET /update/progress — 手动升级实时进度（客户端轮询以驱动进度条）
+      if (method === "GET" && tail === "/update/progress") {
+        return json(res, 200, { ok: true, data: getUpgradeState() });
       }
 
       // GET /version — 服务端/客户端版本比对信息（运行版本 + 磁盘已安装版本）
@@ -781,7 +786,7 @@ export function makePromptRoutes(): WebRoute[] {
 
       // GET /announcement/daily — 公告报纸「今日/历史」动态。
       // 每日日报由 AI 依据当日词库统计生成（中英各一版）；成就速报为本地成就进度。
-      // ?date=YYYY-MM-DD 指定某一期；缺省取今天。每期以 Markdown（中英双语）落盘 newspapers/，支持历史翻页。
+      // ?date=YYYY-MM-DD 指定某一期；缺省取今天。每期（中英双语）存入数据库 newspapers 表，支持历史翻页。
       if (method === "GET" && tail === "/announcement/daily") {
         let lang = "zh";
         let date: string | undefined;

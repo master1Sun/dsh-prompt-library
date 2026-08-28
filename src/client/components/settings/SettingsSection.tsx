@@ -22,14 +22,16 @@ import {
   getSettings,
   getStats,
   getUpdate,
+  getUpdateProgress,
+  restartService as apiRestartService,
   updateSettings as apiUpdateSettings,
   type ClientAiSelectable,
   type UpdateInfo,
+  type UpdateProgress,
 } from "../../services/api.js";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { plBtn } from "../../utils/button-style.js";
 import { type PLTranslate, usePLT } from "../../i18n/i18n.js";
-import { PLUGIN_VERSION } from "../../version.js";
 import { BackupModule } from "./modules/BackupModule.js";
 
 const MONO =
@@ -403,6 +405,9 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
   const [checking, setChecking] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [updateMsg, setUpdateMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // 手动升级实时进度（驱动进度条）与升级完成后的「需重启服务」标记
+  const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
+  const [needsRestart, setNeedsRestart] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 自动学习统计：已学习条数 + 近 7 天 AI 完善次数（设置面板展示用）
   const [learnStats, setLearnStats] = useState<{ autoLearnedCount: number; aiRefinedIn7: number } | null>(null);
@@ -476,28 +481,85 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
     }
   }, [T]);
 
-  // 立即更新：执行安装命令，成功/失败均提示
+  // 立即更新：启动后台升级，并轮询实时进度驱动进度条；完成后提示重启服务才生效
   const handleApplyUpdate = useCallback(async () => {
     setUpdating(true);
     setUpdateMsg(null);
+    setUpdateProgress(null);
+    setNeedsRestart(false);
     try {
       const res = await applyUpdate();
-      if (res.ok) {
-        setUpdateMsg({ ok: true, text: T("pl.set.updateSuccess") });
-        // 更新成功后刷新版本信息
+      if (!res.ok || !res.started) {
+        setUpdateMsg({ ok: false, text: T("pl.set.updateFail") });
+        setUpdating(false);
+        return;
+      }
+      // 后台升级已启动：每 500ms 轮询一次进度，直到结束（done/failed）或超时
+      const deadline = Date.now() + 120_000;
+      let finalProg: UpdateProgress | null = null;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 500));
+        let prog: UpdateProgress | null = null;
         try {
-          const info = await getUpdate();
-          setUpdateInfo(info);
-        } catch { /* 忽略 */ }
+          prog = await getUpdateProgress();
+        } catch {
+          /* 单次轮询失败可忽略，下一轮重试 */
+        }
+        if (prog) {
+          setUpdateProgress(prog);
+          if (!prog.active) {
+            finalProg = prog;
+            break;
+          }
+        }
+      }
+      if (finalProg) {
+        if (finalProg.stage === "done") {
+          setNeedsRestart(true);
+        } else if (finalProg.stage === "failed") {
+          setUpdateMsg({ ok: false, text: T("pl.set.updateFail") });
+        }
       } else {
+        // 轮询未在超时内观测到结束，视为失败
         setUpdateMsg({ ok: false, text: T("pl.set.updateFail") });
       }
+      // 更新成功后刷新版本信息
+      try {
+        const info = await getUpdate();
+        setUpdateInfo(info);
+      } catch { /* 忽略 */ }
     } catch {
       setUpdateMsg({ ok: false, text: T("pl.set.updateFail") });
     } finally {
       setUpdating(false);
     }
   }, [T]);
+
+  // 重启本地 dsh web 服务使新版本代码生效（重启后连接会短暂断开）
+  const handleRestart = useCallback(async () => {
+    try {
+      await apiRestartService();
+    } catch { /* 重启断开连接，忽略 */ }
+  }, []);
+
+  // 更新进度条阶段文案：按 stage 返回对应国际化描述
+  const stageLabel = (p: UpdateProgress | null): string => {
+    if (!p || p.stage === "idle") return T("pl.set.updating");
+    switch (p.stage) {
+      case "checking":
+        return T("pl.set.updateStageChecking");
+      case "downloading":
+        return T("pl.set.updateStageDownloading");
+      case "installing":
+        return T("pl.set.updateStageInstalling");
+      case "done":
+        return T("pl.set.updateStageDone");
+      case "failed":
+        return T("pl.set.updateStageFailed");
+      default:
+        return T("pl.set.updating");
+    }
+  };
 
   if (loading) {
     return (
@@ -743,21 +805,21 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
               { value: "dshpet", label: T("pl.set.characterDshpet") },
             ]}
           />
-          {/* 公告控制：仅当词库助手显示时可开关，默认开启；关闭后词库助手右键菜单不显示「公告」 */}
-          <ToggleRow
-            label={T("pl.set.announcement")}
-            desc={T("pl.set.announcementDesc")}
-            checked={draft.announcementEnabled}
-            disabled={assistantUnlocked && !draft.assistantEnabled}
-            onChange={(v) => updateAndSave({ announcementEnabled: v })}
-          />
-          {/* 工具面板：仅当词库助手显示时可开关；关闭词库助手仅灰显，不改动真实保存值 */}
+          {/* 词库管理：仅当词库助手显示时可开关；关闭词库助手仅灰显，不改动真实保存值 */}
           <ToggleRow
             label={T("pl.set.rightPanel")}
             desc={T("pl.set.rightPanelDesc")}
             checked={draft.rightPanelEnabled}
             disabled={assistantUnlocked && !draft.assistantEnabled}
             onChange={(v) => updateAndSave({ rightPanelEnabled: v })}
+          />
+          {/* 数据管理：词库助手右键菜单「数据管理」入口；仅当词库助手显示时可开关 */}
+          <ToggleRow
+            label={T("pl.set.dataManagement")}
+            desc={T("pl.set.dataManagementDesc")}
+            checked={draft.dataManagementEnabled}
+            disabled={assistantUnlocked && !draft.assistantEnabled}
+            onChange={(v) => updateAndSave({ dataManagementEnabled: v })}
           />
           {/* 人格管理：词库助手右键菜单「人格管理」入口；仅当词库助手显示时可开关 */}
           <ToggleRow
@@ -783,14 +845,6 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             disabled={assistantUnlocked && !draft.assistantEnabled}
             onChange={(v) => updateAndSave({ dashboardEnabled: v })}
           />
-          {/* 数据管理：词库助手右键菜单「数据管理」入口；仅当词库助手显示时可开关 */}
-          <ToggleRow
-            label={T("pl.set.dataManagement")}
-            desc={T("pl.set.dataManagementDesc")}
-            checked={draft.dataManagementEnabled}
-            disabled={assistantUnlocked && !draft.assistantEnabled}
-            onChange={(v) => updateAndSave({ dataManagementEnabled: v })}
-          />
           {/* 等级助手：控制小助手等级徽章与右键菜单「成就」入口；仅当词库助手显示时可开关 */}
           <ToggleRow
             label={T("pl.set.levelAssistant")}
@@ -806,6 +860,14 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             checked={draft.levelAnnouncementEnabled}
             disabled={assistantUnlocked && !draft.assistantEnabled}
             onChange={(v) => updateAndSave({ levelAnnouncementEnabled: v })}
+          />
+          {/* 公告控制：仅当词库助手显示时可开关，默认开启；关闭后词库助手右键菜单不显示「公告」 */}
+          <ToggleRow
+            label={T("pl.set.announcement")}
+            desc={T("pl.set.announcementDesc")}
+            checked={draft.announcementEnabled}
+            disabled={assistantUnlocked && !draft.assistantEnabled}
+            onChange={(v) => updateAndSave({ announcementEnabled: v })}
           />
         </div>
         <ToggleRow
@@ -892,31 +954,61 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             padding: "8px 0",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-            <span style={{ fontSize: 13 }}>{T("pl.set.updateReminder")}</span>
-            <button
-              type="button"
-              onClick={handleCheckUpdate}
-              disabled={checking || updating}
-              style={{
-                padding: "5px 12px",
-                fontSize: 12,
-                color: checking || updating ? TONE.quiet : TONE.text,
-                background: TONE.row,
-                border: `1px solid ${TONE.border}`,
-                borderRadius: 5,
-                cursor: checking || updating ? "default" : "pointer",
-              }}
-            >
-              {checking ? T("pl.set.updateChecking") : T("pl.set.checkUpdate")}
-            </button>
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <span style={{ fontSize: 13 }}>{T("pl.set.updateReminder")}</span>
+              <button
+                type="button"
+                onClick={handleCheckUpdate}
+                disabled={checking || updating}
+                style={{
+                  padding: "5px 12px",
+                  fontSize: 12,
+                  color: checking || updating ? TONE.quiet : TONE.text,
+                  background: TONE.row,
+                  border: `1px solid ${TONE.border}`,
+                  borderRadius: 5,
+                  cursor: checking || updating ? "default" : "pointer",
+                }}
+              >
+                {checking ? T("pl.set.updateChecking") : T("pl.set.checkUpdate")}
+              </button>
+            </div>
           </div>
 
           {/* 版本信息状态行 */}
           {checking ? (
             <div style={{ fontSize: 11, color: TONE.quiet }}>{T("pl.set.updateChecking")}</div>
           ) : updating ? (
-            <div style={{ fontSize: 11, color: TONE.accent }}>{T("pl.set.updating")}</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <span style={{ fontSize: 11, color: TONE.accent }}>
+                  {stageLabel(updateProgress)}
+                </span>
+                <span style={{ fontSize: 11, color: TONE.quiet }}>
+                  {updateProgress ? `${updateProgress.percent}%` : ""}
+                </span>
+              </div>
+              <div
+                style={{
+                  height: 6,
+                  borderRadius: 3,
+                  background: TONE.row,
+                  border: `1px solid ${TONE.border}`,
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    height: "100%",
+                    width: `${updateProgress?.percent ?? 0}%`,
+                    background: TONE.accent,
+                    borderRadius: 3,
+                    transition: "width .24s cubic-bezier(.22,1,.36,1)",
+                  }}
+                />
+              </div>
+            </div>
           ) : updateInfo ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               <div style={{ fontSize: 11, color: TONE.quiet }}>
@@ -1077,6 +1169,54 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
               )}
             </div>
           )}
+
+          {/* 升级完成后提示：新代码已装，需重启服务才能生效（仅手动升级成功且尚未重启时显示） */}
+          {needsRestart && (
+            <div
+              role="alert"
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 10,
+                padding: "10px 12px",
+                borderRadius: 7,
+                background:
+                  "linear-gradient(180deg, rgba(59, 130, 246, 0.08) 0%, rgba(59, 130, 246, 0.03) 100%)",
+                border: "1px solid var(--dsw-alias-state-info-primary, rgba(59, 130, 246, 0.35))",
+                color: TONE.text,
+                fontSize: 12,
+                lineHeight: 1.6,
+              }}
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1, minWidth: 0 }}>
+                <strong style={{ fontSize: 12, fontWeight: 600 }}>
+                  {T("pl.set.updateSuccessRestartTitle")}
+                </strong>
+                <span style={{ color: TONE.muted, fontSize: 11.5 }}>
+                  {T("pl.set.updateSuccessRestartHint")}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleRestart}
+                style={{
+                  alignSelf: "flex-start",
+                  flexShrink: 0,
+                  padding: "5px 12px",
+                  fontSize: 12,
+                  color: TONE.text,
+                  background: TONE.row,
+                  border: `1px solid ${TONE.border}`,
+                  borderRadius: 5,
+                  cursor: "pointer",
+                }}
+              >
+                {T("pl.set.restartNow")}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* 分隔线 */}
@@ -1087,7 +1227,6 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           {/* 信息行（标签: 值，分隔布局） */}
           {(
             [
-              [T("pl.about.version"), `v${PLUGIN_VERSION}`],
               [T("pl.about.author"), "master1Sun"],
               [T("pl.about.license"), "MIT"],
             ] as [string, string][]

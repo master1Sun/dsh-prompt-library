@@ -380,7 +380,7 @@ export function apply(ctx: Context) {
   // 并在 db 无数据时一次性迁移旧 prompts.json 到 SQLite（导入后删除旧文件）。
   // 失败静默忽略，不影响其他功能，故此处无需显式初始化调用。
 
-  // 确保 AI 人格文件 SOUL.md 存在（缺失时写入默认模板），供 AI 润色/完善/会话组装时遵守。
+  // 确保 AI 人格正文存在（缺失时写入默认模板），供 AI 润色/完善/会话组装时遵守。
   ensureSoulFile().catch(() => {});
   // 首次使用（技能库为空）时播种三条默认技能（编程 / 文员 / 律师），只播种一次。
   seedDefaultSessionPromptsIfEmpty();
@@ -392,7 +392,7 @@ export function apply(ctx: Context) {
   // 人格（实验室开关控制）只对「新会话」注入整个聊天；首次使用再附一句简短欢迎。
   // systemPrompt 服务可用时注册一个动态 prompt section：每次对话组装时，按会话 scope 判断：
   // - HARNESS：恒注入当前会话（内部上下文，不要向用户回显）；
-  // - 人格：功能关闭 → 不注入，并把该会话记为既存；开启且是新会话 → 注入 SOUL.md；
+  // - 人格：功能关闭 → 不注入，并把该会话记为既存；开启且是新会话 → 注入人格正文；
   // - 技能注入：当前会话「临时注入」优先，其次按工作目录命中「工作区/项目持久绑定」；
   // - 欢迎：只对第一个新会话注入一次简短问候（手册不再打印，用户可用 /prompts -h 查看）。
   ctx.inject(["systemPrompt"], (promptCtx: Context) => {

@@ -6,8 +6,8 @@
  * - 右栏「项目绑定」：把启用的会话级技能持久绑定到工作区 / 项目路径（按会话工作目录解析）。
  *
  * 技能的新增 / 编辑 / 启用 / 删除在本弹窗内联完成（与人格管理一致），无需额外弹窗。
- * 数据存储（与人格管理一致）：正文存 MD 文件（~/.dsh/prompt-library/session-prompts/<id>.md），
- * 标题/标签/启用等元信息存 SQLite（prompts.db 的 session_prompts 表），
+ * 数据存储（与人格管理一致）：标题、正文、标签、启用状态等元信息与正文
+ * 全部存 SQLite（prompts.db 的 session_prompts 表 body 列），不再落盘 md 文件，
  * 持久绑定存 SQLite（prompts.db 的 prompt_scope_bindings 表，与人格绑定一致）。
  *
  * 交互约束（与其它弹窗一致）：
@@ -138,7 +138,17 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // 导入导出等操作反馈（error=false 时为成功/普通提示，error=true 时红色警示）
-  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  const [msg, setMsg] = useState<{ text: string; kind?: "success" | "info" | "error" } | null>(null);
+  // 操作反馈自动消失定时器引用（提示出现后自动清除，避免残留）
+  const msgTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!msg) return;
+    if (msgTimerRef.current) clearTimeout(msgTimerRef.current);
+    msgTimerRef.current = setTimeout(() => setMsg(null), 2600);
+    return () => {
+      if (msgTimerRef.current) clearTimeout(msgTimerRef.current);
+    };
+  }, [msg]);
   // 勾选导出的目标 id 集合
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // 导入文件选择（MD 单文件）
@@ -387,7 +397,7 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
   const handleExport = () => {
     const exportList = prompts.filter((p) => selected.has(p.id));
     if (exportList.length === 0) {
-      setMsg({ text: t("pl.exportSelectEmpty"), error: true });
+      setMsg({ text: t("pl.exportSelectEmpty"), kind: "error" });
       return;
     }
     for (const p of exportList) {
@@ -403,7 +413,7 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
     if (!file) return;
     const text = (await file.text()).trim();
     if (!text) {
-      setMsg({ text: t("pl.inject.importEmpty"), error: true });
+      setMsg({ text: t("pl.inject.importEmpty"), kind: "error" });
       return;
     }
     const title = file.name.replace(/\.[^/.]+$/, "").trim() || "untitled";
@@ -414,7 +424,7 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
       await refresh();
       setMsg({ text: t("pl.inject.importDone", { count: 1 }) });
     } catch {
-      setMsg({ text: t("pl.inject.importFailed"), error: true });
+      setMsg({ text: t("pl.inject.importFailed"), kind: "error" });
     } finally {
       setBusy(false);
     }
@@ -553,7 +563,7 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
             onClick={() => {
               // 未启用时点击编辑给出提示（编辑中的「取消」仍可用）
               if (!p.enabled && !isEditing) {
-                setMsg({ text: t("pl.inject.disabledEditHint"), error: true });
+                setMsg({ text: t("pl.inject.disabledEditHint"), kind: "error" });
                 return;
               }
               if (isEditing) cancelEdit();
@@ -570,7 +580,7 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
             onClick={() => {
               // 未启用时点击删除给出提示
               if (!p.enabled) {
-                setMsg({ text: t("pl.inject.disabledDeleteHint"), error: true });
+                setMsg({ text: t("pl.inject.disabledDeleteHint"), kind: "error" });
                 return;
               }
               setDeleteId(p.id);
@@ -1121,11 +1131,41 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
               </div>
             )}
 
-            {msg && (
-              <div style={{ marginTop: 8, fontSize: 12, color: msg.error ? TONE.red : TONE.text, lineHeight: 1.5, flexShrink: 0 }}>
-                {msg.text}
-              </div>
-            )}
+            {/* 操作反馈：预留固定行高，避免显示/隐藏时改变布局引起窗口抖动；按类型区分颜色 */}
+            <div
+              style={{
+                flexShrink: 0,
+                height: 18,
+                marginTop: 2,
+                display: "flex",
+                alignItems: "center",
+                gap: 5,
+                fontSize: 12,
+                lineHeight: 1.5,
+                color: msg
+                  ? msg.kind === "error"
+                    ? TONE.red
+                    : msg.kind === "info"
+                      ? TONE.accent
+                      : TONE.mint
+                  : "transparent",
+                overflow: "hidden",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {msg && (
+                <span
+                  style={{
+                    flexShrink: 0,
+                    width: 6,
+                    height: 6,
+                    borderRadius: "50%",
+                    background: msg.kind === "error" ? TONE.red : msg.kind === "info" ? TONE.accent : TONE.mint,
+                  }}
+                />
+              )}
+              {msg?.text ?? ""}
+            </div>
 
             {/* 内容区：两栏布局（技能管理 / 项目绑定），左右两栏各自独立滚动 */}
             <div
@@ -1136,7 +1176,7 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
                 gap: 14,
                 paddingTop: 14,
                 paddingBottom: 4,
-                marginTop: 8,
+                marginTop: -8,
               }}
             >
               {/* 左栏：技能管理（独立滚动；

@@ -117,7 +117,7 @@ export interface PersonaMeta {
 export interface PersonaView extends PersonaMeta {
   /** 是否为内置默认人格（不可删除/重命名）。 */
   isDefault: boolean;
-  /** SOUL 正文（默认人格存于 character/SOUL.md，自定义人格存于 character/personas/<id>.md）。 */
+  /** SOUL 正文（默认人格存于 meta 表，自定义人格存于 personas.body）。 */
   content: string;
 }
 

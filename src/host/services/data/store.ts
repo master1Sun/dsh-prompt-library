@@ -11,8 +11,8 @@
  * 所有读写在单进程单连接上串行执行，天然避免并发交错导致的丢失更新。
  */
 import { readFile, rm, writeFile } from "node:fs/promises";
-import { mkdirSync, readFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 // 惰性加载 node:sqlite（屏蔽实验特性警告），DatabaseSync 仅作类型使用
 import { createDatabase } from "../../utils/node-sqlite.js";
@@ -24,7 +24,11 @@ import { enrichLearnedPrompt, isAiAvailable } from "../ai/ai.js";
 import { emitDataChanged } from "../sse/events.js";
 import {
   dbPath,
+  newspapersDir,
+  personaSoulPath,
+  sessionPromptPath,
   SETTINGS_NAMESPACE,
+  soulPath,
   storePath,
   systemSettingsPath,
 } from "../../utils/paths.js";
@@ -143,16 +147,23 @@ function getDb(): DatabaseSync {
       createdAt INTEGER NOT NULL
     );
   `);
-  // 多人格数据表：自定义人格的元信息（SOUL 正文存于 character/personas/<id>.md）。
+  // 多人格数据表：自定义人格的元信息 + SOUL 正文（正文直接存库，不再落盘 md 文件）。
   next.exec(`
     CREATE TABLE IF NOT EXISTS personas (
       id        TEXT PRIMARY KEY,
       name      TEXT NOT NULL,
       enabled   INTEGER NOT NULL DEFAULT 1,
       createdAt INTEGER NOT NULL,
-      updatedAt INTEGER NOT NULL
+      updatedAt INTEGER NOT NULL,
+      body      TEXT NOT NULL DEFAULT ''
     );
   `);
+  // 兼容早期库：缺少 body 列则补建（正文此前存于 character/personas/<id>.md）。
+  try {
+    next.exec("ALTER TABLE personas ADD COLUMN body TEXT NOT NULL DEFAULT ''");
+  } catch {
+    /* 列已存在，忽略 */
+  }
   // 工作区/项目路径 → 人格 绑定表：按目录路径记录当前启用人格。
   // 路径即「工作区或其下项目」的绝对路径，人格解析时按「最深的祖先/相等匹配」生效。
   next.exec(`
@@ -171,7 +182,7 @@ function getDb(): DatabaseSync {
       updatedAt INTEGER NOT NULL
     );
   `);
-  // 会话级技能元信息表（正文存于 session-prompts/<id>.md，与人格 SOUL 文件一致）。
+  // 会话级技能元信息 + 正文表（正文直接存库，不再落盘 session-prompts/<id>.md）。
   next.exec(`
     CREATE TABLE IF NOT EXISTS session_prompts (
       id         TEXT PRIMARY KEY,
@@ -181,9 +192,16 @@ function getDb(): DatabaseSync {
       createdAt  INTEGER NOT NULL,
       updatedAt  INTEGER NOT NULL,
       usageCount INTEGER NOT NULL DEFAULT 0,
-      lastUsedAt INTEGER NOT NULL DEFAULT 0
+      lastUsedAt INTEGER NOT NULL DEFAULT 0,
+      body       TEXT NOT NULL DEFAULT ''
     );
   `);
+  // 兼容早期库：缺少 body 列则补建（正文此前存于 session-prompts/<id>.md）。
+  try {
+    next.exec("ALTER TABLE session_prompts ADD COLUMN body TEXT NOT NULL DEFAULT ''");
+  } catch {
+    /* 列已存在，忽略 */
+  }
   // 会话 id → 人格 + 会话级技能 绑定表：按「会话 id」持久绑定（优先于工作区/项目路径绑定生效）。
   // 一个会话一行，personaId 为空表示会话未绑定自定义人格（回落默认/上游），
   // promptIds 为该会话持久绑定的会话级技能 id 列表（JSON 数组，空/缺省表示未绑定技能）。
@@ -193,6 +211,18 @@ function getDb(): DatabaseSync {
       personaId  TEXT,
       promptIds  TEXT,
       updatedAt  INTEGER NOT NULL
+    );
+  `);
+  // 公告报纸表：每日词库日报 + 成就速报（中英各一行），正文以 JSON 结构化存库，不再落盘 md 文件。
+  next.exec(`
+    CREATE TABLE IF NOT EXISTS newspapers (
+      date       TEXT NOT NULL,
+      lang       TEXT NOT NULL,
+      report     TEXT,
+      news       TEXT,
+      newsSource TEXT,
+      createdAt  INTEGER NOT NULL,
+      PRIMARY KEY (date, lang)
     );
   `);
   // 一次性把提示词中已有的标签同步进标签表（幂等）。
@@ -205,6 +235,13 @@ function getDb(): DatabaseSync {
   seedPointsLedger(next);
   // 一次性迁移历史 JSON 数据（失败静默，不影响使用）。
   migrateLegacyJsonIfNeeded().catch(() => {});
+  // 一次性把旧 md 文件中的正文迁入数据库（人格 SOUL / 会话技能正文 / 公告报纸），
+  // 迁移后正文以库为准，md 文件不再被读取（保留原文件不删除）。
+  try {
+    migrateMdContentToDb();
+  } catch {
+    // 迁移失败静默，不影响使用
+  }
   return next;
 }
 
@@ -576,6 +613,102 @@ async function migrateLegacyJsonIfNeeded(): Promise<void> {
   } catch {
     /* 保留旧文件即可 */
   }
+}
+
+/**
+ * 一次性把旧 md 文件中的正文迁入数据库（默认/自定义人格 SOUL、会话级技能正文、公告报纸）。
+ *
+ * 仅在数据库中对应正文为空时从 md 文件读入（幂等）；迁移后正文以库为准，
+ * 后续读写不再依赖 md 文件（原文件保留不删除）。任何单条失败都静默忽略。
+ */
+function migrateMdContentToDb(): void {
+  // 1. 全局默认人格 SOUL：character/SOUL.md → meta 键
+  if (!getDefaultPersonaSoul()) {
+    try {
+      const content = stripBom(readFileSync(soulPath(), "utf8")).trim();
+      if (content) setDefaultPersonaSoul(content);
+    } catch {
+      /* 文件不存在，忽略 */
+    }
+  }
+  // 2. 自定义人格 SOUL：character/personas/<id>.md → personas.body
+  for (const p of listPersonas()) {
+    if (p.body) continue;
+    try {
+      const content = stripBom(readFileSync(personaSoulPath(p.id), "utf8")).trim();
+      if (content) updatePersonaMeta(p.id, { body: content });
+    } catch {
+      /* 文件不存在，忽略 */
+    }
+  }
+  // 3. 会话级技能正文：session-prompts/<id>.md → session_prompts.body
+  for (const r of listSessionPromptRecords()) {
+    if (r.body) continue;
+    try {
+      const content = stripBom(readFileSync(sessionPromptPath(r.id), "utf8")).trim();
+      if (content) updateSessionPromptMeta(r.id, { body: content });
+    } catch {
+      /* 文件不存在，忽略 */
+    }
+  }
+  // 4. 公告报纸：newspapers/<lang>/YYYY-MM-DD.md → newspapers 表（表为空时导入全部历史期）
+  if (listNewspaperDates().length === 0) {
+    for (const lang of ["zh", "en"] as const) {
+      const dir = join(newspapersDir(), lang);
+      let names: string[] = [];
+      try {
+        names = readdirSync(dir).filter((n) => /^\d{4}-\d{2}-\d{2}\.md$/.test(n));
+      } catch {
+        /* 目录不存在 */
+      }
+      for (const name of names) {
+        const date = name.slice(0, 10);
+        try {
+          const issue = parseLegacyNewspaperMd(date, lang, stripBom(readFileSync(join(dir, name), "utf8")));
+          if (issue) setNewspaperRecord(issue);
+        } catch {
+          /* 单条读取失败忽略 */
+        }
+      }
+    }
+  }
+}
+
+/** 从旧报纸 md 反解析出结构化记录（与旧 daily.ts 的 md 排版一致）。 */
+function parseLegacyNewspaperMd(
+  date: string,
+  lang: "zh" | "en",
+  content: string,
+): NewspaperRecord | undefined {
+  const report: Array<{ headline: string; body: string }> = [];
+  const news: Array<{ title: string; summary: string; url: string }> = [];
+  let section: "report" | "news" | null = null;
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith("## ")) {
+      const lower = trimmed.toLowerCase();
+      if (lower.includes("daily report") || lower.includes("每日日报")) section = "report";
+      else if (lower.includes("achievement") || lower.includes("成就速报")) section = "news";
+      else section = null;
+      continue;
+    }
+    if (section === "report") {
+      const m = trimmed.match(/^-\s*\*\*(.+?)\*\*\s*[:：]\s*(.*)$/);
+      if (m) report.push({ headline: m[1]!.trim(), body: m[2]!.trim() });
+    } else if (section === "news") {
+      const m = trimmed.match(/^(\d+)\.\s*\*\*(.+?)\*\*\s*(?:—\s*)?(.*)$/);
+      if (m) news.push({ title: m[2]!.trim(), summary: m[3]!.trim(), url: "" });
+    }
+  }
+  if (report.length === 0 && news.length === 0) return undefined;
+  return {
+    date,
+    lang,
+    report: report.length > 0 ? report : null,
+    news: news.length > 0 ? news : null,
+    newsSource: "achievement",
+  };
 }
 
 /**
@@ -2158,13 +2291,15 @@ export function updateSettings(patch: Partial<PluginSettings>): Promise<PluginSe
 
 // ── 多人格（自定义 SOUL）数据访问 ─────────────────────────────────────────
 
-/** 自定义人格的元信息（不包含 SOUL 正文；正文以文件形式存放于 character/personas/<id>.md）。 */
+/** 自定义人格记录（含 SOUL 正文，正文直接存库）。 */
 export interface PersonaRecord {
   id: string;
   name: string;
   enabled: boolean;
   createdAt: number;
   updatedAt: number;
+  /** SOUL 正文（自定义人格直接存于本表 body 列）。 */
+  body: string;
 }
 
 /** 读取一行人格记录的辅助函数（codec 内联，避免重复写列映射）。 */
@@ -2174,6 +2309,7 @@ function personaFromRow(row: {
   enabled: number;
   createdAt: number;
   updatedAt: number;
+  body: string;
 }): PersonaRecord {
   return {
     id: row.id,
@@ -2181,6 +2317,7 @@ function personaFromRow(row: {
     enabled: row.enabled === 1,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    body: row.body ?? "",
   };
 }
 
@@ -2188,8 +2325,8 @@ function personaFromRow(row: {
 export function listPersonas(): PersonaRecord[] {
   try {
     const rows = getDb()
-      .prepare("SELECT id, name, enabled, createdAt, updatedAt FROM personas ORDER BY createdAt ASC")
-      .all() as Array<{ id: string; name: string; enabled: number; createdAt: number; updatedAt: number }>;
+      .prepare("SELECT id, name, enabled, createdAt, updatedAt, body FROM personas ORDER BY createdAt ASC")
+      .all() as Array<{ id: string; name: string; enabled: number; createdAt: number; updatedAt: number; body: string }>;
     return rows.map(personaFromRow);
   } catch {
     return [];
@@ -2200,9 +2337,9 @@ export function listPersonas(): PersonaRecord[] {
 export function getPersona(id: string): PersonaRecord | undefined {
   try {
     const row = getDb()
-      .prepare("SELECT id, name, enabled, createdAt, updatedAt FROM personas WHERE id = ?")
+      .prepare("SELECT id, name, enabled, createdAt, updatedAt, body FROM personas WHERE id = ?")
       .get(id) as
-      | { id: string; name: string; enabled: number; createdAt: number; updatedAt: number }
+      | { id: string; name: string; enabled: number; createdAt: number; updatedAt: number; body: string }
       | undefined;
     return row ? personaFromRow(row) : undefined;
   } catch {
@@ -2210,29 +2347,33 @@ export function getPersona(id: string): PersonaRecord | undefined {
   }
 }
 
-/** 创建人格记录（仅元信息；SOUL 文件的写盘由 persona 服务负责）。 */
-export function createPersona(id: string, name: string): PersonaRecord {
+/** 创建人格记录（元信息 + SOUL 正文，一并存库）。 */
+export function createPersona(id: string, name: string, body: string = ""): PersonaRecord {
   const now = Date.now();
   const db_ = getDb();
   db_
-    .prepare("INSERT INTO personas (id, name, enabled, createdAt, updatedAt) VALUES (?, ?, 1, ?, ?)")
-    .run(id, name, now, now);
-  return { id, name, enabled: true, createdAt: now, updatedAt: now };
+    .prepare("INSERT INTO personas (id, name, enabled, createdAt, updatedAt, body) VALUES (?, ?, 1, ?, ?, ?)")
+    .run(id, name, now, now, body);
+  return { id, name, enabled: true, createdAt: now, updatedAt: now, body };
 }
 
-/** 更新人格元信息（name / enabled）；记录不存在返回 false。 */
-export function updatePersonaMeta(id: string, patch: { name?: string; enabled?: boolean }): boolean {
+/** 更新人格（name / enabled / body）；记录不存在返回 false。 */
+export function updatePersonaMeta(
+  id: string,
+  patch: { name?: string; enabled?: boolean; body?: string },
+): boolean {
   const existing = getPersona(id);
   if (!existing) return false;
   const next: PersonaRecord = {
     ...existing,
     name: patch.name ?? existing.name,
     enabled: patch.enabled ?? existing.enabled,
+    body: patch.body ?? existing.body,
     updatedAt: Date.now(),
   };
   getDb()
-    .prepare("UPDATE personas SET name = ?, enabled = ?, updatedAt = ? WHERE id = ?")
-    .run(next.name, next.enabled ? 1 : 0, next.updatedAt, id);
+    .prepare("UPDATE personas SET name = ?, enabled = ?, body = ?, updatedAt = ? WHERE id = ?")
+    .run(next.name, next.enabled ? 1 : 0, next.body, next.updatedAt, id);
   return true;
 }
 
@@ -2250,10 +2391,10 @@ export function deletePersona(id: string): boolean {
   return true;
 }
 
-// ── 会话级技能（元信息）数据访问 ──────────────────────────────────────────
-// 与多人格一致：元信息（标题/标签/启用等）存 SQLite，正文存 session-prompts/<id>.md 文件。
+// ── 会话级技能（元信息 + 正文）数据访问 ────────────────────────────────────
+// 与多人格一致：元信息（标题/标签/启用等）+ 正文（body）都直接存 SQLite。
 
-/** 会话级技能的元信息记录（不包含正文；正文以文件形式存放于 session-prompts/<id>.md）。 */
+/** 会话级技能记录（含正文，正文直接存于本表 body 列）。 */
 export interface SessionPromptRecord {
   id: string;
   title: string;
@@ -2263,6 +2404,8 @@ export interface SessionPromptRecord {
   updatedAt: number;
   usageCount: number;
   lastUsedAt: number;
+  /** 注入到系统提示/输入框的技能正文。 */
+  body: string;
 }
 
 /** 读取一行会话级技能记录的辅助函数（tags 列为 JSON 数组或 NULL）。 */
@@ -2275,6 +2418,7 @@ function sessionPromptFromRow(row: {
   updatedAt: number;
   usageCount: number;
   lastUsedAt: number;
+  body: string;
 }): SessionPromptRecord {
   let tags: string[] | undefined;
   if (row.tags) {
@@ -2294,15 +2438,16 @@ function sessionPromptFromRow(row: {
     updatedAt: row.updatedAt,
     usageCount: row.usageCount,
     lastUsedAt: row.lastUsedAt,
+    body: row.body ?? "",
   };
 }
 
-/** 列出全部会话级技能元信息（按更新时间倒序）。 */
+/** 列出全部会话级技能（按更新时间倒序）。 */
 export function listSessionPromptRecords(): SessionPromptRecord[] {
   try {
     const rows = getDb()
       .prepare(
-        "SELECT id, title, tags, enabled, createdAt, updatedAt, usageCount, lastUsedAt FROM session_prompts ORDER BY updatedAt DESC",
+        "SELECT id, title, tags, enabled, createdAt, updatedAt, usageCount, lastUsedAt, body FROM session_prompts ORDER BY updatedAt DESC",
       )
       .all() as Array<{
       id: string;
@@ -2313,6 +2458,7 @@ export function listSessionPromptRecords(): SessionPromptRecord[] {
       updatedAt: number;
       usageCount: number;
       lastUsedAt: number;
+      body: string;
     }>;
     return rows.map(sessionPromptFromRow);
   } catch {
@@ -2320,12 +2466,12 @@ export function listSessionPromptRecords(): SessionPromptRecord[] {
   }
 }
 
-/** 按 id 读取一条会话级技能元信息；不存在返回 undefined。 */
+/** 按 id 读取一条会话级技能；不存在返回 undefined。 */
 export function getSessionPromptRecord(id: string): SessionPromptRecord | undefined {
   try {
     const row = getDb()
       .prepare(
-        "SELECT id, title, tags, enabled, createdAt, updatedAt, usageCount, lastUsedAt FROM session_prompts WHERE id = ?",
+        "SELECT id, title, tags, enabled, createdAt, updatedAt, usageCount, lastUsedAt, body FROM session_prompts WHERE id = ?",
       )
       .get(id) as
       | {
@@ -2337,6 +2483,7 @@ export function getSessionPromptRecord(id: string): SessionPromptRecord | undefi
           updatedAt: number;
           usageCount: number;
           lastUsedAt: number;
+          body: string;
         }
       | undefined;
     return row ? sessionPromptFromRow(row) : undefined;
@@ -2345,11 +2492,11 @@ export function getSessionPromptRecord(id: string): SessionPromptRecord | undefi
   }
 }
 
-/** 创建会话级技能元信息记录（仅元信息；正文 MD 文件的写盘由 session-prompts 服务负责）。 */
+/** 创建会话级技能记录（元信息 + 正文，一并存库）。 */
 export function createSessionPromptRecord(
   id: string,
   title: string,
-  init: { tags?: string[]; enabled?: boolean; createdAt?: number; updatedAt?: number } = {},
+  init: { tags?: string[]; enabled?: boolean; createdAt?: number; updatedAt?: number; body?: string } = {},
 ): SessionPromptRecord {
   const now = Date.now();
   const createdAt = init.createdAt ?? now;
@@ -2361,15 +2508,16 @@ export function createSessionPromptRecord(
       })()
     : undefined;
   const enabled = init.enabled ?? true;
+  const body = init.body ?? "";
   getDb()
     .prepare(
-      "INSERT INTO session_prompts (id, title, tags, enabled, createdAt, updatedAt, usageCount, lastUsedAt) VALUES (?, ?, ?, ?, ?, ?, 0, 0)",
+      "INSERT INTO session_prompts (id, title, tags, enabled, createdAt, updatedAt, usageCount, lastUsedAt, body) VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?)",
     )
-    .run(id, title, tags ? JSON.stringify(tags) : null, enabled ? 1 : 0, createdAt, updatedAt);
-  return { id, title, tags, enabled, createdAt, updatedAt, usageCount: 0, lastUsedAt: 0 };
+    .run(id, title, tags ? JSON.stringify(tags) : null, enabled ? 1 : 0, createdAt, updatedAt, body);
+  return { id, title, tags, enabled, createdAt, updatedAt, usageCount: 0, lastUsedAt: 0, body };
 }
 
-/** 更新会话级技能元信息（title / tags / enabled / usageCount / lastUsedAt）；记录不存在返回 false。 */
+/** 更新会话级技能（title / tags / enabled / usageCount / lastUsedAt / body）；记录不存在返回 false。 */
 export function updateSessionPromptMeta(
   id: string,
   patch: {
@@ -2378,6 +2526,7 @@ export function updateSessionPromptMeta(
     enabled?: boolean;
     usageCount?: number;
     lastUsedAt?: number;
+    body?: string;
   },
 ): boolean {
   const existing = getSessionPromptRecord(id);
@@ -2395,11 +2544,12 @@ export function updateSessionPromptMeta(
     enabled: patch.enabled ?? existing.enabled,
     usageCount: patch.usageCount ?? existing.usageCount,
     lastUsedAt: patch.lastUsedAt ?? existing.lastUsedAt,
+    body: patch.body ?? existing.body,
     updatedAt: Date.now(),
   };
   getDb()
     .prepare(
-      "UPDATE session_prompts SET title = ?, tags = ?, enabled = ?, updatedAt = ?, usageCount = ?, lastUsedAt = ? WHERE id = ?",
+      "UPDATE session_prompts SET title = ?, tags = ?, enabled = ?, updatedAt = ?, usageCount = ?, lastUsedAt = ?, body = ? WHERE id = ?",
     )
     .run(
       next.title,
@@ -2408,16 +2558,105 @@ export function updateSessionPromptMeta(
       next.updatedAt,
       next.usageCount,
       next.lastUsedAt,
+      next.body,
       id,
     );
   return true;
 }
 
-/** 删除会话级技能元信息记录（正文 MD 文件删除由 session-prompts 服务负责）。 */
+/** 删除会话级技能记录（正文随记录一并删除）。 */
 export function deleteSessionPromptRecord(id: string): boolean {
   const db_ = getDb();
   db_.prepare("DELETE FROM session_prompts WHERE id = ?").run(id);
   return true;
+}
+
+// ── 公告报纸（newspapers 表）数据访问 ──────────────────────────────────────
+
+/** 单期报纸记录（report / news 为 JSON 数组或 null）。 */
+export interface NewspaperRecord {
+  date: string;
+  lang: "zh" | "en";
+  /** 每日日报条目（{headline, body}）。 */
+  report: Array<{ headline: string; body: string }> | null;
+  /** 成就速报条目（{title, summary, url}）。 */
+  news: Array<{ title: string; summary: string; url: string }> | null;
+  /** 速报来源标记（如 achievement）。 */
+  newsSource: string | null;
+}
+
+/** 把某列 JSON 文本解析成数组；空/非法返回 undefined。 */
+function parseJsonArray(text: string | null): unknown[] | undefined {
+  if (!text) return undefined;
+  try {
+    const v = JSON.parse(text) as unknown;
+    return Array.isArray(v) ? v : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 读取某一期报纸；不存在返回 undefined。 */
+export function getNewspaperRecord(date: string, lang: string): NewspaperRecord | undefined {
+  try {
+    const row = getDb()
+      .prepare("SELECT date, lang, report, news, newsSource FROM newspapers WHERE date = ? AND lang = ?")
+      .get(date, lang) as
+      | { date: string; lang: string; report: string | null; news: string | null; newsSource: string | null }
+      | undefined;
+    if (!row) return undefined;
+    return {
+      date: row.date,
+      lang: row.lang === "en" ? "en" : "zh",
+      report: (parseJsonArray(row.report) as Array<{ headline: string; body: string }> | null) ?? null,
+      news: (parseJsonArray(row.news) as Array<{ title: string; summary: string; url: string }> | null) ?? null,
+      newsSource: row.newsSource,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/** 写入某一期报纸（按 date + lang 覆盖）。 */
+export function setNewspaperRecord(issue: NewspaperRecord): void {
+  const db_ = getDb();
+  db_
+    .prepare(
+      "INSERT INTO newspapers (date, lang, report, news, newsSource, createdAt) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(date, lang) DO UPDATE SET report = excluded.report, news = excluded.news, newsSource = excluded.newsSource",
+    )
+    .run(
+      issue.date,
+      issue.lang,
+      issue.report && issue.report.length > 0 ? JSON.stringify(issue.report) : null,
+      issue.news && issue.news.length > 0 ? JSON.stringify(issue.news) : null,
+      issue.newsSource ?? null,
+      Date.now(),
+    );
+}
+
+/** 列出全部已生成过报纸的日期（去重后按时间倒序，最新在前）。 */
+export function listNewspaperDates(): string[] {
+  try {
+    const rows = getDb().prepare("SELECT DISTINCT date FROM newspapers").all() as Array<{ date: string }>;
+    return rows.map((r) => r.date).sort((a, b) => (a < b ? 1 : -1));
+  } catch {
+    return [];
+  }
+}
+
+// ── 全局默认人格 SOUL（meta 表存储）───────────────────────────────────────
+
+/** 默认人格 SOUL 在 meta 表中的键（正文直接存库，不再落盘 character/SOUL.md）。 */
+const DEFAULT_SOUL_META_KEY = "pl:default-persona-soul";
+
+/** 读取全局默认人格 SOUL 正文；未初始化返回空串。 */
+export function getDefaultPersonaSoul(): string {
+  return getMetaValue(DEFAULT_SOUL_META_KEY);
+}
+
+/** 写入全局默认人格 SOUL 正文。 */
+export function setDefaultPersonaSoul(content: string): void {
+  setMetaValue(DEFAULT_SOUL_META_KEY, content);
 }
 
 /** 记录某路径（工作区或其下项目）当前绑定的人格（personaId 为 'default' 或空表示使用全局默认人格）。 */

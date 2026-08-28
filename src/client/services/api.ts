@@ -362,9 +362,30 @@ export function getUpdate(): Promise<UpdateInfo> {
   return send<UpdateInfo>("GET", "/api/prompt-library/update");
 }
 
-/** 执行安装命令，把插件升级到最新版；返回是否成功及命令输出。 */
-export function applyUpdate(): Promise<{ ok: boolean; output: string }> {
-  return send<{ ok: boolean; output: string }>("POST", "/api/prompt-library/update/apply");
+/** 手动升级的实时进度（客户端轮询以驱动更新进度条）。 */
+export interface UpdateProgress {
+  /** 是否有升级正在后台执行。 */
+  active: boolean;
+  stage: "idle" | "checking" | "downloading" | "installing" | "done" | "failed";
+  /** 进度百分比（0-100）。 */
+  percent: number;
+  /** 可选附加说明（如安装命令输出摘要）。 */
+  detail?: string;
+}
+
+/** 启动后台升级插件到最新版：立即返回是否已成功发起；升级在后台执行，实时进度由 getUpdateProgress 轮询获取。 */
+export function applyUpdate(): Promise<{ ok: boolean; started: boolean; error?: string }> {
+  return send<{ ok: boolean; started: boolean; error?: string }>("POST", "/api/prompt-library/update/apply");
+}
+
+/** 读取后台升级的实时进度（升级期间的进度条/阶段变化）。 */
+export function getUpdateProgress(): Promise<UpdateProgress> {
+  return send<UpdateProgress>("GET", "/api/prompt-library/update/progress");
+}
+
+/** 通知 host 重启本地 dsh web 服务（重启后当前连接会短暂断开）。 */
+export function restartService(): Promise<{ ok: boolean; error?: string }> {
+  return send<{ ok: boolean; error?: string }>("POST", "/api/prompt-library/restart");
 }
 
 const SETTINGS_BASE = "/api/prompt-library/settings";

@@ -414,7 +414,7 @@ function userMessage(rawBody: string, tag?: string, existingVars?: string[]): st
 }
 
 /**
- * 把 SOUL.md 人格注入 AI 的 system prompt，让 AI 遵守用户自定义的人设/语气/工作规范。
+ * 把人格正文注入 AI 的 system prompt，让 AI 遵守用户自定义的人设/语气/工作规范。
  * 读取失败时静默忽略，不影响本次调用。
  *
  * 调用方若已用 readSoulDoc() 读过 soul，应直接传入复用；soul 为空时回退到自行读取。

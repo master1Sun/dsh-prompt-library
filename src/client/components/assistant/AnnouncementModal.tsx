@@ -286,7 +286,10 @@ export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
       aria-modal="true"
       aria-label={t("pl.announce.title")}
       className={PL_DIALOG_OVERLAY}
-      onClick={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        // 点击蒙层（空白处）关闭；点击对话框内部不关闭
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
       <style>{PL_DIALOG_CSS}</style>
       <style>{`@keyframes plPageFade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}.pl-page-turn{animation:plPageFade .32s ease-out}`}</style>
@@ -546,7 +549,7 @@ export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
                             >
                               {item.headline}
                             </div>
-                            <div style={{ fontSize: 12, color: TONE.muted, lineHeight: 1.6 }}>{item.body}</div>
+                            <div style={{ fontSize: 12, color: TONE.muted, lineHeight: 1.6, fontFamily: SERIF }}>{item.body}</div>
                           </div>
                         </li>
                       ))}
@@ -599,7 +602,7 @@ export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
                               >
                                 {sanitizeText(item.title)}
                               </div>
-                              <div style={{ fontSize: 12, color: TONE.muted, lineHeight: 1.55, marginTop: 1 }}>
+                              <div style={{ fontSize: 12, color: TONE.muted, lineHeight: 1.55, marginTop: 1, fontFamily: SERIF }}>
                                 {sanitizeText(item.summary)}
                               </div>
                               {item.url && (
@@ -686,6 +689,7 @@ export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
                           fontSize: 13,
                           lineHeight: 1.65,
                           color: TONE.muted,
+                          fontFamily: SERIF,
                         }}
                       >
                         <span
@@ -734,6 +738,7 @@ export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
                               fontSize: 13,
                               lineHeight: 1.65,
                               color: TONE.muted,
+                              fontFamily: SERIF,
                             }}
                           >
                             <span

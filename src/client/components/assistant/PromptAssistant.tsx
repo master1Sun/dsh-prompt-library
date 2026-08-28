@@ -3,7 +3,7 @@
  *
  * 以一个助手形象常驻屏幕，可独立拖动；悬停时展示功能简介气泡，未悬停时也会
  * 按设置的频率自动冒气泡提示。与右侧面板解耦：本组件自管理位置/冒泡/简介，
- * 不再内嵌于面板状态。左键不联动面板，面板开合统一由右键菜单「打开工具面板」
+ * 不再内嵌于面板状态。左键不联动面板，面板开合统一由右键菜单「打开词库管理」
  * 通过 onTogglePanel 回调通知父级。
  */
 import {
@@ -148,7 +148,7 @@ interface Props {
   settings?: PluginSettings;
   /** 设置是否已从 host 拉取完成。未就绪前不渲染助手形象，避免初始化时闪默认款（米兔）。 */
   settingsReady?: boolean;
-  /** 打开/收起右侧面板的回调（仅右键菜单「打开工具面板」触发；左键不联动面板）。 */
+  /** 打开/收起右侧面板的回调（仅右键菜单「打开词库管理」触发；左键不联动面板）。 */
   onTogglePanel?: () => void;
 }
 
@@ -792,7 +792,7 @@ export function PromptAssistant(props: Props): ReactNode {
   };
 
   // 右键菜单显隐规则：词库助手自常驻以来始终启用；「技能注入」为常驻入口（无开关），
-  // 因此右键菜单始终显示（其余工具面板 / 公告 / 成就 / 人格管理 / 看板 / 数据管理均可单独关闭）。
+  // 因此右键菜单始终显示（其余词库管理 / 公告 / 成就 / 人格管理 / 看板 / 数据管理均可单独关闭）。
   const ctxMenuEnabled = true;
 
   // 右键菜单弹出后，测量真实宽高并把菜单完整限制在视口内（防止内容变长后底部溢出）。
@@ -864,7 +864,7 @@ export function PromptAssistant(props: Props): ReactNode {
       setDragging(false); // 恢复位移动画
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
-      // 左键单击（未拖动）：不联动面板，只触发互动反馈（面板开合统一走右键菜单「打开工具面板」）
+      // 左键单击（未拖动）：不联动面板，只触发互动反馈（面板开合统一走右键菜单「打开词库管理」）
       if (clicked) {
         triggerTap();
       }
@@ -1110,7 +1110,7 @@ export function PromptAssistant(props: Props): ReactNode {
           aria-label={T("pl.title")}
           onMouseDown={startPersonDrag}
           onContextMenu={(e) => {
-            // 右键：弹出迷你菜单（工具面板 / 成就 / 公告）；与左键拖动/单击互不干扰。
+            // 右键：弹出迷你菜单（词库管理 / 成就 / 公告）；与左键拖动/单击互不干扰。
             // 词库助手未启用，或工具/公告/成就入口全部关闭时不弹菜单。
             e.preventDefault();
             if (!ctxMenuEnabled) return;
@@ -1526,7 +1526,7 @@ export function PromptAssistant(props: Props): ReactNode {
         </div>,
         document.body,
       )}
-      {/* 右键迷你菜单：点击外部区域或菜单项后关闭；「打开工具面板 / 成就 / 公告」共用此入口 */}
+      {/* 右键迷你菜单：点击外部区域或菜单项后关闭；「打开词库管理 / 成就 / 公告」共用此入口 */}
       {ctxMenu && ctxMenuEnabled && (
         <>
           {createPortal(
@@ -1571,7 +1571,7 @@ export function PromptAssistant(props: Props): ReactNode {
                 </svg>
                 {T("pl.floating.title")}
               </div>
-              {/* 打开工具面板：仅当「显示词库工具面板」开关开启时显示 */}
+              {/* 打开词库管理：仅当「显示词库管理」开关开启时显示 */}
               {(settings?.rightPanelEnabled ??
                 DEFAULT_SETTINGS.rightPanelEnabled) && (
                 <div

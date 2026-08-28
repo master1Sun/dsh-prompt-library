@@ -20,6 +20,7 @@ import {
 } from "../../services/api.js";
 import { getTone, useThemeSync, contrastFg, type ThemeTone } from "../../utils/theme.js";
 import { DialogCloseButton } from "../common/DialogCloseButton.js";
+import { BookIcon } from "../common/BookIcon.js";
 import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../../utils/dialog-style.js";
 import { LEVEL_COLORS, MAX_LEVEL } from "../../utils/sprite.js";
 
@@ -1592,7 +1593,10 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
       aria-modal="true"
       aria-label={t("pl.achievements.title")}
       className={PL_DIALOG_OVERLAY}
-      onClick={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        // 点击蒙层（空白处）关闭；点击对话框内部不关闭
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
       <style>{PL_DIALOG_CSS}</style>
       <div
@@ -1606,8 +1610,9 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
       >
         {/* 标题行 + 右上角关闭按钮 */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-          <strong style={{ flex: 1, fontSize: 15, fontWeight: 600, color: TONE.text }}>
-            {t("pl.achievements.title")}
+          <strong style={{ flex: 1, fontSize: 15, fontWeight: 600, color: TONE.text, display: "flex", alignItems: "center", gap: 7 }}>
+            <BookIcon color={TONE.accent} size={15} />
+            <span>{t("pl.achievements.title")}</span>
           </strong>
           <DialogCloseButton onClick={onClose} label={t("pl.close")} />
         </div>

@@ -14,7 +14,7 @@
 import { get as httpsGet } from "node:https";
 import type { IncomingMessage } from "node:http";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
-import { exec, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { getSettings, readGlobalLocale } from "../data/store.js";
 import { dshHome, logDir } from "../../utils/paths.js";
@@ -310,6 +310,47 @@ export async function checkUpdate(force = false): Promise<UpdateInfo> {
 const UPGRADE_TIMEOUT_MS = 180_000;
 
 /**
+ * 手动升级的实时进度（供客户端轮询展示进度条）。
+ * stage：idle 空闲；checking 准备；downloading 下载；installing 安装；done 成功；failed 失败。
+ */
+export interface UpgradeProgress {
+  /** 是否有升级正在后台执行。 */
+  active: boolean;
+  stage: "idle" | "checking" | "downloading" | "installing" | "done" | "failed";
+  /** 进度百分比（0-100）。 */
+  percent: number;
+  /** 可选附加说明（如安装命令输出摘要）。 */
+  detail?: string;
+}
+
+/** 手动升级的当前进度（模块级状态，供 startUpgrade / getUpgradeState 读写）。 */
+let upgradeState: UpgradeProgress = { active: false, stage: "idle", percent: 0 };
+
+/** 合并更新当前进度状态（写进度状态失败不影响主流程）。 */
+function setUpgradeProgress(patch: Partial<UpgradeProgress>): void {
+  upgradeState = { ...upgradeState, ...patch };
+}
+
+/** 读取当前升级进度（返回副本，避免外部篡改内部状态）。 */
+export function getUpgradeState(): UpgradeProgress {
+  return { ...upgradeState };
+}
+
+/**
+ * 启动一次后台升级（点击「立即更新」用）：立即返回 started，升级在后台执行，
+ * 客户端通过轮询 getUpgradeState() 实时获取进度条变化。
+ * 已在升级（手动或自动）进行中时返回 busy。
+ */
+export function startUpgrade(): { ok: boolean; started: boolean; error?: string } {
+  if (upgradeState.active || autoUpdating) {
+    return { ok: false, started: false, error: "busy" };
+  }
+  setUpgradeProgress({ active: true, stage: "checking", percent: 0 });
+  void upgradePlugin(); // 后台执行，不阻塞返回
+  return { ok: true, started: true };
+}
+
+/**
  * 执行「更新插件」命令行，把插件安装/升级到指定版本。
  *
  * 不传 target 时自动选择：取 checkUpdate 得到的最新待更新版本。
@@ -345,17 +386,47 @@ export async function upgradePlugin(target?: string, gitRef = ""): Promise<{ ok:
   const vlog = buildVersionLogCopy(await readGlobalLocale());
   logVersion(vlog.upgradeStart(version || pkg, cmd));
   return new Promise((resolve) => {
-    exec(cmd, { timeout: UPGRADE_TIMEOUT_MS }, (err, stdout, stderr) => {
-      const output = (stdout + (stderr ? `\n${stderr}` : "")).trim().slice(0, 1000);
-      if (err) {
-        logVersion(vlog.upgradeFail(output || String(err)));
-        resolve({ ok: false, output: output || String(err) });
-        return;
+    setUpgradeProgress({ active: true, stage: "downloading", percent: 5 });
+    const child = spawn(cmd, { shell: true, windowsHide: true });
+    const parts: string[] = [];
+    let completed = false;
+    let timer: NodeJS.Timeout | undefined;
+    const finish = (ok: boolean, out: string): void => {
+      if (completed) return;
+      completed = true;
+      if (timer) clearTimeout(timer);
+      if (ok) {
+        // 升级成功后使版本缓存失效：下次检查会重新请求 registry，避免旧缓存一直提示更新
+        cache = null;
+        logVersion(vlog.upgradeOk);
+        setUpgradeProgress({ active: false, stage: "done", percent: 100 });
+      } else {
+        logVersion(vlog.upgradeFail(out || "unknown error"));
+        setUpgradeProgress({ active: false, stage: "failed", detail: out });
       }
-      // 升级成功后使版本缓存失效：下次检查会重新请求 registry，避免旧缓存一直提示更新
-      cache = null;
-      logVersion(vlog.upgradeOk);
-      resolve({ ok: true, output });
+      resolve({ ok, output: out });
+    };
+    // 安装阶段：随子进程输出字符推进伪实时进度（无精确百分比，按输出量估算），封顶 90%；退出后定成败
+    let outLen = 0;
+    const onData = (buf: Buffer): void => {
+      const text = buf.toString("utf8");
+      parts.push(text);
+      outLen += text.length;
+      setUpgradeProgress({
+        stage: "installing",
+        percent: Math.min(90, 5 + Math.floor(Math.min(80, outLen / 256))),
+      });
+    };
+    child.stdout?.on("data", onData);
+    child.stderr?.on("data", onData);
+    child.on("error", (err) => finish(false, err instanceof Error ? err.message : String(err)));
+    timer = setTimeout(() => {
+      finish(false, "timeout");
+      child.kill();
+    }, UPGRADE_TIMEOUT_MS);
+    child.on("close", (code) => {
+      const output = parts.join("").trim().slice(0, 1000);
+      finish(code === 0, output);
     });
   });
 }

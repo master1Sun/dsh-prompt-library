@@ -5,17 +5,19 @@
  *  - 每日日报：依据当日本地词库统计由 AI 生成（ai.ts::generateDailyReport），中英各生成一版；
  *  - 成就速报：纯本地成就进度，由 gamification.ts::buildAchievementNews 生成，不依赖网络 / IT 网站 / AI。
  *
- * 持久化：不写入任何 JSON 库，仅以 Markdown 为唯一记录。
- *   ~/.dsh/prompt-library/newspapers/zh/YYYY-MM-DD.md   → 中文版
- *   ~/.dsh/prompt-library/newspapers/en/YYYY-MM-DD.md   → 英文版
- * 当日首次打开即生成「中英两版」一并落盘；其后当天及历史日期都直接从对应语言的 md 读取并回显，
- * 天然支持翻页查看历史，无需再抓取任何网页信息。「第几期」由 md 文件数量推导（见 listIssueDates）。
+ * 持久化：直接存入 SQLite（prompts.db 的 newspapers 表），不再落盘 md 文件。
+ * 当日首次打开即生成「中英两版」一并存库；其后当天及历史日期都直接从库读取并回显，
+ * 天然支持翻页查看历史，无需再抓取任何网页信息。「第几期」由 newspapers 表去重日期推导（见 listIssueDates）。
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import type { PluginSettings } from "../../../types.js";
-import { newspapersDir } from "../../utils/paths.js";
-import { computeLibraryStats, computeStreak, type LibraryStats } from "../data/store.js";
+import {
+  computeLibraryStats,
+  computeStreak,
+  getNewspaperRecord,
+  listNewspaperDates,
+  setNewspaperRecord,
+  type LibraryStats,
+} from "../data/store.js";
 import { buildAchievementNews } from "../assistant/gamification.js";
 import {
   generateDailyReport,
@@ -46,18 +48,13 @@ function buildStatsText(s: LibraryStats): string {
 /** 科技快讯（成就速报）来源标记。 */
 export type NewsSource = "achievement";
 
-/** 单期报纸内容（数据只来自 Markdown 解析 / 当日生成）。 */
+/** 单期报纸内容（数据只来自 newspapers 表读取 / 当日生成）。 */
 export interface IssueData {
   date: string;
   lang: "zh" | "en";
   report: DailyReportItem[] | null;
   news: TechNewsItem[] | null;
   newsSource?: NewsSource | null;
-}
-
-/** 某个语言版本的 Markdown 路径：newspapers/<lang>/YYYY-MM-DD.md。 */
-function issueMdPath(date: string, lang: "zh" | "en"): string {
-  return join(newspapersDir(), lang, `${date}.md`);
 }
 
 /** 北京时间（UTC+8）的日期键与当前时间戳。 */
@@ -69,91 +66,32 @@ function beijingNow(): { date: string; at: string } {
   return { date, at };
 }
 
-/** 把一个日期键转成中文 / 英文友好的可读日期（用于 Markdown 标题）。 */
-function formatFriendlyDate(dateKey: string, lang: "zh" | "en"): string {
-  try {
-    const d = new Date(`${dateKey}T00:00:00`);
-    return d.toLocaleDateString(lang === "en" ? "en-US" : "zh-CN", {
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    });
-  } catch {
-    return dateKey;
-  }
+/** 把某一期报纸写入 newspapers 表（按 date + lang 覆盖；失败静默不影响主流程）。 */
+function saveIssueToDb(issue: IssueData): void {
+  setNewspaperRecord({
+    date: issue.date,
+    lang: issue.lang,
+    report: issue.report,
+    news: issue.news,
+    newsSource: issue.newsSource ?? "achievement",
+  });
 }
 
-/**
- * 将某一期报纸按语言写成 Markdown 记录文件（newspapers/<lang>/YYYY-MM-DD.md）。
- * 重名直接覆盖（当日重新生成时保持一致）；写失败静默不影响主流程。
- */
-function writeIssueMarkdown(issue: IssueData): void {
-  try {
-    const { at } = beijingNow();
-    const en = issue.lang === "en";
-    const lines: string[] = [];
-    lines.push(`# ${en ? "The Prompt Daily" : "词库日报"} · ${formatFriendlyDate(issue.date, issue.lang)}`);
-    lines.push("");
-    lines.push(`> ${en ? "Recorded" : "记录时间"}：${at}`);
-    lines.push(`> ${en ? "Language" : "语言"}：${en ? "English" : "中文"}`);
-    lines.push(`> ${en ? "Briefs" : "科技快讯"}：${en ? "local achievements" : "本地成就速报"}`);
-    lines.push("");
-    lines.push(`## 📰 ${en ? "Daily Report" : "每日日报"}`);
-    if (issue.report && issue.report.length > 0) {
-      for (const r of issue.report) lines.push(`- **${r.headline}**：${r.body}`);
-    } else {
-      lines.push(en ? "- No recommendations today" : "- （今日暂无推荐）");
-    }
-    lines.push("");
-    lines.push(`## ⭐ ${en ? "Achievement Briefs" : "成就速报"}`);
-    if (issue.news && issue.news.length > 0) {
-      issue.news.forEach((n, i) => {
-        lines.push(`${i + 1}. **${n.title}**${n.summary ? ` — ${n.summary}` : ""}`);
-      });
-    } else {
-      lines.push(en ? "- No achievements yet" : "- （暂无成就动态）");
-    }
-    mkdirSync(join(newspapersDir(), issue.lang), { recursive: true });
-    writeFileSync(issueMdPath(issue.date, issue.lang), `${lines.join("\n")}\n`, "utf8");
-  } catch {
-    /* 记录失败不影响主流程，正常返回报纸 */
-  }
-}
-
-/** 从一期 Markdown 反解析出结构化内容（日报 / 成就速报）。 */
-function parseIssueMarkdown(date: string, lang: "zh" | "en", content: string): IssueData {
-  const report: DailyReportItem[] = [];
-  const news: TechNewsItem[] = [];
-  let section: "report" | "news" | null = null;
-  for (const line of content.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    if (trimmed.startsWith("## ")) {
-      const lower = trimmed.toLowerCase();
-      if (lower.includes("daily report") || lower.includes("每日日报")) section = "report";
-      else if (lower.includes("achievement") || lower.includes("成就速报")) section = "news";
-      else section = null;
-      continue;
-    }
-    if (section === "report") {
-      const m = trimmed.match(/^-\s*\*\*(.+?)\*\*\s*[:：]\s*(.*)$/);
-      if (m) report.push({ headline: m[1].trim(), body: m[2].trim() });
-    } else if (section === "news") {
-      const m = trimmed.match(/^(\d+)\.\s*\*\*(.+?)\*\*\s*(?:—\s*)?(.*)$/);
-      if (m) news.push({ title: m[2].trim(), summary: m[3].trim(), url: "" });
-    }
-  }
+/** 从 newspapers 表读取某一期报纸；不存在返回 undefined。 */
+function readIssueFromDb(date: string, lang: "zh" | "en"): IssueData | undefined {
+  const rec = getNewspaperRecord(date, lang);
+  if (!rec) return undefined;
   return {
-    date,
-    lang,
-    report: report.length > 0 ? report : null,
-    news: news.length > 0 ? news : null,
-    newsSource: "achievement",
+    date: rec.date,
+    lang: rec.lang,
+    report: rec.report,
+    news: rec.news,
+    newsSource: rec.newsSource as NewsSource | null,
   };
 }
 
 /**
- * 生成当日报纸的中英两版（一次统计，中英各跑一次 AI 生成日报），并一并落盘 Markdown。
+ * 生成当日报纸的中英两版（一次统计，中英各跑一次 AI 生成日报），并一并存库。
  * 返回两版 IssueData（lang 分别为 zh / en）。
  */
 async function generateTodayIssue(
@@ -185,17 +123,17 @@ async function generateTodayIssue(
     { date: today, lang: "zh", report: reportZh ?? null, news: news.zh.length > 0 ? news.zh : null, newsSource: "achievement" },
     { date: today, lang: "en", report: reportEn ?? null, news: news.en.length > 0 ? news.en : null, newsSource: "achievement" },
   ];
-  for (const v of versions) writeIssueMarkdown(v);
+  for (const v of versions) saveIssueToDb(v);
   return versions;
 }
 
 /**
  * 取某一期报纸。
- *  - 已有对应语言 md：直接解析回显（含历史与当日），不再重复生成；
+ *  - 已有对应语言记录：直接回显（含历史与当日），不再重复生成；
  *  - 未存档日期：
- *      · 今天：由本地词库统计 + 成就进度生成「中英两版」，一并落盘 Markdown，返回请求语言版本；
+ *      · 今天：由本地词库统计 + 成就进度生成「中英两版」，一并存库，返回请求语言版本；
  *      · 昨天及更早（历史空档）：返回空（日报/新闻为 null，前端显示「今日暂无推荐」）。
- *  - 当日容错：若当日 md 里日报为空（说明此前 AI 生成失败被固化），自动重新生成补齐，
+ *  - 当日容错：若当日记录里日报为空（说明此前 AI 生成失败被固化），自动重新生成补齐，
  *    仅在补齐成功且返回请求语言版本非空时才用新数据，否则仍回退原缓存，避免永久空白。
  *
  * @param date 报纸日期 YYYY-MM-DD；缺省取今天。
@@ -209,11 +147,10 @@ export async function getIssue(
 ): Promise<IssueData> {
   const L = normalizeDailyLang(lang);
   const today = beijingNow().date;
-  // 已有对应语言的 md：先直接解析回显（历史与当日均已落盘）
-  const mdPath = issueMdPath(date, L);
-  if (existsSync(mdPath)) {
-    const cached = parseIssueMarkdown(date, L, readFileSync(mdPath, "utf8"));
-    // 当日日报为空（上次 AI 生成失败被固化）：重新生成补齐，成功后覆盖落盘
+  // 已有对应语言的记录：先直接回显（历史与当日均已存库）
+  const cached = readIssueFromDb(date, L);
+  if (cached) {
+    // 当日日报为空（上次 AI 生成失败被固化）：重新生成补齐，成功后覆盖存库
     if (date === today && (cached.report === null || cached.report.length === 0)) {
       try {
         const versions = await generateTodayIssue(today, settings);
@@ -231,23 +168,12 @@ export async function getIssue(
     return { date, lang: L, report: null, news: null, newsSource: null };
   }
 
-  // 当日首访：生成中英两版并落盘，返回请求语言版本
+  // 当日首访：生成中英两版并存库，返回请求语言版本
   const versions = await generateTodayIssue(today, settings);
   return versions.find((v) => v.lang === L) ?? versions[0];
 }
 
-/** 所有已生成过报纸的日期（中英两版去重后按时间倒序，最新在前）。 */
+/** 所有已生成过报纸的日期（去重后按时间倒序，最新在前）。 */
 export function listIssueDates(): string[] {
-  const dates = new Set<string>();
-  for (const lang of ["zh", "en"] as const) {
-    try {
-      const dir = join(newspapersDir(), lang);
-      for (const name of readdirSync(dir)) {
-        if (/^\d{4}-\d{2}-\d{2}\.md$/.test(name)) dates.add(name.slice(0, 10));
-      }
-    } catch {
-      /* 目录不存在则跳过该语言 */
-    }
-  }
-  return [...dates].sort((a, b) => (a < b ? 1 : -1));
+  return listNewspaperDates();
 }

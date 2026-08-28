@@ -353,7 +353,7 @@ export function SidebarPromptLibrary(props?: {
   // 最近使用分组展开状态（默认展开，可点击分组头收起）
   const [recentCollapsed, setRecentCollapsed] = useState(false);
 
-  // ── 工具面板美化：视图模式 / 正文展开 / 更多菜单 / 键盘导航 ──────────────
+  // ── 面板美化：视图模式 / 正文展开 / 更多菜单 / 键盘导航 ──────────────
   // 视图模式（列表/卡片），持久化到 localStorage
   const [viewMode, setViewMode] = useState<"list" | "card">(() => {
     try {
@@ -1332,7 +1332,7 @@ export function SidebarPromptLibrary(props?: {
 }`}</style>
       <style>{PL_BUTTON_CSS}</style>
       {/* 词库助手（助手+气泡）：独立组件，自管理位置/冒泡/简介；左键不联动面板，
-          面板开合统一走右键菜单「打开工具面板」回调。
+          面板开合统一走右键菜单「打开词库管理」回调。
           词库助手已常驻，不再受「显示词库助手」开关控制。 */}
       <PromptAssistant
           t={T}

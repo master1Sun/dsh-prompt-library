@@ -155,7 +155,17 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // 导入导出等操作反馈（error=false 时为成功/普通提示，error=true 时红色警示）
-  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  const [msg, setMsg] = useState<{ text: string; kind?: "success" | "info" | "error" } | null>(null);
+  // 操作反馈自动消失定时器引用（提示出现后自动清除，避免残留）
+  const msgTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!msg) return;
+    if (msgTimerRef.current) clearTimeout(msgTimerRef.current);
+    msgTimerRef.current = setTimeout(() => setMsg(null), 2600);
+    return () => {
+      if (msgTimerRef.current) clearTimeout(msgTimerRef.current);
+    };
+  }, [msg]);
   // 勾选导出的目标 id 集合
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // 导入文件选择（MD 单文件）
@@ -326,7 +336,7 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
   const handleExport = () => {
     const exportList = personas.filter((p) => selected.has(p.id));
     if (exportList.length === 0) {
-      setMsg({ text: t("pl.exportSelectEmpty"), error: true });
+      setMsg({ text: t("pl.exportSelectEmpty"), kind: "error" });
       return;
     }
     for (const p of exportList) {
@@ -343,7 +353,7 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
     if (!file) return;
     const text = (await file.text()).trim();
     if (!text) {
-      setMsg({ text: t("pl.personas.importEmpty"), error: true });
+      setMsg({ text: t("pl.personas.importEmpty"), kind: "error" });
       return;
     }
     const title = file.name.replace(/\.[^/.]+$/, "").trim() || "untitled";
@@ -355,7 +365,7 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
       await refresh();
       setMsg({ text: t("pl.personas.importDone", { count: 1 }) });
     } catch {
-      setMsg({ text: t("pl.personas.importFailed"), error: true });
+      setMsg({ text: t("pl.personas.importFailed"), kind: "error" });
     } finally {
       setBusy(false);
     }
@@ -717,7 +727,7 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
             onClick={() => {
               // 未启用时点击编辑给出提示（编辑中的「取消」仍可用）
               if (!p.enabled && !isEditing) {
-                setMsg({ text: t("pl.personas.disabledEditHint"), error: true });
+                setMsg({ text: t("pl.personas.disabledEditHint"), kind: "error" });
                 return;
               }
               if (isEditing) cancelEdit(p);
@@ -735,7 +745,7 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
               onClick={() => {
                 // 未启用时点击删除给出提示
                 if (!p.enabled) {
-                  setMsg({ text: t("pl.personas.disabledDeleteHint"), error: true });
+                  setMsg({ text: t("pl.personas.disabledDeleteHint"), kind: "error" });
                   return;
                 }
                 setDeleteId(p.id);
@@ -850,11 +860,41 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
           </div>
         )}
 
-        {msg && (
-          <div style={{ marginTop: 8, fontSize: 12, color: msg.error ? TONE.red : TONE.text, lineHeight: 1.5, flexShrink: 0 }}>
-            {msg.text}
-          </div>
-        )}
+        {/* 操作反馈：预留固定行高，避免显示/隐藏时改变布局引起窗口抖动；按类型区分颜色 */}
+        <div
+          style={{
+            flexShrink: 0,
+            height: 18,
+            marginTop: 2,
+            display: "flex",
+            alignItems: "center",
+            gap: 5,
+            fontSize: 12,
+            lineHeight: 1.5,
+            color: msg
+              ? msg.kind === "error"
+                ? TONE.red
+                : msg.kind === "info"
+                  ? TONE.accent
+                  : TONE.mint
+              : "transparent",
+            overflow: "hidden",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {msg && (
+            <span
+              style={{
+                flexShrink: 0,
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                background: msg.kind === "error" ? TONE.red : msg.kind === "info" ? TONE.accent : TONE.mint,
+              }}
+            />
+          )}
+          {msg?.text ?? ""}
+        </div>
 
         {/* 内容区：两栏布局（灵魂管理 / 工作区项目绑定），左右两栏各自独立滚动 */}
         <div
@@ -865,7 +905,7 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
             gap: 14,
             paddingTop: 14,
             paddingBottom: 4,
-            marginTop: 8,
+            marginTop: -8,
           }}
         >
           {/* 左栏：灵魂管理（独立滚动，滚动条与内容预留 10px 间距）；

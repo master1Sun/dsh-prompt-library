@@ -1,23 +1,21 @@
 /**
- * 会话级技能服务：组合「数据库元信息」与「MD 文件正文」两级存储，向上层（路由/组装）暴露统一操作。
+ * 会话级技能服务：元信息 + 正文均存 SQLite（prompts.db 的 session_prompts 表），
+ * 向上层（路由/组装）暴露统一操作。
  *
  * 与多人格（persona-service）一致：
- * - 元信息（标题/标签/启用/创建与更新时间/使用次数）存 SQLite（prompts.db 的 session_prompts 表）；
- * - 正文（注入到系统提示中的内容）以 MD 文件存放于 `~/.dsh/prompt-library/session-prompts/<id>.md`，
- *   文件内只有正文，可随时查看与二次编辑（文件修改后重新加载生效）。
+ * - 元信息（标题/标签/启用/创建与更新时间/使用次数）与正文（注入到系统提示中的内容）
+ *   都直接存于 session_prompts 表（body 列），不再落盘 md 文件。
  *
  * 路径绑定（工作区/项目 → 技能 id 列表）与当前会话临时注入：
  * - 持久绑定存于 SQLite（prompts.db 的 prompt_scope_bindings 表，与人格绑定一致）；
  * - 当前会话临时注入仅存内存（重启即失效，与「当前会话」语义一致）。
  *
  * 所有函数均为同步读取（系统提示组装是同步回调，无法 await），
- * 写入则同步落盘，失败静默降级（列表返回空 / 写入忽略），不影响其他功能。
+ * 写入则同步落库，失败静默降级（列表返回空 / 写入忽略），不影响其他功能。
  */
 import { randomUUID } from "node:crypto";
-import { readFileSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import type { SessionPrompt } from "../../../types.js";
 import { clampTitle } from "../../../types.js";
-import { sessionPromptPath, sessionPromptsDir } from "../../utils/paths.js";
 import {
   clearScopePromptBinding as dbClearScopePromptBinding,
   clearSessionScopeBinding as dbClearSessionScopeBinding,
@@ -35,7 +33,6 @@ import {
   setSessionScopeBinding as dbSetSessionScopeBinding,
   updateSessionPromptMeta,
 } from "../data/store.js";
-import { stripBom } from "../../utils/text.js";
 
 // ── 路径归一化（与人格绑定解析一致）────────────────────────────────────
 
@@ -46,39 +43,18 @@ function normalizeScopePath(p: string): string {
   return process.platform === "win32" ? s.toLowerCase() : s;
 }
 
-/** 确保技能目录存在（写入前调用，失败静默）。 */
-function ensureDir(): void {
-  try {
-    mkdirSync(sessionPromptsDir(), { recursive: true });
-  } catch {
-    /* 目录创建失败静默 */
-  }
-}
+// ── 会话级技能正文（存于 session_prompts 表 body 列）─────────────────────
 
-// ── MD 正文文件读写（文件内只有正文）────────────────────────────────────
-
-/** 读取某技能正文文件；缺失返回空串。 */
-function readPromptBody(id: string): string {
-  try {
-    return stripBom(readFileSync(sessionPromptPath(id), "utf8")).trim();
-  } catch {
-    return "";
-  }
-}
-
-/** 把正文写入某技能正文文件（纯正文 + 结尾换行；失败静默）。 */
-function writePromptBody(id: string, body: string): void {
-  try {
-    writeFileSync(sessionPromptPath(id), `${body.trim()}\n`, "utf8");
-  } catch {
-    /* 写入失败静默 */
-  }
+/** 读取某技能正文（正文已随记录存入数据库，直接取自记录）。 */
+function readPromptBody(record: { body: string }): string {
+  return record.body;
 }
 
 /** 把元信息记录 + 正文组装成完整的会话级技能。 */
 function recordToPrompt(record: {
   id: string;
   title: string;
+  body: string;
   tags?: string[];
   enabled: boolean;
   updatedAt: number;
@@ -88,7 +64,7 @@ function recordToPrompt(record: {
   return {
     id: record.id,
     title: record.title,
-    body: readPromptBody(record.id),
+    body: readPromptBody(record),
     tags: record.tags,
     enabled: record.enabled,
     updatedAt: record.updatedAt,
@@ -97,7 +73,7 @@ function recordToPrompt(record: {
   };
 }
 
-// ── 会话级技能 CRUD（元信息存库 + 正文存 MD）─────────────────────────────
+// ── 会话级技能 CRUD（元信息 + 正文均存库）───────────────────────────────
 
 /** 列出全部会话级技能（按更新时间倒序）。 */
 export function listSessionPrompts(): SessionPrompt[] {
@@ -115,9 +91,8 @@ export function getSessionPromptsByIds(ids: string[]): SessionPrompt[] {
   return out;
 }
 
-/** 新建一条会话级技能：写入元信息记录 + 正文 MD 文件。 */
+/** 新建一条会话级技能：写入元信息记录 + 正文（一并存库）。 */
 export function createSessionPrompt(input: { title: string; body: string; tags?: string[] }): SessionPrompt {
-  ensureDir();
   const now = Date.now();
   const prompt: SessionPrompt = {
     id: randomUUID(),
@@ -133,19 +108,19 @@ export function createSessionPrompt(input: { title: string; body: string; tags?:
     tags: prompt.tags,
     enabled: prompt.enabled,
     updatedAt: now,
+    body: prompt.body,
   });
-  writePromptBody(prompt.id, prompt.body);
   return prompt;
 }
 
-/** 更新一条会话级技能（元信息存库、正文写 MD）；不存在返回 undefined。 */
+/** 更新一条会话级技能（元信息 + 正文均存库）；不存在返回 undefined。 */
 export function updateSessionPrompt(
   id: string,
   patch: { title?: string; body?: string; tags?: string[]; enabled?: boolean },
 ): SessionPrompt | undefined {
   const record = getSessionPromptRecord(id);
   if (!record) return undefined;
-  const currentBody = readPromptBody(id);
+  const currentBody = record.body;
   const next: SessionPrompt = {
     id,
     title: patch.title !== undefined ? clampTitle(patch.title.trim()) : record.title,
@@ -160,12 +135,12 @@ export function updateSessionPrompt(
     title: next.title,
     tags: next.tags,
     enabled: next.enabled,
+    body: next.body,
   });
-  if (patch.body !== undefined) writePromptBody(id, next.body);
   return next;
 }
 
-/** 删除一条会话级技能：删除元信息记录、正文 MD 文件，并清理其在所有路径绑定与临时注入中的引用。 */
+/** 删除一条会话级技能：删除元信息记录（正文随记录一并删除），并清理其在所有路径绑定与临时注入中的引用。 */
 export function deleteSessionPrompt(id: string): boolean {
   // 清理路径绑定（存库）
   for (const b of dbListScopePromptBindings()) {
@@ -190,13 +165,8 @@ export function deleteSessionPrompt(id: string): boolean {
       setSessionPromptBindingForSession(b.sessionId, next);
     }
   }
-  // 删除元信息记录 + 正文 MD 文件
+  // 删除元信息记录（正文随记录一并删除）
   deleteSessionPromptRecord(id);
-  try {
-    rmSync(sessionPromptPath(id), { force: true });
-  } catch {
-    /* 删除失败静默 */
-  }
   return true;
 }
 

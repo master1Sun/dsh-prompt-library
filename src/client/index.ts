@@ -96,7 +96,7 @@ export function apply(ctx: ClientCtx): void {
       {
         name: "conversation.input.left",
         id: "prompt-library",
-        order: 60,
+        order: 10,
         locale: NS,
       },
       PromptLibraryButton as (props: unknown) => ReactNode,
@@ -110,7 +110,7 @@ export function apply(ctx: ClientCtx): void {
       {
         name: "conversation.input.left",
         id: "prompt-library-ai-polish",
-        order: 61,
+        order: 11,
         locale: NS,
       },
       AIPolishButton as (props: unknown) => ReactNode,
@@ -124,7 +124,7 @@ export function apply(ctx: ClientCtx): void {
       {
         name: "conversation.input.dock",
         id: "prompt-library-recommend",
-        order: 30,
+        order: 10,
         locale: NS,
       },
       ContextRecommendations as (props: unknown) => ReactNode,
@@ -161,7 +161,7 @@ export function apply(ctx: ClientCtx): void {
       {
         name: "settings.section",
         id: "prompt-library",
-        order: 100,
+        order: 30,
         locale: NS,
         label: () => t("pl.setSectionTitle"),
       },

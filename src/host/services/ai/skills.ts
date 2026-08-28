@@ -25,7 +25,7 @@ import {
   getSessionBoundPromptIds,
   setSessionPromptBindingForSession,
 } from "../session-prompts/session-prompts.js";
-import { dshHome, sessionPromptsDir } from "../../utils/paths.js";
+import { dshHome } from "../../utils/paths.js";
 
 /** 技能根目录：~/.dsh/skills/ */
 export function skillsRoot(): string {
@@ -351,8 +351,9 @@ export async function exportPromptsAsSkills(entries: SkillEntry[], root?: string
 }
 
 /**
- * 私有导出：把条目创建为「会话级技能」（元信息入库 + 正文 MD），
+ * 私有导出：把条目创建为「会话级技能」（元信息 + 正文均入库，自动绑定到指定会话 id），
  * 并自动绑定到指定会话 id（若提供），实现仅该会话注入的私有效果。
+ * 不写盘任何文件，返回结构中的 root 为空串（前端据此不展示导出位置）。
  * 返回结构与写盘导出一致（name 存会话级技能的 id，供前端展示定位）。
  */
 export async function exportAsSessionPrompts(
@@ -383,7 +384,7 @@ export async function exportAsSessionPrompts(
     }
   }
 
-  return { exported: items.length, items, errors, root: sessionPromptsDir() };
+  return { exported: items.length, items, errors, root: "" };
 }
 
 // ── Harness 技能软控制（~/.dsh/skills 系统技能 + 项目 .dsh/skills 技能）──────

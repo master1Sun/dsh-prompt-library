@@ -30,14 +30,8 @@ import {
   setCurrentSessionScope,
 } from "./host/services/session-prompts/session-prompts.js";
 import type { WeeklyStats } from "./host/services/data/store.js";
-import {
-  commentOnStats,
-  enrichPromptProfessional,
-  isAiAvailable,
-  logAiInjected,
-  polishPromptBody,
-  registerLlm,
-} from "./host/services/ai/ai.js";
+import { commentOnStats, enrichPromptProfessional, isAiAvailable, logAiInjected, polishPromptBody, registerLlm } from "./host/services/ai/ai.js";
+import { disabledHarnessSkillsInstruction } from "./host/services/ai/skills.js";
 import { soulSystemSync, ensureSoulFile } from "./host/services/assistant/character.js";
 import { resolvePersonaForSession } from "./host/services/persona/persona-service.js";
 import { ensureHarnessFile, harnessSystemSync } from "./host/services/harness/harness.js";
@@ -49,6 +43,8 @@ import { autoUpdateDaily } from "./host/services/update/update.js";
 import { autoBackup } from "./host/services/data/backup.js";
 // 操作手册：纯文本字符串，聊天消息按纯文本渲染（markdown/HTML 都无法解析），用换行符排版
 import { manualEn, manualZh } from "./manual.js";
+// 历史版本更新说明：供 `/prompts -v` 按宿主语言输出
+import { getAllVersionNotes } from "./host/services/update/version-notes.js";
 
 export const name = "prompt-library";
 
@@ -78,6 +74,7 @@ const COMMAND_SPECS: CommandSpec[] = [
   { flags: "-e / -exp", zh: "导出", en: "export", zhExample: "/prompts -e", enExample: "/prompts -e" },
   { flags: "-data / -d", zh: "统计", en: "stats", zhExample: "/prompts -data", enExample: "/prompts -data" },
   { flags: "-AI / -a", zh: "AI优化", en: "AI polish", zhExample: "/prompts -AI 请把这段优化得更简洁", enExample: "/prompts -AI make this more concise" },
+  { flags: "-v / -version", zh: "版本更新说明", en: "release notes", zhExample: "/prompts -v", enExample: "/prompts -v" },
   { flags: "-h", zh: "帮助", en: "help", zhExample: "/prompts -h", enExample: "/prompts -h" },
 ];
 
@@ -193,6 +190,7 @@ export interface Copy {
   enrichNoInput: string;
   enrichFailed: string;
   enrichDone: string;
+  versionHeader: string;
   help: string;
   fmt: FmtCopy;
 }
@@ -224,6 +222,7 @@ function buildCopy(lang: "zh" | "en"): Copy {
         enrichNoInput: "请在 -enrich 后输入要完善的正文",
         enrichFailed: "AI 完善失败",
         enrichDone: "已 AI 专业完善（扩写，与 -AI 相反），请复制下方内容：",
+        versionHeader: "词库助手历史版本更新记录：",
         help: manualZh,
         // 命令实际输出文案（-s / -e / -data 等），避免英文环境仍输出中文
         fmt: {
@@ -279,6 +278,7 @@ function buildCopy(lang: "zh" | "en"): Copy {
         enrichNoInput: "Enter the body to enrich after -enrich",
         enrichFailed: "AI enrichment failed",
         enrichDone: "Professionally enriched by AI (expands, opposite of -AI polish). Please copy the content below:",
+        versionHeader: "Prompt library — historical release notes:",
         help: manualEn,
         // Command output wording for -s / -e / -data, so Chinese is not shown in English locale
         fmt: {
@@ -422,6 +422,9 @@ export function apply(ctx: Context) {
         parts.push(soulSystemSync(personaId));
         const injected = buildSessionPromptInjection(sessionId, cwd);
         if (injected) parts.push(injected);
+        // harness 技能软控制：把用户禁用的 ~/.dsh/skills / 项目技能清单注入为指令
+        const disabledSkills = disabledHarnessSkillsInstruction(cwd || null);
+        if (disabledSkills) parts.push(disabledSkills);
         const welcome = welcomePromptOnce(sessionId);
         if (welcome) parts.push(welcome);
         return parts.filter((p) => p.trim()).join("\n\n");
@@ -513,6 +516,8 @@ export function apply(ctx: Context) {
             "-data": "data",
             "-h": "help",
             "-help": "help",
+            "-v": "version",
+            "-version": "version",
           };
           const cmd = alias[flag] ?? flag;
 
@@ -669,6 +674,20 @@ export function apply(ctx: Context) {
               if (comment) output += `\n\n${f.aiComment}\n${comment}`;
             }
             return { kind: "success", text: output };
+          }
+
+          // -v：输出全部历史版本更新说明（按宿主界面语言，最新的在上）
+          if (cmd === "version") {
+            const notes = getAllVersionNotes(isZh ? "zh" : "en");
+            const lines = [
+              copy.versionHeader,
+              ...notes.map((n) => {
+                const date = n.date ? `（${n.date}）` : "";
+                const itemLines = n.items.map((item) => `  - ${item}`).join("\n");
+                return `\n${n.version}${date} ${n.title}\n${itemLines}`;
+              }),
+            ];
+            return { kind: "success", text: lines.join("\n") };
           }
 
           return { kind: "error", text: copy.unknownFlag };

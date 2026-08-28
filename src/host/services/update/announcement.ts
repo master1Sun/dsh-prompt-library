@@ -44,6 +44,10 @@ const MANUAL_KEYS: readonly string[] = [
   "pl.announce.manual.3",
   "pl.announce.manual.4",
   "pl.announce.manual.5",
+  "pl.announce.manual.6",
+  "pl.announce.manual.7",
+  "pl.announce.manual.8",
+  "pl.announce.manual.9",
 ];
 
 /** 内置手动文案（当 i18n 翻译函数不可用/取不到时的兜底，zh/en 各一份）。
@@ -56,6 +60,10 @@ const MANUAL_FALLBACK: Record<LangKey, string[]> = {
     "{{变量}} 生花，插前弹窗逐项填写；套用模板，从容落笔。",
     "选中文本，一键剪藏入库；标签归类，按图索骥。",
     "侧栏与聊天双入口管理；统计洞察、导入导出备份，词海拾贝，尽在掌握。",
+    "词库助手，常伴身侧；右键直达面板公告，换装心情，灵动可掬。",
+    "成就塔罗，集卡升级赢称号；稀有流转，每日签语，其乐无穷。",
+    "人格技能，双剑合璧：SOUL 只读定调，技能绑定会话自动注入，如臂使指。",
+    "公告日报，每日 AI 盘点词海；历史期次可翻，天天皆有新篇。",
   ],
   en: [
     "Press # to summon the library: live filter, ↑↓ to select, Enter to write.",
@@ -64,6 +72,10 @@ const MANUAL_FALLBACK: Record<LangKey, string[]> = {
     "{{variable}} blooms, filled one by one before insert; templates make it effortless.",
     "Select any text, clip it into the library in one click; tag & filter, find at a glance.",
     "Manage from sidebar or chat panel — stats, export & backup: a sea of words at your fingertips.",
+    "A companion assistant by your side: right-click for panel & news, costumes and moods bring it to life.",
+    "Tarot achievements: collect cards, level up, earn titles; five rarities and daily fortunes, a joy to collect.",
+    "Persona & skills, one pair of hands: a read-only SOUL sets the tone; bound skills auto-inject per session.",
+    "A daily paper of your words: AI-crafted reports, pageable across history — every day a new page.",
   ],
 };
 

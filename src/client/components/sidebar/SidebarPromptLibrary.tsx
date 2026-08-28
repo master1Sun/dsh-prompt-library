@@ -38,6 +38,7 @@ import {
 import { isRecent, markRecent } from "../../utils/recent-created.js";
 import { useHoverDetail } from "../common/HoverDetail.js";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
+import { Pagination } from "../common/Pagination.js";
 import { notifyDataChanged, useDataChanged } from "../../services/data-sync.js";
 import { PL_BUTTON_CSS, plBtn } from "../../utils/button-style.js";
 import { rowBackground } from "../../utils/theme.js";
@@ -71,6 +72,22 @@ const TONE = {
   mint: "var(--dsw-alias-state-success-primary, #16a34a)",
   red: "var(--dsw-alias-state-error-primary, #dc2626)",
 } as const;
+
+/** 视图切换分段按钮的基础样式 */
+const segBtn: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 26,
+  height: 26,
+  padding: 0,
+  border: "none",
+  cursor: "pointer",
+  borderRadius: 6,
+  color: TONE.quiet,
+  fontFamily: MONO,
+  transition: "background .18s ease, box-shadow .18s ease, color .18s ease",
+};
 
 type Editor =
   | { mode: "none"; title: string; body: string; tags: string }
@@ -335,6 +352,28 @@ export function SidebarPromptLibrary(props?: {
 
   // 最近使用分组展开状态（默认展开，可点击分组头收起）
   const [recentCollapsed, setRecentCollapsed] = useState(false);
+
+  // ── 工具面板美化：视图模式 / 正文展开 / 更多菜单 / 键盘导航 ──────────────
+  // 视图模式（列表/卡片），持久化到 localStorage
+  const [viewMode, setViewMode] = useState<"list" | "card">(() => {
+    try {
+      return localStorage.getItem("pl:view-mode") === "list" ? "list" : "card";
+    } catch {
+      return "card";
+    }
+  });
+  const changeViewMode = useCallback((m: "list" | "card") => {
+    setViewMode(m);
+    try {
+      localStorage.setItem("pl:view-mode", m);
+    } catch {
+      /* 忽略存储失败 */
+    }
+  }, []);
+  // 当前打开「更多操作」菜单的提示词 id（每卡片/行一个 ⋯ 溢出菜单）
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  // 键盘导航当前选中项在可见列表中的下标
+  const [activeIdx, setActiveIdx] = useState(0);
 
   const searchRef = useRef<HTMLInputElement | null>(null);
   const refreshController = useRef<AbortController | null>(null);
@@ -839,6 +878,417 @@ export function SidebarPromptLibrary(props?: {
     );
   };
 
+  // 当前可见的、按渲染顺序排列的提示词列表（用于键盘导航与高亮）：跳过已折叠分组
+  const flatVisible = useMemo(() => {
+    const arr: Prompt[] = [];
+    for (const [tag, items] of tagGrouped) {
+      const isRecentSection = tag === T("pl.sidebar.recent");
+      const collapsed = isRecentSection ? recentCollapsed : !expandedGroups.has(tag);
+      if (collapsed) continue;
+      arr.push(...items);
+    }
+    return arr;
+  }, [tagGrouped, T, recentCollapsed, expandedGroups]);
+
+  // ── 卡片视图：不分组合并、平铺显示全部提示词，超过一页用分页 ─────────────
+  const CARD_PAGE_SIZE = 10;
+  const [cardPage, setCardPage] = useState(1);
+  // 卡片模式平铺去重列表：按 tagGrouped 顺序（最近使用优先 + 标签组顺序），多标签只出现一次
+  const cardItems = useMemo(() => {
+    const seen = new Set<string>();
+    const arr: Prompt[] = [];
+    for (const [, items] of tagGrouped) {
+      for (const p of items) {
+        const k = String(p.id);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        arr.push(p);
+      }
+    }
+    return arr;
+  }, [tagGrouped]);
+  const cardTotalPages = Math.max(1, Math.ceil(cardItems.length / CARD_PAGE_SIZE));
+  // 搜索词/标签/数据变化时回到第 1 页；页数变小时夹取页码
+  useEffect(() => {
+    setCardPage(1);
+  }, [query, tagFilter, filtered.length]);
+  useEffect(() => {
+    setCardPage((pg) => Math.min(pg, cardTotalPages));
+  }, [cardTotalPages]);
+  const cardPageItems = useMemo(
+    () => cardItems.slice((cardPage - 1) * CARD_PAGE_SIZE, cardPage * CARD_PAGE_SIZE),
+    [cardItems, cardPage],
+  );
+
+  // 点击「更多操作」菜单外部 / Esc 关闭该菜单
+  useEffect(() => {
+    if (!menuFor) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      if (!t.closest("[data-pl-menu]")) setMenuFor(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuFor(null);
+    };
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [menuFor]);
+
+  // 可见项变化时把键盘选中下标夹到有效范围
+  useEffect(() => {
+    setActiveIdx((a) => Math.min(a, Math.max(0, flatVisible.length - 1)));
+  }, [flatVisible.length]);
+
+  // 键盘导航：↑↓选择、Home/End 首尾、Enter 插入、Esc 收起面板。
+  // 仅在聊天输入框聚焦时也接管选择，避免干扰正文输入；非输入编辑态下由上层弹层接管。
+  useEffect(() => {
+    if (
+      collapsed ||
+      editing ||
+      viewing ||
+      template ||
+      deleteConfirm ||
+      polishConfirm ||
+      polish.status === "done" ||
+      polishInsert !== null
+    )
+      return;
+    if (flatVisible.length === 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      const el = document.activeElement;
+      const inSearch = searchRef.current === el;
+      const isEditable =
+        el instanceof HTMLInputElement ||
+        el instanceof HTMLTextAreaElement ||
+        (el as HTMLElement | null)?.isContentEditable === true;
+      // 聚焦在正文输入框等编辑控件且在搜索框之外时不拦截按键
+      if (isEditable && !inSearch) return;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setActiveIdx((a) => Math.min(a + 1, flatVisible.length - 1));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setActiveIdx((a) => Math.max(a - 1, 0));
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        setActiveIdx(0);
+      } else if (e.key === "End") {
+        e.preventDefault();
+        setActiveIdx(flatVisible.length - 1);
+      } else if (e.key === "Enter") {
+        const p = flatVisible[activeIdx];
+        if (p) {
+          e.preventDefault();
+          insert(p);
+        }
+      } else if (e.key === "Escape") {
+        setActiveIdx(0);
+        setCollapsed(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [
+    collapsed, editing, viewing, template, deleteConfirm, polishConfirm,
+    polish.status, polishInsert, flatVisible, activeIdx, insert, setCollapsed, searchRef,
+  ]);
+
+  // 键盘选中项变化时滚动到可见位置。
+  // 仅在选中下标真实切换时滚动，避免因渲染（T 每次返回新引用 → flatVisible 新数组）
+  // 导致效果反复执行把滚动锚定到选中项、从而无法向下滚动。
+  const lastActiveIdxRef = useRef(activeIdx);
+  useEffect(() => {
+    if (lastActiveIdxRef.current === activeIdx) return;
+    lastActiveIdxRef.current = activeIdx;
+    if (activeIdx < 0 || activeIdx >= flatVisible.length) return;
+    const id = flatVisible[activeIdx]?.id;
+    if (!id) return;
+    scrollRef.current
+      ?.querySelector(`[data-pl-id="${CSS.escape(id)}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeIdx, flatVisible]);
+
+  // 「更多操作」溢出菜单：
+  // - 列表视图：仅悬浮显示插入按钮，其余操作都放菜单
+  // - 卡片视图：插入、覆盖、复制、编辑直接放出，菜单仅保留查看、优化、删除
+  const renderMoreMenu = (p: Prompt, isCardMode: boolean) => {
+    let items: Array<{
+      key: string;
+      label: string;
+      onClick: () => void;
+      danger?: boolean;
+      disabled?: boolean;
+    }> = [];
+    if (isCardMode) {
+      // 卡片模式菜单只保留：查看、优化、删除
+      items = [
+        { key: "view", label: T("pl.view"), onClick: () => setViewing(p) },
+        {
+          key: "polish",
+          label: polish.status === "loading" && polish.id === p.id ? T("pl.polishing") : T("pl.polish"),
+          onClick: () => handlePolishClick(p),
+          disabled: polish.status === "loading",
+        },
+        { key: "delete", label: T("pl.delete"), onClick: () => remove(p), danger: true },
+      ];
+    } else {
+      // 列表模式所有非插入操作都在菜单
+      items = [
+        { key: "overwrite", label: T("pl.overwrite"), onClick: () => overwrite(p) },
+        { key: "copy", label: copiedId === p.id ? T("pl.copied") : T("pl.copy"), onClick: () => copy(p) },
+        { key: "view", label: T("pl.view"), onClick: () => setViewing(p) },
+        { key: "edit", label: T("pl.edit"), onClick: () => startEdit(p) },
+        {
+          key: "polish",
+          label: polish.status === "loading" && polish.id === p.id ? T("pl.polishing") : T("pl.polish"),
+          onClick: () => handlePolishClick(p),
+          disabled: polish.status === "loading",
+        },
+        { key: "delete", label: T("pl.delete"), onClick: () => remove(p), danger: true },
+      ];
+    }
+    return (
+      <div
+        data-pl-menu
+        onClick={(e) => e.stopPropagation()}
+        style={{ position: "relative", flexShrink: 0 }}
+      >
+        <button
+          type="button"
+          data-tip={T("pl.sidebar.more")}
+          aria-label={T("pl.sidebar.more")}
+          onClick={(e) => {
+            e.stopPropagation();
+            setMenuFor((cur) => (cur === p.id ? null : p.id));
+          }}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 26,
+            height: 26,
+            padding: 0,
+            border: "none",
+            cursor: "pointer",
+            borderRadius: 6,
+            color: TONE.quiet,
+            background: "transparent",
+            fontFamily: MONO,
+            opacity: menuFor === p.id ? 1 : 0.72,
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <circle cx="5" cy="12" r="1.6" />
+            <circle cx="12" cy="12" r="1.6" />
+            <circle cx="19" cy="12" r="1.6" />
+          </svg>
+        </button>
+        {menuFor === p.id && (
+          <div
+            style={{
+              position: "absolute",
+              right: 0,
+              top: "calc(100% + 4px)",
+              zIndex: 40,
+              minWidth: 128,
+              background: "var(--dsw-alias-bg-layer-3, #1d2735)",
+              border: `1px solid ${TONE.border}`,
+              borderRadius: 10,
+              boxShadow: "0 8px 24px rgba(15, 23, 42, .16)",
+              padding: 4,
+              display: "flex",
+              flexDirection: "column",
+              gap: 1,
+            }}
+          >
+            {items.map((it) => (
+              <button
+                key={it.key}
+                type="button"
+                disabled={it.disabled}
+                onClick={() => {
+                  setMenuFor(null);
+                  it.onClick();
+                }}
+                style={{
+                  textAlign: "left",
+                  padding: "6px 10px",
+                  fontSize: 12.5,
+                  color: it.danger ? TONE.red : TONE.text,
+                  background: "transparent",
+                  border: "none",
+                  borderRadius: 6,
+                  cursor: it.disabled ? "not-allowed" : "pointer",
+                  opacity: it.disabled ? 0.5 : 1,
+                  fontFamily: MONO,
+                }}
+                onMouseEnter={(e) => {
+                  const b = e.currentTarget;
+                  b.style.background = `color-mix(in srgb, var(--dsw-alias-label-primary, #1f2937) 8%, transparent)`;
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                }}
+              >
+                {it.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // 列表视图行：紧凑一行一条，节省大量纵向空间；仅悬浮显示的小插入按钮可插入
+  const renderListRow = (p: Prompt) => {
+    const isActive = activeIdx >= 0 && flatVisible[activeIdx]?.id === p.id;
+    return (
+      <div
+        key={p.id}
+        data-pl-id={p.id}
+        className="pl-prompt-row"
+        onMouseEnter={hoverEnabled ? (e) => showDetail(p, e.currentTarget.getBoundingClientRect().top) : undefined}
+        onMouseLeave={hoverEnabled ? () => hover.leave() : undefined}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: isActive ? "7px 10px 7px 8px" : "7px 10px",
+          borderRadius: 8,
+          cursor: "pointer",
+          border: "1px solid transparent",
+          // 选中态柔和：左侧主题色竖条 + 浅强调背景，不做整圈描边；非选中不设内联背景，让 CSS :hover 生效
+          borderLeft: isActive ? `3px solid ${TONE.accent}` : "3px solid transparent",
+          background: isActive ? "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 10%, transparent)" : undefined,
+          userSelect: "none",
+        }}
+      >
+        <span style={{ flex: "1 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, color: TONE.text, fontWeight: 470 }}>
+          {query.trim() ? <Highlight text={clampTitle(p.title)} query={query} /> : clampTitle(p.title)}
+        </span>
+        {isRecent(p.id) && (
+          <span data-tip={T("pl.recentNew")} style={{ width: 7, height: 7, borderRadius: "50%", background: TONE.mint, flexShrink: 0 }} />
+        )}
+        {p.usageCount > 0 && (
+          <span style={{ color: TONE.quiet, fontSize: 10, whiteSpace: "nowrap", flexShrink: 0 }}>
+            {T("pl.sidebar.usageCount", { count: p.usageCount })}
+          </span>
+        )}
+        {/* 悬浮时才显示的小插入按钮，鼠标移入才可见可点；移开或非悬浮态为透明不可点 */}
+        <button
+          type="button"
+          className="pl-row-insert"
+          data-tip={T("pl.insert")}
+          onClick={() => {
+            hover.hide();
+            insert(p);
+          }}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            height: 22,
+            padding: "0 9px",
+            borderRadius: 11,
+            border: "none",
+            cursor: "pointer",
+            background: "var(--dsw-alias-brand-primary, #2563eb)",
+            color: "#fff",
+            fontSize: 11.5,
+            fontFamily: MONO,
+            whiteSpace: "nowrap",
+            flexShrink: 0,
+            lineHeight: 1,
+          }}
+        >
+          {T("pl.insert")}
+        </button>
+        {renderMoreMenu(p, false)}
+      </div>
+    );
+  };
+
+  // 卡片视图卡：正文两行省略，点击正文直接打开查看弹窗；插入、覆盖、复制、编辑直接放出，其余进 ⋯ 更多菜单
+  const renderCard = (p: Prompt) => {
+    const isActive = activeIdx >= 0 && flatVisible[activeIdx]?.id === p.id;
+    return (
+      <div
+        key={p.id}
+        data-pl-id={p.id}
+        className="pl-prompt-card"
+        onClick={hoverEnabled ? hover.hide : undefined}
+        style={{
+          padding: "12px 14px",
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          borderColor: isActive ? TONE.accent : undefined,
+          boxShadow: isActive ? "0 0 0 1px var(--dsw-alias-brand-primary, #2563eb)" : undefined,
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", minWidth: 0 }}>
+          <strong style={{
+            fontSize: 13,
+            fontWeight: 460,
+            flex: "1 1 auto",
+            minWidth: 0,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }} data-tip={p.title}>{query.trim() ? <Highlight text={clampTitle(p.title)} query={query} /> : clampTitle(p.title)}</strong>
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+            {isRecent(p.id) && (
+              <span
+                data-tip={T("pl.recentNew")}
+                style={{ width: 8, height: 8, borderRadius: "50%", background: TONE.mint, display: "inline-block", flexShrink: 0 }}
+              />
+            )}
+            {p.usageCount > 0 && (
+              <span style={{ color: TONE.quiet, fontSize: 10, whiteSpace: "nowrap" }}>
+                {T("pl.sidebar.usageCount", { count: p.usageCount })}
+              </span>
+            )}
+            {renderMoreMenu(p, true)}
+          </div>
+        </div>
+        {/* 正文预览：单行省略（不换行），点击直接打开查看弹窗 */}
+        <pre
+          onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(142, 197, 255, 0.08)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+          onClick={() => { hover.hide(); setViewing(p); }}
+          data-tip={T("pl.view")}
+          style={{
+            margin: 0,
+            padding: "6px 9px",
+            color: TONE.quiet,
+            fontSize: 11,
+            fontFamily: MONO,
+            lineHeight: 1.6,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            borderRadius: 6,
+            cursor: "pointer",
+            transition: "background 0.15s ease",
+          }}
+        >
+          {query.trim() ? <Highlight text={p.body} query={query} /> : p.body}
+        </pre>
+        {/* 主操作：插入、覆盖、复制、编辑直接放出，其余进 ⋯ 更多菜单 */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={() => insert(p)}>{T("pl.insert")}</Button>
+          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => overwrite(p)}>{T("pl.overwrite")}</Button>
+          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => copy(p)}>{copiedId === p.id ? T("pl.copied") : T("pl.copy")}</Button>
+          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => startEdit(p)}>{T("pl.edit")}</Button>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <>
       {/* 面板锚点：保持在原 DOM 树内（聊天工具栏行内），供 useChatWindow 沿父链定位会话窗口；
@@ -871,6 +1321,12 @@ export function SidebarPromptLibrary(props?: {
 /* 分组头悬浮背景 */
 .pl-group-header { border-radius: 6px; transition: background .15s ease; }
 .pl-group-header:hover { background: color-mix(in srgb, var(--dsw-alias-label-primary, #1f2937) 6%, transparent); }
+/* 紧凑列表行（视图切换）：悬浮轻底色反馈 */
+.pl-prompt-row { transition: background .18s ease, border-color .18s ease, border-width .18s ease, padding .18s ease; }
+.pl-prompt-row:hover { background: color-mix(in srgb, var(--dsw-alias-label-primary, #1f2937) 6%, transparent); }
+/* 列表面板悬浮显现的小插入按钮：默认透明不可点，鼠标移入行后可见可点 */
+.pl-row-insert { opacity: 0; pointer-events: none; transform: translateX(3px); transition: opacity .15s ease, transform .15s ease; }
+.pl-prompt-row:hover .pl-row-insert { opacity: 1; pointer-events: auto; transform: translateX(0); }
 /* 搜索输入框聚焦光圈 */
 .pl-search-input:focus { box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 16%, transparent); }
 }`}</style>
@@ -1023,14 +1479,64 @@ export function SidebarPromptLibrary(props?: {
           {!editing && (
             <>
               <div style={{ padding: "12px 12px 4px", flexShrink: 0 }}>
-                <SearchBox
-                  inputRef={searchRef}
-                  value={query}
-                  onChange={setQuery}
-                  onSearch={() => setQuery(query)}
-                  onClear={clearSearch}
-                  placeholder={T("pl.search")}
-                />
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <SearchBox
+                      inputRef={searchRef}
+                      value={query}
+                      onChange={setQuery}
+                      onSearch={() => setQuery(query)}
+                      onClear={clearSearch}
+                      placeholder={T("pl.search")}
+                    />
+                  </div>
+                  {/* 视图切换：紧凑列表 / 卡片视图 */}
+                  <div
+                    style={{
+                      flexShrink: 0,
+                      display: "flex",
+                      gap: 2,
+                      padding: 2,
+                      background: "color-mix(in srgb, var(--dsw-alias-label-primary, #1f2937) 6%, transparent)",
+                      border: `1px solid ${TONE.border}`,
+                      borderRadius: 8,
+                    }}
+                  >
+                    <button
+                      type="button"
+                      data-tip={T("pl.sidebar.viewList")}
+                      onClick={() => changeViewMode("list")}
+                      aria-label={T("pl.sidebar.viewList")}
+                      style={{
+                        ...segBtn,
+                        background: viewMode === "list" ? "var(--dsw-alias-bg-layer-3, #1d2735)" : "transparent",
+                        boxShadow: viewMode === "list" ? "0 1px 3px rgba(15, 23, 42, .18)" : "none",
+                      }}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                        <path d="M4 6h16M4 12h16M4 18h16" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      data-tip={T("pl.sidebar.viewCard")}
+                      onClick={() => changeViewMode("card")}
+                      aria-label={T("pl.sidebar.viewCard")}
+                      style={{
+                        ...segBtn,
+                        background: viewMode === "card" ? "var(--dsw-alias-bg-layer-3, #1d2735)" : "transparent",
+                        boxShadow: viewMode === "card" ? "0 1px 3px rgba(15, 23, 42, .18)" : "none",
+                      }}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <rect x="3" y="3" width="7" height="9" rx="1.5" />
+                        <rect x="14" y="3" width="7" height="6" rx="1.5" />
+                        <rect x="14" y="13" width="7" height="8" rx="1.5" />
+                        <rect x="3" y="15" width="7" height="6" rx="1.5" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
                 {/* 标签过滤条（与搜索关键词叠加过滤） */}
                 <TagFilterBar
                   tags={allTags}
@@ -1100,7 +1606,12 @@ export function SidebarPromptLibrary(props?: {
                     {T("pl.empty")}
                   </div>
                 )}
-                {tagGrouped.map(([tag, items]) => {
+                {viewMode === "card" ? (
+                  <div style={{ padding: "2px 10px 10px", display: "flex", flexDirection: "column", gap: 8 }}>
+                    {cardPageItems.map((p) => renderCard(p))}
+                  </div>
+                ) :
+                tagGrouped.map(([tag, items]) => {
                   const recentKey = T("pl.sidebar.recent");
                   // 最近使用分组可点击收起；其余按标签分组可点击折叠/展开
                   const isRecentSection = tag === recentKey;
@@ -1118,8 +1629,8 @@ export function SidebarPromptLibrary(props?: {
                         else toggleGroup(tag);
                       }}
                       style={{
-                        padding: "8px 10px 6px",
-                        margin: "6px 10px 2px",
+                        padding: "7px 10px 5px",
+                        margin: "4px 10px 2px",
                         fontSize: 11,
                         fontWeight: 470,
                         color: TONE.quiet,
@@ -1130,6 +1641,12 @@ export function SidebarPromptLibrary(props?: {
                         gap: 6,
                         cursor: "pointer",
                         userSelect: "none",
+                        // 分组头吸顶：内容向上滚动时固定在最顶，带底色与细分隔线
+                        position: "sticky",
+                        top: 0,
+                        zIndex: 2,
+                        background: TONE.panel,
+                        borderBottom: `1px solid ${TONE.border}`,
                       }}
                     >
                       <span style={{ display: "inline-flex", width: 12, justifyContent: "center", flexShrink: 0 }}>
@@ -1163,88 +1680,8 @@ export function SidebarPromptLibrary(props?: {
                       <span style={{ fontSize: 10, opacity: 0.6, flexShrink: 0 }}>{T("pl.sidebar.groupCount", { count: items.length })}</span>
                     </div>
                     {!isCollapsed && (
-                      <div style={{ padding: "2px 10px 8px", display: "flex", flexDirection: "column", gap: 8 }}>
-                        {items.map((p) => (
-                      <div
-                        key={p.id}
-                        data-pl-id={p.id}
-                        className="pl-prompt-card"
-                        onClick={hoverEnabled ? hover.hide : undefined}
-                        style={{
-                          padding: "12px 14px",
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: 8,
-                        }}
-                      >
-                        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", minWidth: 0 }}>
-                          <strong style={{
-                            fontSize: 13,
-                            fontWeight: 460,
-                            flex: "1 1 auto",
-                            minWidth: 0,
-                            whiteSpace: "nowrap",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                          }} data-tip={p.title}>{query.trim() ? <Highlight text={clampTitle(p.title)} query={query} /> : clampTitle(p.title)}</strong>
-                          <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
-                            {isRecent(p.id) && (
-                              <span
-                                data-tip={T("pl.recentNew")}
-                                style={{ width: 8, height: 8, borderRadius: "50%", background: TONE.mint, display: "inline-block", flexShrink: 0 }}
-                              />
-                            )}
-                            {p.usageCount > 0 && (
-                              <span style={{ color: TONE.quiet, fontSize: 10, whiteSpace: "nowrap" }}>
-                                {T("pl.sidebar.usageCount", { count: p.usageCount })}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <pre
-                          onMouseEnter={hoverEnabled ? (e) => { e.currentTarget.style.background = "rgba(142, 197, 255, 0.08)"; showDetail(p, e.currentTarget.getBoundingClientRect().top); } : undefined}
-                          onMouseLeave={hoverEnabled ? (e) => { e.currentTarget.style.background = "transparent"; hover.leave(); } : undefined}
-                          onClick={hoverEnabled ? hover.hide : undefined}
-                          style={{
-                            margin: 0,
-                            padding: "8px 10px",
-                            color: TONE.quiet,
-                            fontSize: 11,
-                            whiteSpace: "pre-wrap",
-                            wordBreak: "break-word",
-                            fontFamily: MONO,
-                            lineHeight: 1.55,
-                            maxHeight: 96,
-                            overflow: "hidden",
-                            borderRadius: 6,
-                            cursor: hoverEnabled ? "pointer" : "default",
-                            transition: "background 0.15s ease",
-                          }}
-                        >
-                          {query.trim() ? <Highlight text={p.body} query={query} /> : p.body}
-                        </pre>
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                          <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={() => insert(p)}>{T("pl.insert")}</Button>
-                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => overwrite(p)}>{T("pl.overwrite")}</Button>
-                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => copy(p)}>
-                            {copiedId === p.id ? T("pl.copied") : T("pl.copy")}
-                          </Button>
-                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => setViewing(p)}>{T("pl.view")}</Button>
-                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => startEdit(p)}>{T("pl.edit")}</Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className={plBtn("ghost", "sm")}
-                            onClick={() => handlePolishClick(p)}
-                            disabled={polish.status === "loading"}
-                          >
-                            {polish.status === "loading" && polish.id === p.id ? T("pl.polishing") : T("pl.polish")}
-                          </Button>
-                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => remove(p)}>{T("pl.delete")}</Button>
-                        </div>
-                      </div>
-                        ))}
+                      <div style={{ padding: "2px 10px 10px", display: "flex", flexDirection: "column", gap: viewMode === "list" ? 2 : 8 }}>
+                        {items.map((p) => renderListRow(p))}
                       </div>
                     )}
                   </div>
@@ -1309,6 +1746,19 @@ export function SidebarPromptLibrary(props?: {
                   {T("pl.save")}
                 </Button>
               </div>
+            </div>
+          )}
+          {/* 卡片模式分页条：位于滚动区外、整体底部固定，宽度随父级布局自动 */}
+          {viewMode === "card" && !editing && cardTotalPages > 1 && (
+            <div style={{ flexShrink: 0 }}>
+              <Pagination
+                page={cardPage}
+                totalPages={cardTotalPages}
+                onChange={setCardPage}
+                prevLabel={T("pl.sidebar.prev")}
+                nextLabel={T("pl.sidebar.next")}
+                textColor={TONE.text}
+              />
             </div>
           )}
           {/* 底部 — 与宿主左侧栏 footArea 一致：细分隔线 + 底部内边距 */}

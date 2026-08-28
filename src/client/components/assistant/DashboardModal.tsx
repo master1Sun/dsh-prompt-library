@@ -3,7 +3,7 @@
  *
  * 内嵌统计可视化面板（StatsPanel），提供词库概览、近 7 天分析、每周趋势、
  * 标签分布与近期/沉睡提示词等统计视角。
- * 交互：点击遮罩/外部区域或右上角关闭按钮均可关闭。
+ * 交互约束（与人格管理一致）：只能通过右上角关闭按钮关闭，禁止点击遮罩/外部区域关闭。
  */
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -35,30 +35,47 @@ export function DashboardModal({ open, onClose, t }: Props): ReactNode {
       aria-modal="true"
       aria-label={t("pl.ctx.dashboard")}
       className={PL_DIALOG_OVERLAY}
-      onClick={onClose}
+      onClick={(e) => e.stopPropagation()}
     >
       <style>{PL_DIALOG_CSS}</style>
       <div
-        onClick={(e) => e.stopPropagation()}
         className={PL_DIALOG}
         style={{
-          width: 640,
+          width: 860,
+          height: 760,
           maxWidth: "calc(100vw - 40px)",
-          height: "min(700px, calc(100vh - 40px))",
+          maxHeight: "calc(100vh - 40px)",
           display: "flex",
           flexDirection: "column",
         }}
       >
         {/* 标题 + 关闭按钮（仅通过按钮手动关闭） */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-          <strong style={{ flex: 1, minWidth: 0, fontSize: 15, fontWeight: 560, color: TONE.text }}>
+          <strong style={{ flex: 1, minWidth: 0, fontSize: 15, fontWeight: 600, color: TONE.text }}>
             {t("pl.ctx.dashboard")}
           </strong>
           <DialogCloseButton onClick={onClose} label={t("pl.close")} />
         </div>
 
+        {/* 说明 */}
+        <div
+          style={{
+            marginTop: 10,
+            fontSize: 11.5,
+            lineHeight: 1.6,
+            color: TONE.quiet,
+            background: TONE.accentSoft,
+            border: `1px solid ${TONE.border}`,
+            borderRadius: 7,
+            padding: "7px 10px",
+            flexShrink: 0,
+          }}
+        >
+          {t("pl.stats.desc")}
+        </div>
+
         {/* 统计可视化面板：内嵌滚动，标题下对齐 */}
-        <div style={{ flex: 1, minHeight: 0, marginTop: 4, display: "flex", flexDirection: "column" }}>
+        <div style={{ flex: 1, minHeight: 0, marginTop: 10, display: "flex", flexDirection: "column" }}>
           <StatsPanel t={t} />
         </div>
       </div>

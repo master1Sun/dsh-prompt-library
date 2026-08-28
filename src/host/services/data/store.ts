@@ -1234,12 +1234,18 @@ export function exportPrompts(ids?: string[]): Promise<PromptBackup> {
  * - 同 id 已存在 → 用导入数据覆盖（保留导入侧字段）；
  * - 同 id 不存在 → 新增；
  * - 缺 body 的无效行跳过；缺 id 时生成新 id。
- * 返回导入/更新/跳过条数。
+ * 返回导入/更新/跳过条数及逐条结果（供前端逐条展示成功/跳过）。
  */
 export function importPrompts(
   raw: unknown,
   opts?: { keepUsage?: boolean },
-): Promise<{ imported: number; updated: number; skipped: number }> {
+): Promise<{
+  imported: number;
+  updated: number;
+  skipped: number;
+  /** 逐条结果（title 为空表示该行无可用标题）。 */
+  items: Array<{ title: string; status: "imported" | "updated" | "skipped" }>;
+}> {
   try {
     const list = Array.isArray(raw)
       ? raw
@@ -1264,17 +1270,24 @@ export function importPrompts(
     let imported = 0;
     let updated = 0;
     let skipped = 0;
+    // 逐条结果（供前端逐条展示成功/跳过）
+    const items: Array<{ title: string; status: "imported" | "updated" | "skipped" }> = [];
     cur.exec("BEGIN");
     try {
       for (const rawItem of list) {
         if (typeof rawItem !== "object" || rawItem === null) {
           skipped++;
+          items.push({ title: "", status: "skipped" });
           continue;
         }
         const p = rawItem as Record<string, unknown>;
         const body = typeof p.body === "string" ? p.body : "";
         if (!body.trim()) {
           skipped++;
+          items.push({
+            title: typeof p.title === "string" ? p.title.trim() : "",
+            status: "skipped",
+          });
           continue;
         }
         const id = typeof p.id === "string" && p.id ? p.id : randomUUID();
@@ -1315,13 +1328,14 @@ export function importPrompts(
         );
         if (existing) updated++;
         else imported++;
+        items.push({ title, status: existing ? "updated" : "imported" });
       }
       cur.exec("COMMIT");
     } catch (e) {
       cur.exec("ROLLBACK");
       throw e;
     }
-    return Promise.resolve({ imported, updated, skipped });
+    return Promise.resolve({ imported, updated, skipped, items });
   } catch (e) {
     return Promise.reject(e);
   }

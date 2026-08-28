@@ -18,10 +18,10 @@ import {
   type AssistantLevel,
   type AssistantStatus,
 } from "../../services/api.js";
-import { getTone, useThemeSync, type ThemeTone } from "../../utils/theme.js";
+import { getTone, useThemeSync, contrastFg, type ThemeTone } from "../../utils/theme.js";
 import { DialogCloseButton } from "../common/DialogCloseButton.js";
 import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../../utils/dialog-style.js";
-import { LEVEL_COLORS } from "../../utils/sprite.js";
+import { LEVEL_COLORS, MAX_LEVEL } from "../../utils/sprite.js";
 
 interface Props {
   /** 是否显示。 */
@@ -32,7 +32,7 @@ interface Props {
   t: PLT;
 }
 
-/** 等级对应的分阶色（与助手身体/胸前星章同源，QQ 式成长色阶）。 */
+/** 等级对应的分阶色（与助手身体/胸前星章同源，QQ 式成长色阶；满级即最高档橙色）。 */
 function levelColor(level: number): string {
   return LEVEL_COLORS[Math.min(Math.max(level, 1), LEVEL_COLORS.length) - 1];
 }
@@ -108,14 +108,15 @@ const RARITY_COLORS: Record<
   myth: { base: "#e879f9", high: "#f5d0fe", deep: "#a21caf", border: "rgba(232,121,249,.6)", shadow: "rgba(192,38,211,.4)", text: "#c026d3" },
 };
 
-/** 等级徽章渐变（模仿 QQ 式等级：从低级的冷灰 → 蓝紫 → 橙金 → 彩炫，逐级点亮）。 */
+/** 等级徽章渐变（与 LEVEL_COLORS 同色系逐级点亮，灰→蓝→绿→紫→黄→橙，
+ *  from 取等级色、to 为该色系的加深版，保证与等级环/进度条/米兔一致）。 */
 const LEVEL_GRAD: Record<number, { from: string; to: string; glow: string }> = {
-  1: { from: "#9aa4b2", to: "#5b6472", glow: "rgba(120,130,150,.5)" },
-  2: { from: "#60a5fa", to: "#2563eb", glow: "rgba(37,99,235,.55)" },
-  3: { from: "#a78bfa", to: "#6d28d9", glow: "rgba(109,40,217,.55)" },
-  4: { from: "#fbbf24", to: "#d97706", glow: "rgba(217,119,6,.6)" },
-  5: { from: "#e879f9", to: "#a21caf", glow: "rgba(162,28,175,.6)" },
-  6: { from: "#38bdf8", to: "#7c3aed", glow: "rgba(124,58,237,.6)" },
+  1: { from: "#94a3b8", to: "#475569", glow: "rgba(148,163,184,.5)" },
+  2: { from: "#60a5fa", to: "#2563eb", glow: "rgba(96,165,250,.55)" },
+  3: { from: "#34d399", to: "#059669", glow: "rgba(52,211,153,.55)" },
+  4: { from: "#a78bfa", to: "#6d28d9", glow: "rgba(167,139,250,.55)" },
+  5: { from: "#fbbf24", to: "#d97706", glow: "rgba(251,191,36,.55)" },
+  6: { from: "#fb923c", to: "#ea580c", glow: "rgba(251,146,60,.6)" },
 };
 
 /** 稀有度标签文案（映射到 i18n 键）。 */
@@ -753,9 +754,10 @@ function TarotArcana({ no, achieved, color }: { no: number; achieved: boolean; c
   })();
   return (
     <svg
-      width="92"
-      height="104"
+      width="100%"
+      height="100%"
       viewBox="0 0 56 64"
+      preserveAspectRatio="xMidYMid meet"
       aria-hidden="true"
       style={{
         filter: achieved ? "none" : "blur(0.8px)",
@@ -802,7 +804,7 @@ function AchievementCard({ achievement, cardNo, t, TONE, lang }: { achievement: 
         gap: 6,
         fontSize: 12,
         lineHeight: 1.45,
-        padding: "20px 10px 12px",
+        padding: "14px 8px 9px",
         borderRadius: 12,
         // 塔罗牌面：已解锁 = 顶部白辉 + 稀有度高光渐变 + 稀有度双晕「窗花」；未解锁 = 面板 + 灰色花边描边 + 灰虚影
         background: a.achieved
@@ -924,8 +926,8 @@ function AchievementCard({ achievement, cardNo, t, TONE, lang }: { achievement: 
         style={{
           position: "relative",
           zIndex: 1,
-          width: 92,
-          height: 104,
+          width: 78,
+          height: 84,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -1143,6 +1145,263 @@ function AchievementCard({ achievement, cardNo, t, TONE, lang }: { achievement: 
   );
 }
 
+/** 满级专属隐藏彩蛋卡：超越 78 张塔罗的「库之尽头」，仅满级（词库宗师）解锁。
+ *  以金色神话牌呈现，带流动金光边与扫光，属于等级之巅的收藏者私藏。 */
+function HiddenMasterCard({ t, lang }: { t: PLT; lang: "zh" | "en" }): ReactNode {
+  const L: "zh" | "en" = lang === "en" ? "en" : "zh";
+  const name = L === "en" ? "End of the Library" : "库之尽头";
+  const nameAlt = L === "en" ? "库之尽头" : "End of the Library";
+  const line =
+    L === "en"
+      ? "You reached the top of the shelf; every line from here begins with love alone."
+      : "行至藏书之巅，往后每一句，皆因热爱而始。";
+  // 满级黄金神话光泽
+  const gold = {
+    base: "#f5c518",
+    high: "#ffef9e",
+    deep: "#a8791e",
+    border: "rgba(245,197,24,.62)",
+    shadow: "rgba(245,197,24,.42)",
+  };
+  return (
+    <li
+      title={`${name} ${nameAlt} · ${t("pl.rarity.myth")} · +∞`}
+      style={{
+        position: "relative",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 6,
+        fontSize: 12,
+        lineHeight: 1.45,
+        padding: "14px 8px 9px",
+        borderRadius: 12,
+        background: `radial-gradient(140% 55% at 50% 0%, rgba(255,255,255,.9) 0%, rgba(255,255,255,0) 55%), linear-gradient(168deg, ${gold.high} 0%, ${gold.base} 42%, ${gold.deep} 100%)`,
+        border: `1px solid ${gold.deep}`,
+        outline: "none",
+        boxShadow: `0 0 0 1px ${gold.base}, 0 0 0 3px ${gold.border}, 0 6px 18px ${gold.shadow}`,
+        transition: "transform .16s ease, box-shadow .16s ease",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.transform = "translateY(-3px)";
+        e.currentTarget.style.boxShadow =
+          `0 0 0 1px ${gold.high}, 0 0 0 4px ${gold.border}, 0 10px 24px ${gold.shadow}`;
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.transform = "translateY(0)";
+        e.currentTarget.style.boxShadow =
+          `0 0 0 1px ${gold.base}, 0 0 0 3px ${gold.border}, 0 6px 18px ${gold.shadow}`;
+      }}
+    >
+      {/* 扫光 + 流动金光边 */}
+      <div className="pl-card-sheen" />
+      <div className="pl-card-gold" />
+      {/* 金色双线内框 */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 5,
+          borderRadius: 10,
+          border: `1px dashed ${gold.border}`,
+          pointerEvents: "none",
+        }}
+      />
+      <div
+        style={{
+          position: "absolute",
+          inset: 9,
+          borderRadius: 8,
+          border: "1px solid rgba(255,255,255,.6)",
+          pointerEvents: "none",
+          opacity: 0.9,
+        }}
+      />
+      {/* 四角金光菱花 */}
+      {(
+        [
+          { top: 2, left: 2 },
+          { top: 2, right: 2 },
+          { bottom: 2, left: 2 },
+          { bottom: 2, right: 2 },
+        ] as const
+      ).map((pos, i) => (
+        <div
+          key={i}
+          style={{
+            position: "absolute",
+            width: 10,
+            height: 10,
+            zIndex: 1,
+            transform: "rotate(45deg)",
+            borderRadius: 1.5,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: gold.base,
+            border: `1px solid ${gold.deep}`,
+            boxShadow: `0 0 8px ${gold.base}`,
+            ...pos,
+          }}
+        >
+          <span style={{ width: 3.5, height: 3.5, borderRadius: 999, background: gold.high }} />
+        </div>
+      ))}
+      {/* 顶部序标：用「∞」表达超越既有塔罗体系 */}
+      <div
+        style={{
+          position: "relative",
+          zIndex: 1,
+          marginTop: 2,
+          padding: "0 10px",
+          borderRadius: 999,
+          fontSize: 12,
+          fontWeight: 800,
+          color: "#7a4d00",
+          background: "linear-gradient(135deg, #fff3c4, #f5c518)",
+          boxShadow: `0 1px 6px ${gold.shadow}`,
+        }}
+      >
+        ∞
+      </div>
+      {/* 中央象征：金色皇冠（等级之巅的徽记） */}
+      <div
+        style={{
+          position: "relative",
+          zIndex: 1,
+          width: 78,
+          height: 84,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          marginTop: 2,
+        }}
+      >
+        <svg width="58" height="58" viewBox="0 0 64 56" fill="none" aria-hidden="true">
+          <path
+            d="M6 44 12 16l13 12 7-14 7 14 13-12 6 28z"
+            fill="#fff8e1"
+            stroke="#8a5a00"
+            strokeWidth="2"
+            strokeLinejoin="round"
+          />
+          <circle cx="32" cy="16" r="2" fill="#d4a017" />
+          <circle cx="17" cy="27" r="2" fill="#d4a017" />
+          <circle cx="47" cy="27" r="2" fill="#d4a017" />
+          <rect x="8" y="44" width="48" height="5" rx="2.5" fill="#d4a017" stroke="#8a5a00" strokeWidth="1" />
+          <rect x="20" y="49" width="24" height="4" rx="2" fill="#fff3c4" stroke="#8a5a00" strokeWidth="1" />
+        </svg>
+      </div>
+      {/* 牌名 + 另一语种牌名 */}
+      <div
+        style={{
+          position: "relative",
+          zIndex: 1,
+          maxWidth: "100%",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 1,
+        }}
+      >
+        <span
+          style={{
+            fontWeight: 800,
+            fontFamily: "Georgia, 'Songti SC', 'Noto Serif SC', serif",
+            color: "#fff",
+            fontSize: 13.5,
+            letterSpacing: 0.5,
+            whiteSpace: "nowrap",
+            maxWidth: "100%",
+            textShadow: "0 1px 3px rgba(0,0,0,.35)",
+          }}
+        >
+          {name}
+        </span>
+        <span
+          style={{
+            fontSize: 9.5,
+            letterSpacing: 0.4,
+            color: "#3d2a00",
+            whiteSpace: "nowrap",
+            maxWidth: "100%",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {nameAlt}
+        </span>
+      </div>
+      {/* 牌面名言 */}
+      <div
+        style={{
+          position: "relative",
+          zIndex: 1,
+          maxWidth: "100%",
+          width: "100%",
+          textAlign: "center",
+          fontSize: 10,
+          lineHeight: 1.5,
+          color: "#3d2a00",
+          minHeight: 30,
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "center",
+        }}
+      >
+        {line}
+      </div>
+      {/* 稀有度徽标 */}
+      <span
+        style={{
+          position: "relative",
+          zIndex: 1,
+          padding: "1px 8px",
+          borderRadius: 999,
+          fontSize: 9,
+          fontWeight: 700,
+          letterSpacing: 0.4,
+          color: "#fff",
+          background: "linear-gradient(135deg, #fff3c4, #d4a017)",
+        }}
+      >
+        {t("pl.rarity.myth")} · +∞
+      </span>
+      {/* 进度：满级即已解锁，恒为 100% */}
+      <div
+        style={{
+          position: "relative",
+          zIndex: 1,
+          maxWidth: "100%",
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          marginTop: 2,
+        }}
+      >
+        <div
+          style={{
+            flex: 1,
+            height: 5,
+            borderRadius: 3,
+            background: "rgba(255,255,255,.3)",
+            border: "1px solid rgba(255,255,255,.4)",
+            overflow: "hidden",
+          }}
+        >
+          <div style={{ width: "100%", height: "100%", borderRadius: 3, background: "linear-gradient(90deg, #fff3c4, #d4a017)" }} />
+        </div>
+        <span style={{ fontSize: 10.5, color: "rgba(255,255,255,.95)", fontWeight: 700, whiteSpace: "nowrap" }}>
+          100%
+        </span>
+      </div>
+      <span style={{ fontSize: 9, color: "#7a5a10", lineHeight: 1.4, zIndex: 1, textAlign: "center" }}>
+        {t("pl.achievements.hiddenCardHint")}
+      </span>
+    </li>
+  );
+}
+
 /** 待解锁占位卡：无对应成就的塔罗牌仅展示牌面信息，隐藏一切成就信息（灰色虚影花边）。 */
 function TarotSlotCard({ no, t, TONE, lang }: { no: number; t: PLT; TONE: ThemeTone; lang: "zh" | "en" }): ReactNode {
   const deck: { name: { zh: string; en: string }; line: { zh: string; en: string } } = TAROT_ARCANA[no];
@@ -1160,7 +1419,7 @@ function TarotSlotCard({ no, t, TONE, lang }: { no: number; t: PLT; TONE: ThemeT
         gap: 6,
         fontSize: 12,
         lineHeight: 1.45,
-        padding: "20px 10px 12px",
+        padding: "14px 8px 9px",
         borderRadius: 12,
         background: TONE.panel,
         border: "1px dashed rgba(154,163,178,.62)",
@@ -1204,8 +1463,8 @@ function TarotSlotCard({ no, t, TONE, lang }: { no: number; t: PLT; TONE: ThemeT
         style={{
           position: "relative",
           zIndex: 1,
-          width: 92,
-          height: 104,
+          width: 78,
+          height: 84,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -1279,6 +1538,8 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
   const achievements = status?.achievements ?? [];
   const achievedCount = achievements.filter((a) => a.achieved).length;
   const summary = status?.achievementSummary;
+  // 是否已满级（词库宗师）：满级才展示隐藏彩蛋卡「库之尽头」
+  const isMaster = !!(level && level.level >= MAX_LEVEL);
   const overallPct = summary && summary.total > 0 ? Math.round((summary.unlocked / summary.total) * 100) : 0;
 
   // 近期待解锁：未解锁成就按完成度降序，固定展示前 3 张（填满 3 列网格）
@@ -1331,16 +1592,16 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
       aria-modal="true"
       aria-label={t("pl.achievements.title")}
       className={PL_DIALOG_OVERLAY}
-      onClick={onClose}
+      onClick={(e) => e.stopPropagation()}
     >
       <style>{PL_DIALOG_CSS}</style>
       <div
-        onClick={(e) => e.stopPropagation()}
         className={PL_DIALOG}
         style={{
-          width: 560,
+          width: 860,
+          height: 760,
           maxWidth: "calc(100vw - 40px)",
-          maxHeight: "min(660px, calc(100vh - 40px))",
+          maxHeight: "calc(100vh - 40px)",
         }}
       >
         {/* 标题行 + 右上角关闭按钮 */}
@@ -1351,21 +1612,66 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
           <DialogCloseButton onClick={onClose} label={t("pl.close")} />
         </div>
 
-        {/* 内容区：超出最大高度时独立滚动 */}
+        {/* 说明 */}
+        <div
+          style={{
+            marginTop: 10,
+            fontSize: 11.5,
+            lineHeight: 1.6,
+            color: TONE.quiet,
+            background: TONE.accentSoft,
+            border: `1px solid ${TONE.border}`,
+            borderRadius: 7,
+            padding: "7px 10px",
+            flexShrink: 0,
+          }}
+        >
+          {t("pl.achievements.desc")}
+        </div>
+
+        {/* 内容区：与人格管理一致的两栏布局，左右两栏各自独立滚动 */}
         <div
           style={{
             flex: 1,
             minHeight: 0,
-            overflow: "auto",
-            /* 内容与滚动条之间预留 10px 间距（与官方一致） */
-            paddingRight: 10,
             display: "flex",
-            flexDirection: "column",
-            gap: 16,
-            paddingTop: 14,
-            paddingBottom: 4,
+            gap: 14,
+            marginTop: 10,
           }}
         >
+          {/* 左栏：成长档案（独立滚动） */}
+          <div
+            style={{
+              flex: "1 1 0",
+              minWidth: 0,
+              minHeight: 0,
+              height: "100%",
+              boxSizing: "border-box",
+              background: TONE.row,
+              border: `1px solid ${TONE.border}`,
+              borderRadius: 10,
+              overflowY: "auto",
+            }}
+          >
+            {/* 顶部标题：内容向上滚动时悬浮固定（与人格管理一致） */}
+            <div
+              style={{
+                position: "sticky",
+                top: 0,
+                zIndex: 3,
+                padding: "10px 10px 8px",
+                background: TONE.row,
+                borderBottom: `1px solid ${TONE.border}`,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ width: 3, height: 13, borderRadius: 2, background: TONE.accent, flexShrink: 0 }} />
+                <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: TONE.text }}>
+                  {t("pl.achievements.colOverview")}
+                </span>
+              </div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 14, padding: "10px 10px 14px" }}>
           {/* 成长称号总览：称号 + 达成数 + 成就点 + 总进度 */}
           {summary && (
             <section
@@ -1542,7 +1848,7 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
                   style={{
                     background: TONE.row,
                     border: `1px solid ${TONE.border}`,
-                    color: TONE.accent,
+                    color: contrastFg(TONE.row),
                     height: 28,
                     borderRadius: 14,
                     padding: "0 14px",
@@ -1590,7 +1896,7 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
                             padding: "5px 7px",
                             borderRadius: 8,
                             background: cur
-                              ? "color-mix(in srgb, var(--dsw-alias-accent, #7c9cff) 14%, transparent)"
+                              ? `color-mix(in srgb, ${g.from} 16%, transparent)`
                               : "transparent",
                             fontWeight: cur ? 700 : 500,
                             color: TONE.text,
@@ -1623,7 +1929,7 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
                               <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                                 {lang === "en" ? r.en : r.zh}
                               </span>
-                              <span style={{ color: cur ? TONE.accent : g.from, fontWeight: cur ? 700 : 600, flexShrink: 0 }}>
+                              <span style={{ color: cur ? g.to : g.from, fontWeight: cur ? 700 : 600, flexShrink: 0 }}>
                                 {t("pl.achievements.levelNeed").replace("{n}", String(r.threshold))}
                               </span>
                             </div>
@@ -1711,39 +2017,76 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
             )}
           </section>
 
-          {/* 近期待解锁：进度最高的未解锁成就，增强目标感 */}
-          {status && upNext.length > 0 && (
-            <section>
-              <div style={{ ...sectionTitleStyle, display: "flex", alignItems: "center" }}>
-                <span style={{ flex: 1 }}>{t("pl.achievements.upNext")}</span>
-                <span style={{ fontSize: 11, color: TONE.quiet, fontWeight: 500 }}>
-                  {t("pl.achievements.collected").replace("{n}", String(achievedCount))} · {achievedCount} /{" "}
-                  {achievements.length}
+            {/* 近期待解锁：进度最高的未解锁成就，增强目标感 */}
+            {status && upNext.length > 0 && (
+              <section>
+                <div style={{ ...sectionTitleStyle, display: "flex", alignItems: "center" }}>
+                  <span style={{ flex: 1 }}>{t("pl.achievements.upNext")}</span>
+                  <span style={{ fontSize: 11, color: TONE.quiet, fontWeight: 500 }}>
+                    {t("pl.achievements.collected").replace("{n}", String(achievedCount))} · {achievedCount} /{" "}
+                    {achievements.length}
+                  </span>
+                </div>
+                <ul
+                  style={{
+                    margin: 0,
+                    padding: 0,
+                    listStyle: "none",
+                    display: "grid",
+                    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                    gap: 8,
+                  }}
+                >
+                  {upNext.map((a) => (
+                    <AchievementCard
+                      key={a.id}
+                      achievement={a}
+                      cardNo={achToCard[a.id] ?? 0}
+                      t={t}
+                      TONE={TONE}
+                      lang={lang}
+                    />
+                  ))}
+                </ul>
+              </section>
+            )}
+          </div>
+          </div>
+
+          {/* 右栏：成就牌组（独立滚动，隐藏横向滚动条） */}
+          <div
+            style={{
+              flex: "1 1 0",
+              minWidth: 0,
+              minHeight: 0,
+              height: "100%",
+              boxSizing: "border-box",
+              background: TONE.row,
+              border: `1px solid ${TONE.border}`,
+              borderRadius: 10,
+              overflowX: "hidden",
+              overflowY: "auto",
+            }}
+          >
+            {/* 顶部标题：内容向上滚动时悬浮固定（与人格管理一致） */}
+            <div
+              style={{
+                position: "sticky",
+                top: 0,
+                zIndex: 3,
+                padding: "10px 10px 8px",
+                background: TONE.row,
+                borderBottom: `1px solid ${TONE.border}`,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ width: 3, height: 13, borderRadius: 2, background: TONE.accent, flexShrink: 0 }} />
+                <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: TONE.text }}>
+                  {t("pl.achievements.colDeck")}
                 </span>
               </div>
-              <ul
-                style={{
-                  margin: 0,
-                  padding: 0,
-                  listStyle: "none",
-                  display: "grid",
-                  gridTemplateColumns: "repeat(3, 1fr)",
-                  gap: 8,
-                }}
-              >
-                {upNext.map((a) => (
-                  <AchievementCard
-                    key={a.id}
-                    achievement={a}
-                    cardNo={achToCard[a.id] ?? 0}
-                    t={t}
-                    TONE={TONE}
-                    lang={lang}
-                  />
-                ))}
-              </ul>
-            </section>
-          )}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 14, padding: "10px 10px 14px" }}>
 
           {/* 塔罗牌成就墙：标题行含解锁计数 — 全部 78 张都展示，大阿卡纳全覆盖 */}
           <section>
@@ -1822,7 +2165,8 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
                       fontWeight: 600,
                       cursor: "pointer",
                       border: `1px solid ${active ? c.deep : TONE.border}`,
-                      color: active ? "#fff" : TONE.quiet,
+                      // 前景色按背景真实亮度取反，避免自定义黑夜皮肤把 brand/bg 覆盖成白色导致「白底白字」
+                      color: active ? contrastFg(c.deep) : contrastFg(TONE.row),
                       background: active ? c.deep : TONE.row,
                       transition: "background .16s ease, color .16s ease, border-color .16s ease",
                     }}
@@ -1868,10 +2212,14 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
                   padding: 0,
                   listStyle: "none",
                   display: "grid",
-                  gridTemplateColumns: "repeat(3, 1fr)",
+                  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
                   gap: 8,
                 }}
               >
+                {/* 满级隐藏彩蛋卡：词库宗师在「全部/神话」视图下额外展示，超越 78 张的私藏 */}
+                {isMaster && (filter === "all" || filter === "myth") && (
+                  <HiddenMasterCard t={t} lang={lang} />
+                )}
                 {wallCards.map((card) => {
                   const a = cardToAch[card];
                   return a ? (
@@ -1883,6 +2231,8 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
               </ul>
             )}
           </section>
+            </div>
+          </div>
         </div>
       </div>
     </div>,

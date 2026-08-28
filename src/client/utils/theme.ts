@@ -110,6 +110,53 @@ export function useThemeSync(): boolean {
   return dark;
 }
 
+/** 解析颜色为 [r,g,b]。支持 hex(#rgb/#rrggbb)、rgb()，以及 var(--变量[, 回退])（读取宿主运行时变量，缺失用回退值）。 */
+export function parseColor(input: string): [number, number, number] | null {
+  if (typeof window === "undefined") return null;
+  let s = (input ?? "").trim();
+  const varm = s.match(/^var\((--[\w-]+)(?:\s*,\s*(.+))?\)$/);
+  if (varm) {
+    let val = "";
+    try {
+      val = window.getComputedStyle(document.documentElement).getPropertyValue(varm[1]).trim();
+    } catch {
+      val = "";
+    }
+    return parseColor(val || (varm[2] || "#000000"));
+  }
+  s = s.replace(/\s/g, "");
+  let m = s.match(/^#([0-9a-fA-F]{6})$/);
+  if (m) {
+    const n = parseInt(m[1], 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  m = s.match(/^#([0-9a-fA-F]{3})$/);
+  if (m) {
+    const x = m[1][0].repeat(2) + m[1][1].repeat(2) + m[1][2].repeat(2);
+    const n = parseInt(x, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  m = s.match(/^rgba?\((\d+)[, ]+(\d+)[, ]+(\d+)/);
+  if (m) return [+m[1], +m[2], +m[3]];
+  return null;
+}
+
+/**
+ * 依据背景色亮度返回可读的前景色（亮底返回深色、暗底返回白色）。
+ * 主要解决：宿主部分自定义黑夜皮肤会把 `--dsw-alias-brand-primary` / `--dsw-alias-bg-layer-3`
+ * 覆盖成偏白色，导致「白底白字」按钮看不清。这里按运行时真实颜色算亮度来选前景色，保证始终可读。
+ */
+export function contrastFg(bg: string): string {
+  const rgb = parseColor(bg);
+  if (!rgb) return "#ffffff";
+  const lin = rgb.map((v) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  });
+  const lum = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+  return lum > 0.35 ? "#0e1526" : "#ffffff";
+}
+
 /** 润色稿输入区背景色：黑夜模式用与宿主一致的深色兜底，白天跟随宿主 token。 */
 export function rowBackground(): string {
   return isDarkMode()

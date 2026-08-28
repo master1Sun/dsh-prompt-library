@@ -95,15 +95,32 @@ export function exportPrompts(ids?: string[]): Promise<PromptBackup> {
   return send<PromptBackup>("GET", "/api/prompt-library/export");
 }
 
-/** 从备份内容导入提示词（合并式），返回导入/更新/跳过条数。 */
-export function importPrompts(
-  data: unknown,
-): Promise<{ imported: number; updated: number; skipped: number }> {
-  return send<{ imported: number; updated: number; skipped: number }>(
-    "POST",
-    "/api/prompt-library/import",
-    data,
-  );
+/** 后端下载结果：后端把文件写入系统「下载」目录后返回保存路径与条数。 */
+export interface ExportSaveResult {
+  count: number;
+  filePath: string;
+}
+
+/**
+ * 走后端下载：前端只传勾选的 ids 与导出格式，由后端拉取数据、组织文件并写入系统「下载」目录。
+ * 仅在文件真正写入磁盘后 resolve，不再有浏览器下载时序问题。
+ */
+export function saveExportFile(ids: string[], format: string): Promise<ExportSaveResult> {
+  return send<ExportSaveResult>("POST", "/api/prompt-library/export/save", { ids, format });
+}
+
+/** 导入提示词的结果：成功/更新/跳过条数 + 逐条结果。 */
+export interface ImportPromptsResult {
+  imported: number;
+  updated: number;
+  skipped: number;
+  /** 逐条结果（title 为空表示该行无可用标题）。 */
+  items: Array<{ title: string; status: "imported" | "updated" | "skipped" }>;
+}
+
+/** 从备份内容导入提示词（合并式），返回导入/更新/跳过条数及逐条结果。 */
+export function importPrompts(data: unknown): Promise<ImportPromptsResult> {
+  return send<ImportPromptsResult>("POST", "/api/prompt-library/import", data);
 }
 
 /** 标签汇总（名称 + 使用次数）。 */
@@ -138,7 +155,8 @@ export interface SkillImportResult {
   imported: number;
   updated: number;
   skipped: number;
-  items: { title: string; name: string }[];
+  /** 成功 / 跳过的技能清单（status：imported 新增 / updated 覆盖 / skipped 正文为空跳过）。 */
+  items: { title: string; name: string; status: "imported" | "updated" | "skipped" }[];
   errors: { name: string; reason: string }[];
 }
 
@@ -171,6 +189,11 @@ export function listAvailableSkills(): Promise<SkillSource[]> {
   return send<SkillSource[]>("GET", "/api/prompt-library/skills/available");
 }
 
+/** 递归扫描指定目录下的 md 文件为可导入技能条目（「扫描文件夹」导入，解析结果同 listAvailableSkills）。 */
+export function scanSkillDir(dir: string): Promise<SkillSource[]> {
+  return send<SkillSource[]>("POST", "/api/prompt-library/skills/scan-dir", { dir });
+}
+
 /** 解析一段 md 原始文本（frontmatter + 正文）为可编辑条目（供「选择本地 md 文件」导入）。 */
 export function parseSkillRaw(raw: string): Promise<{ title: string; body: string; summary: string }> {
   return send<{ title: string; body: string; summary: string }>(
@@ -188,13 +211,36 @@ export function importSkillEntries(entries: SkillEntry[]): Promise<SkillImportRe
 /** 批量导出技能的结果：成功条数 + 成功清单 + 失败清单。 */
 export interface SkillExportResult {
   exported: number;
+  /** 实际导出位置（目录），用于结果通知展示导出路径。 */
+  root: string;
   items: { title: string; name: string }[];
   errors: { title: string; reason: string }[];
 }
 
-/** 把用户在弹窗中编辑后的技能条目写盘为 DSH 技能（~/.dsh/skills/<name>/SKILL.md）。 */
-export function exportSkillEntries(entries: SkillEntry[]): Promise<SkillExportResult> {
-  return send<SkillExportResult>("POST", "/api/prompt-library/skills/export/entries", { entries });
+/** 技能导出范围：global 通用（全局技能库）/ project 项目（当前项目）/ private 私有（绑定当前会话）。 */
+export type SkillExportScope = "global" | "project" | "private";
+
+/**
+ * 把用户在弹窗中编辑后的技能条目导出为 DSH 技能。
+ * scope 缺省 global：写盘 ~/.dsh/skills/<name>/SKILL.md；
+ * project：写盘项目级技能库 <项目路径>/.dsh/skills/<name>/SKILL.md（rootPath 为未自动解析到当前项目时用户手动填写的项目路径）；
+ * private：创建为会话级技能并绑定当前会话。
+ */
+export function exportSkillEntries(
+  entries: SkillEntry[],
+  scope: SkillExportScope = "global",
+  rootPath?: string,
+): Promise<SkillExportResult> {
+  return send<SkillExportResult>("POST", "/api/prompt-library/skills/export/entries", {
+    entries,
+    scope,
+    rootPath,
+  });
+}
+
+/** 解析当前项目路径（导出弹窗「项目技能」范围用）：cwd 为当前项目绝对路径，无法确定时为 null。 */
+export function getExportProjectCwd(): Promise<{ cwd: string | null }> {
+  return send<{ cwd: string | null }>("GET", "/api/prompt-library/skills/export/project-cwd");
 }
 
 /** AI 依据提示词内容生成的技能描述符（导出弹窗「校验并 AI 生成」用）。 */
@@ -257,6 +303,24 @@ export function polishPrompt(
   return send<{ polished: string }>("POST", "/api/prompt-library/ai/polish", {
     body,
     keepVariables: opts?.keepVariables ?? true,
+  });
+}
+
+/** AI 生成失败原因码（与 host 端 DraftGenerateFail 保持一致）。 */
+export type DraftGenerateFail = "no-llm" | "route" | "empty";
+
+/** 依据「标题 + 已有内容」用 AI 生成技能 / 人格正文草稿（人格管理 / 技能管理「AI 生成」按钮用）。 */
+export function generateDraft(
+  kind: "soul" | "skill",
+  title: string,
+  input: string,
+  lang?: "zh" | "en",
+): Promise<{ content: string }> {
+  return send<{ content: string }>("POST", "/api/prompt-library/ai/draft", {
+    kind,
+    title,
+    input,
+    lang,
   });
 }
 
@@ -424,9 +488,34 @@ export function setSessionActivePrompts(scope: string, promptIds: string[]): Pro
   return send<{ promptIds: string[] }>("PUT", `${SESSION_PROMPTS_BASE}/active`, { scope, promptIds });
 }
 
-/** 读取最近活跃的会话 scope（「技能注入」弹窗「当前会话」Tab 用；无会话时为 null）。 */
-export function getCurrentSessionScope(): Promise<{ scope: string | null }> {
-  return send<{ scope: string | null }>("GET", `${SESSION_PROMPTS_BASE}/current-scope`);
+// ── Harness 技能软控制（~/.dsh/skills 系统技能 + 项目技能）─────────────────
+
+/** 单条 harness 技能及其开关状态（与 host 端 HarnessSkillItem 一致）。 */
+export interface HarnessSkillItem {
+  /** 技能目录绝对路径（唯一 id，开关回写时原样返回）。 */
+  id: string;
+  /** 归属：system（~/.dsh/skills）/ project（<项目>/.dsh/skills）。 */
+  scope: "system" | "project";
+  /** kebab-case 技能名。 */
+  name: string;
+  /** 可读标题。 */
+  title: string;
+  /** 摘要（可能为空）。 */
+  summary: string;
+  /** 技能根目录。 */
+  root: string;
+  /** 当前是否启用。 */
+  enabled: boolean;
+}
+
+/** 列出 system（~/.dsh/skills）与当前项目的 harness 技能及开关状态。 */
+export function listHarnessSkillToggles(): Promise<{ items: HarnessSkillItem[]; projectRoot: string | null }> {
+  return send<{ items: HarnessSkillItem[]; projectRoot: string | null }>("GET", "/api/prompt-library/skills/harness/list");
+}
+
+/** 更新某 harness 技能的开关（软控制：禁用清单注入系统提示）。 */
+export function setHarnessSkillToggle(id: string, enabled: boolean): Promise<{ id: string; enabled: boolean }> {
+  return send<{ id: string; enabled: boolean }>("POST", "/api/prompt-library/skills/harness/toggle", { id, enabled });
 }
 
 /** 设置某会话绑定的自定义人格（传 'default'/空串 → 回落默认/上层），返回实际生效的人格 id。 */

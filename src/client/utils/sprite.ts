@@ -11,7 +11,8 @@
  *                   失败返回 null，由调用方回退到原生 SVG 助手。
  *
  * 助手差异化（QQ 式成长 & 换装人格化 & 心情表情）：
- * - 等级：米兔整体保持暖白形象，等级色只作胸前小星章点缀（灰→蓝→绿→紫→金→橙），不改全身颜色；
+ * - 等级：米兔身体随等级换色（按 LEVEL_COLORS 对应色相做柔和粉彩），
+ *   胸前星章保留等级色；满级（>= MAX_LEVEL）整体切换为「炫彩」渐变皮肤（彩虹流光 + 柔光晕）；
  * - 聊天主题：按职业换装（代码=工程师帽 / 写作=贝雷帽 / 翻译=领带 / 问答=眼镜）；
  * - 心情：开心时笑容更开、腮红更浓，低落时嘴角下垂、略低头。
  */
@@ -36,6 +37,9 @@ export interface SpriteOptions {
 
 /** 等级分阶配色（1 灰 → 6 橙，QQ 式成长色阶）。 */
 export const LEVEL_COLORS = ["#94a3b8", "#60a5fa", "#34d399", "#a78bfa", "#fbbf24", "#fb923c"];
+
+/** 满级档位（对应 LEVEL_COLORS 长度 = 6，'词库宗师'）：满级解锁黄金专属皮肤。 */
+export const MAX_LEVEL = LEVEL_COLORS.length;
 
 /** 依据背景色返回高对比文字色（白/深）。 */
 export function contrastText(hex: string): string {
@@ -235,11 +239,66 @@ const POSE: Record<SpriteTrack, Pose[]> = {
   wave: [P({ arm: -0.55, mouth: "open" }), P({ arm: 0, mouth: "open" }), P({ arm: -0.9, mouth: "smile" }), P({ arm: 0, mouth: "open" })],
 };
 
-/** 米兔配色：body 为暖白身体/脸，feature 为五官深色，outline 为描边色（浅色模式保证可见）。 */
+/** 米兔皮肤配色：body 为身体/脸主力色，feature 为五官深色，outline 为描边色。
+ *  全部等级身体跟随 LEVEL_COLORS（1 灰 → 6 橙）；满级仅背后光晕转为彩虹炫彩。 */
 interface Palette {
   body: string;
   feature: string;
   outline: string;
+}
+
+/** 炫彩（彩虹）色标：用于满级背后光晕的彩虹渐变。 */
+export const PRISM_STOPS: Array<[number, string]> = [
+  [0, "#ff5aa2"],
+  [0.17, "#a78bfa"],
+  [0.34, "#60a5fa"],
+  [0.51, "#34d399"],
+  [0.68, "#fbbf24"],
+  [0.85, "#fb923c"],
+  [1, "#ff5aa2"],
+];
+
+/** 把 #rrggbb 朝白色混合 tint（0..1），得到柔和粉彩身体。 */
+function tintTowardWhite(hex: string, tint: number): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return "#ffffff";
+  const n = parseInt(m[1], 16);
+  const mix = (c: number) => Math.round(c + (255 - c) * tint);
+  return `#${[((n >> 16) & 255), ((n >> 8) & 255), (n & 255)]
+    .map(mix)
+    .map((v) => v.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+/** 把 #rrggbb 调暗 ratio（0..1），得到与身体同色系的描边/五官色。 */
+function darken(hex: string, ratio: number): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return "#000000";
+  const n = parseInt(m[1], 16);
+  const per = (c: number) => Math.round(c * (1 - ratio));
+  return `#${[((n >> 16) & 255), ((n >> 8) & 255), (n & 255)]
+    .map(per)
+    .map((v) => v.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+/** 米兔皮肤配色：等级 1-6 身体随 LEVEL_COLORS 换色（满级即最高档橙色，主体仍跟色系，
+ * 彩虹炫彩只出现在背后光晕，见 drawHalo）。 */
+function resolvePalette(level?: number): Palette {
+  const lv = clampLevel(level);
+  // 等级色 → 柔和粉彩身体 + 同色系五官描边，主体紧跟等级色（轻调亮即可，避免洗白对不上色系）
+  const base = LEVEL_COLORS[lv - 1];
+  return {
+    body: tintTowardWhite(base, 0.18),
+    feature: darken(base, 0.55),
+    outline: darken(base, 0.28),
+  };
+}
+
+/** 为身体主力形设置填充（全部等级用等级色平涂，满级炫彩由 drawHalo 光晕承担）。 */
+function bodyFill(ctx: CanvasRenderingContext2D, pal: Palette): string {
+  ctx.fillStyle = pal.body;
+  return pal.body;
 }
 
 /** 相对亮度（0..1），用于判断主色深浅。 */
@@ -255,24 +314,6 @@ function luminance(hex: string): number {
   const g = toLinear((n >> 8) & 255);
   const b = toLinear(n & 255);
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-}
-
-/** 米兔配色：body 固定暖白（不随等级改变全身颜色），feature 深色五官，outline 主题描边。 */
-function resolvePalette(): Palette {
-  // 米兔为白色形象：身体统一米白，五官用深色，保证日夜模式都清晰
-  const body = "#f9f5ec";
-  const feature = "#1f2937";
-  let outline = "#c9c2b4";
-  try {
-    const v = window
-      .getComputedStyle(document.documentElement)
-      .getPropertyValue("--dsw-alias-border-l2")
-      .trim();
-    if (v) outline = v;
-  } catch {
-    /* 忽略，用默认暖灰描边 */
-  }
-  return { body, feature, outline };
 }
 
 function drawEyes(ctx: CanvasRenderingContext2D, blink: number, pal: Palette): void {
@@ -455,7 +496,7 @@ function drawCostume(ctx: CanvasRenderingContext2D, topic: SpriteTopic | undefin
   }
 }
 
-/** 等级胸前小星章（QQ 式成长标识，与职业装扮不冲突）。 */
+/** 等级胸前小星章（QQ 式成长标识，与职业装扮不冲突）；随等级色，满级为最高档橙色。 */
 function drawLevelBadge(ctx: CanvasRenderingContext2D, level: number | undefined): void {
   const color = LEVEL_COLORS[clampLevel(level) - 1];
   ctx.fillStyle = color;
@@ -483,14 +524,14 @@ function drawEars(ctx: CanvasRenderingContext2D, pal: Palette): void {
   // 左耳
   ctx.beginPath();
   ctx.ellipse(27.5, 14.5, 4.6, 9, 0.12, 0, Math.PI * 2);
-  ctx.fillStyle = pal.body;
+  bodyFill(ctx, pal);
   ctx.globalAlpha = 0.92;
   ctx.fill();
   ctx.stroke();
   // 右耳
   ctx.beginPath();
   ctx.ellipse(44.5, 14.5, 4.6, 9, -0.12, 0, Math.PI * 2);
-  ctx.fillStyle = pal.body;
+  bodyFill(ctx, pal);
   ctx.fill();
   ctx.stroke();
   // 内耳（米兔经典粉）
@@ -502,6 +543,63 @@ function drawEars(ctx: CanvasRenderingContext2D, pal: Palette): void {
   ctx.beginPath();
   ctx.ellipse(44.5, 14.5, 2, 6, -0.12, 0, Math.PI * 2);
   ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+/** 把 #rrggbb 转成带透明度的 rgba() 字符串，供 canvas 光晕渐变使用。 */
+function hexToRgba(hex: string, alpha: number): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return `rgba(255, 255, 255, ${alpha})`;
+  const n = parseInt(m[1], 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+/** 等级背后光晕：1 级（灰）不显示；满级（>= MAX_LEVEL）画彩虹光晕；其余等级按等级色画出呼吸感光晕。 */
+function drawHalo(ctx: CanvasRenderingContext2D, level: number): void {
+  // 满级炫彩：彩虹光晕 + 一圈彩虹描记，强化炫彩轮廓
+  if (level >= MAX_LEVEL) {
+    const grad = ctx.createRadialGradient(36, 44, 2, 36, 44, 27);
+    grad.addColorStop(0, "rgba(255, 255, 255, 0.42)");
+    grad.addColorStop(0.5, "rgba(232, 121, 249, 0.2)");
+    grad.addColorStop(1, "rgba(96, 165, 250, 0)");
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(36, 44, 27, 0, Math.PI * 2);
+    ctx.fill();
+    const ring = ctx.createLinearGradient(20, 18, 52, 70);
+    for (const [o, c] of PRISM_STOPS) ring.addColorStop(o, c);
+    ctx.strokeStyle = ring;
+    ctx.lineWidth = 1.2;
+    ctx.globalAlpha = 0.6;
+    ctx.beginPath();
+    ctx.arc(36, 44, 27, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    return;
+  }
+  // 非满级：按等级色画柔和光晕
+  const base = LEVEL_COLORS[clampLevel(level) - 1];
+  const grad = ctx.createRadialGradient(36, 44, 2, 36, 44, 28);
+  grad.addColorStop(0, "rgba(255, 255, 255, 0.4)");
+  grad.addColorStop(0.5, hexToRgba(base, 0.22));
+  grad.addColorStop(1, hexToRgba(base, 0));
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(36, 44, 28, 0, Math.PI * 2);
+  ctx.fill();
+  // 边缘一圈等级色描记，强化轮廓
+  const ring = ctx.createLinearGradient(20, 18, 52, 70);
+  ring.addColorStop(0, hexToRgba(base, 0.7));
+  ring.addColorStop(1, hexToRgba(base, 0.3));
+  ctx.strokeStyle = ring;
+  ctx.lineWidth = 1.1;
+  ctx.globalAlpha = 0.5;
+  ctx.beginPath();
+  ctx.arc(36, 44, 28, 0, Math.PI * 2);
+  ctx.stroke();
   ctx.globalAlpha = 1;
 }
 
@@ -523,6 +621,9 @@ function drawCell(
   ctx.scale(1, p.squashY);
   ctx.translate(-36, -47);
 
+  // 背后光晕：1 级（灰）不显示；2-5 级按等级色，满级（>= MAX_LEVEL）为彩虹炫彩
+  const lv = opts.level ?? 1;
+  if (lv >= 2) drawHalo(ctx, lv);
   drawBunnyBody(ctx, p, pal, opts);
   ctx.restore();
 }
@@ -534,8 +635,8 @@ function drawBunnyBody(
   pal: Palette,
   opts: SpriteOptions,
 ): void {
-  // 身体（米兔短胖的小身子：暖白 + 描边）
-  ctx.fillStyle = pal.body;
+  // 身体（米兔短胖的小身子：等级色/炫彩 + 描边）
+  bodyFill(ctx, pal);
   ctx.strokeStyle = pal.outline;
   ctx.lineWidth = 0.9;
   ctx.beginPath();
@@ -547,7 +648,7 @@ function drawBunnyBody(
   ctx.save();
   ctx.translate(36, 47);
   ctx.rotate(p.arm);
-  ctx.fillStyle = pal.body;
+  bodyFill(ctx, pal);
   ctx.beginPath();
   ctx.ellipse(0, 5, 12, 9, 0, 0, Math.PI * 2);
   ctx.fill();
@@ -560,8 +661,8 @@ function drawBunnyBody(
   ctx.fill();
   ctx.restore();
 
-  // 四只脚（米兔四脚：前后各一对暖白小椭圆，靠后的一对略小略高形成纵深感）
-  ctx.fillStyle = pal.body;
+  // 四只脚（米兔四脚：前后各一对等级色/炫彩小椭圆，靠后的一对略小略高形成纵深感）
+  bodyFill(ctx, pal);
   ctx.strokeStyle = pal.outline;
   ctx.lineWidth = 0.8;
   // 后脚（较小，稍高）
@@ -586,8 +687,8 @@ function drawBunnyBody(
   // 双耳（在脸之下绘制，耳根自然被脸盖住）
   drawEars(ctx, pal);
 
-  // 脸（米兔暖白圆脸 + 描边）
-  ctx.fillStyle = pal.body;
+  // 脸（米兔等级色/炫彩圆脸 + 描边）
+  bodyFill(ctx, pal);
   ctx.strokeStyle = pal.outline;
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -616,7 +717,7 @@ function drawBunnyBody(
 }
 
 async function buildSheet(opts: SpriteOptions): Promise<SpriteSheet> {
-  const pal = resolvePalette();
+  const pal = resolvePalette(opts.level);
   const canvas = document.createElement("canvas");
   canvas.width = SPRITE_CELL * SPRITE_COLUMNS;
   canvas.height = SPRITE_CELL * SPRITE_ROWS;
@@ -655,10 +756,11 @@ let whaleSheetPromise: Promise<SpriteSheet> | null = null;
 /**
  * 鲸鱼款助手雪碧图：直接指向随插件分发的静态素材地址，几何与轨道由
  * 鲸鱼轨道常量描述；每次返回同一份（素材为固定形象，无差异化参数）。
+ * 先预加载素材图片，就绪后才 resolve，避免页面刷新时先闪经典米兔或空白。
  */
 export function getWhaleSpriteSheet(): Promise<SpriteSheet> {
   if (!whaleSheetPromise) {
-    whaleSheetPromise = Promise.resolve({
+    const sheet: SpriteSheet = {
       url: WHALE_ASSET_URL,
       cellW: 192,
       cellH: 208,
@@ -666,6 +768,12 @@ export function getWhaleSpriteSheet(): Promise<SpriteSheet> {
       rows: WHALE_ROWS,
       trackRow: WHALE_TRACK_ROW,
       tracks: WHALE_TRACKS,
+    };
+    whaleSheetPromise = new Promise<SpriteSheet>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(sheet);
+      img.onerror = () => reject(new Error("whale asset load failed"));
+      img.src = WHALE_ASSET_URL;
     });
   }
   return whaleSheetPromise;

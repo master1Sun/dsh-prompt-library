@@ -33,6 +33,32 @@ export interface VersionNote {
  */
 export const VERSION_NOTES: VersionNote[] = [
   {
+    version: "0.9.3",
+    date: "2026-08-28",
+    zh: {
+      title: "等级配色 · 技能管理 · 数据管理整合 · 图标统一",
+      items: [
+        "等级配色：词库助手米兔身体随之色系（灰→蓝→绿→紫→黄→橙），2 级起背后带同色光晕，满级升级为炫彩彩虹光晕。",
+        "成就配色：等级圆环、进度条、当前等级统计行统一跟随等级色，与助手皮肤一致，不再混用品牌蓝。",
+        "技能管理：右键菜单新增「技能管理」入口，列出系统与项目级 harness 技能，可逐项开关自动注入。",
+        "数据管理：标签管理与回收站合并为「标签数据」弹窗，采用与人格管理一致的左右双栏独立滚动布局。",
+        "图标统一：侧边栏、聊天按钮及人格/技能/数据管理弹窗统一使用书本图标，随文本色渲染。",
+        "导入导出优化：技能导入导出与目录选择等操作整理到独立弹窗，流程更清晰。",
+      ],
+    },
+    en: {
+      title: "Level colors · Skill manager · Data management merge · Unified icon",
+      items: [
+        "Level colors: the assistant rabbit recolor follows the level ladder (grey→blue→green→purple→yellow→orange); from level 2 it glows in its level color, and at max level it becomes a rainbow prism glow.",
+        "Achievement colors: the level ring, progress bar and current-level stats row all follow the level color, matching the assistant skin instead of the brand blue.",
+        "Skill manager: a new \"Skills\" entry in the context menu lists system and project harness skills with per-item auto-injection toggles.",
+        "Data management: tag management and the trash merge into a single \"Tag data\" dialog with a two-column independently-scrolling layout like the persona manager.",
+        "Unified icon: the sidebar, chat button and persona/skill/data dialogs all use the bookmark icon, tinted by text color.",
+        "Import/export polish: skill import/export and directory picking move into dedicated dialogs for a clearer flow.",
+      ],
+    },
+  },
+  {
     version: "0.9.2",
     date: "2026-08-28",
     zh: {

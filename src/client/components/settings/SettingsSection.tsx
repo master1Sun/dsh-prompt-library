@@ -406,8 +406,8 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 自动学习统计：已学习条数 + 近 7 天 AI 完善次数（设置面板展示用）
   const [learnStats, setLearnStats] = useState<{ autoLearnedCount: number; aiRefinedIn7: number } | null>(null);
-  // 词库助手开关是否已解锁：等级满级（成就最高档）后解锁，可自由开启/关闭；未满级强制常驻
-  const [assistantMaxed, setAssistantMaxed] = useState(false);
+  // 词库助手开关是否已解锁：等级 >= 3（成就中档）后解锁，可自由开启/关闭；低于 3 级强制常驻
+  const [assistantUnlocked, setAssistantUnlocked] = useState(false);
 
   useEffect(() => {
     getSettings()
@@ -432,11 +432,11 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
       .catch(() => setLearnStats(null));
   }, []);
 
-  // 拉取游戏化快照，判断词库助手开关是否满级解锁（next === 0 表示已满级）
+  // 拉取游戏化快照，判断词库助手开关是否解锁：等级 >= 3 后可自由开启/关闭
   useEffect(() => {
     getAssistantStatus()
-      .then((s) => setAssistantMaxed((s.level?.next ?? 1) === 0))
-      .catch(() => setAssistantMaxed(false));
+      .then((s) => setAssistantUnlocked((s.level?.level ?? 0) >= 3))
+      .catch(() => setAssistantUnlocked(false));
   }, []);
 
   // 保存设置到后台并通知其他组件
@@ -712,10 +712,10 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
         <ToggleRow
           label={T("pl.set.assistant")}
           desc={`${T("pl.set.assistantDesc")} · ${
-            assistantMaxed ? T("pl.set.assistantUnlocked") : T("pl.set.assistantUnlock")
+            assistantUnlocked ? T("pl.set.assistantUnlocked") : T("pl.set.assistantUnlock")
           }`}
-          checked={assistantMaxed ? draft.assistantEnabled : true}
-          disabled={!assistantMaxed}
+          checked={assistantUnlocked ? draft.assistantEnabled : true}
+          disabled={!assistantUnlocked}
           onChange={(v) => updateAndSave({ assistantEnabled: v })}
         />
         {/* 词库助手子项：主开关关闭（满级解锁态）时一并置灰，词库助手显示时始终可配置；通过缩进呈现父子层级 */}
@@ -731,7 +731,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             label={T("pl.set.character")}
             desc={T("pl.set.characterDesc")}
             value={draft.assistantCharacter}
-            disabled={assistantMaxed && !draft.assistantEnabled}
+            disabled={assistantUnlocked && !draft.assistantEnabled}
             onChange={(v) =>
               updateAndSave({
                 assistantCharacter: v === "dshpet" ? "dshpet" : v === "whale" ? "whale" : "classic",
@@ -748,7 +748,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             label={T("pl.set.announcement")}
             desc={T("pl.set.announcementDesc")}
             checked={draft.announcementEnabled}
-            disabled={assistantMaxed && !draft.assistantEnabled}
+            disabled={assistantUnlocked && !draft.assistantEnabled}
             onChange={(v) => updateAndSave({ announcementEnabled: v })}
           />
           {/* 工具面板：仅当词库助手显示时可开关；关闭词库助手仅灰显，不改动真实保存值 */}
@@ -756,7 +756,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             label={T("pl.set.rightPanel")}
             desc={T("pl.set.rightPanelDesc")}
             checked={draft.rightPanelEnabled}
-            disabled={assistantMaxed && !draft.assistantEnabled}
+            disabled={assistantUnlocked && !draft.assistantEnabled}
             onChange={(v) => updateAndSave({ rightPanelEnabled: v })}
           />
           {/* 人格管理：词库助手右键菜单「人格管理」入口；仅当词库助手显示时可开关 */}
@@ -764,7 +764,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             label={T("pl.set.persona")}
             desc={T("pl.set.personaDesc")}
             checked={draft.personaEnabled}
-            disabled={assistantMaxed && !draft.assistantEnabled}
+            disabled={assistantUnlocked && !draft.assistantEnabled}
             onChange={(v) => updateAndSave({ personaEnabled: v })}
           />
           {/* 技能管理：词库助手右键菜单「技能管理」入口；仅当词库助手显示时可开关，置于人格管理之下 */}
@@ -772,7 +772,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             label={T("pl.set.inject")}
             desc={T("pl.set.injectDesc")}
             checked={draft.injectEnabled}
-            disabled={assistantMaxed && !draft.assistantEnabled}
+            disabled={assistantUnlocked && !draft.assistantEnabled}
             onChange={(v) => updateAndSave({ injectEnabled: v })}
           />
           {/* 看板：词库助手右键菜单「看板」入口（统计可视化）；仅当词库助手显示时可开关 */}
@@ -780,7 +780,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             label={T("pl.set.dashboard")}
             desc={T("pl.set.dashboardDesc")}
             checked={draft.dashboardEnabled}
-            disabled={assistantMaxed && !draft.assistantEnabled}
+            disabled={assistantUnlocked && !draft.assistantEnabled}
             onChange={(v) => updateAndSave({ dashboardEnabled: v })}
           />
           {/* 数据管理：词库助手右键菜单「数据管理」入口；仅当词库助手显示时可开关 */}
@@ -788,7 +788,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             label={T("pl.set.dataManagement")}
             desc={T("pl.set.dataManagementDesc")}
             checked={draft.dataManagementEnabled}
-            disabled={assistantMaxed && !draft.assistantEnabled}
+            disabled={assistantUnlocked && !draft.assistantEnabled}
             onChange={(v) => updateAndSave({ dataManagementEnabled: v })}
           />
           {/* 等级助手：控制小助手等级徽章与右键菜单「成就」入口；仅当词库助手显示时可开关 */}
@@ -796,7 +796,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             label={T("pl.set.levelAssistant")}
             desc={T("pl.set.levelAssistantDesc")}
             checked={draft.levelEnabled}
-            disabled={assistantMaxed && !draft.assistantEnabled}
+            disabled={assistantUnlocked && !draft.assistantEnabled}
             onChange={(v) => updateAndSave({ levelEnabled: v })}
           />
           {/* 我的等级公告：新成就解锁时由小助手气泡播报；仅当词库助手显示时可开关 */}
@@ -804,7 +804,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             label={T("pl.set.levelAnnouncement")}
             desc={T("pl.set.levelAnnouncementDesc")}
             checked={draft.levelAnnouncementEnabled}
-            disabled={assistantMaxed && !draft.assistantEnabled}
+            disabled={assistantUnlocked && !draft.assistantEnabled}
             onChange={(v) => updateAndSave({ levelAnnouncementEnabled: v })}
           />
         </div>
@@ -1035,6 +1035,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
                   role="alert"
                   style={{
                     width: "100%",
+                    boxSizing: "border-box",
                     display: "flex",
                     alignItems: "flex-start",
                     gap: 8,

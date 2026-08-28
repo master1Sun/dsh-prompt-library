@@ -22,6 +22,7 @@ import { clampTitle, UNMATCHED_SCOPE_PATH } from "../../../types.js";
 import {
   createSessionPrompt as apiCreateSessionPrompt,
   deleteSessionPrompt as apiDeleteSessionPrompt,
+  generateDraft,
   listSessionPromptBindings,
   listSessionPrompts,
   listSessionScopeTree,
@@ -36,6 +37,7 @@ import { getTone, useThemeSync } from "../../utils/theme.js";
 import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../../utils/dialog-style.js";
 import { ConfirmDialog } from "../common/ConfirmDialog.js";
 import { DialogCloseButton } from "../common/DialogCloseButton.js";
+import { HarnessSkillModal } from "./HarnessSkillModal.js";
 import { type PLT } from "../../i18n/i18n.js";
 
 const MONO =
@@ -141,21 +143,49 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // 导入文件选择（MD 单文件）
   const importFileRef = useRef<HTMLInputElement | null>(null);
+  // Harness 技能开关弹窗是否显示
+  const [harnessOpen, setHarnessOpen] = useState(false);
+
+  // 工作区/项目树的展开/折叠状态持久化（技能管理右栏绑定树）：下次打开恢复到上次状态
+  const SCOPE_EXPAND_KEY = "pl:skill-tree-expanded";
+  const scopesExpandedFromStorage = (): Set<string> | null => {
+    try {
+      const raw = localStorage.getItem(SCOPE_EXPAND_KEY);
+      if (!raw) return null;
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? new Set<string>(arr) : null;
+    } catch {
+      return null;
+    }
+  };
+  const persistScopesExpanded = (s: Set<string>) => {
+    try {
+      localStorage.setItem(SCOPE_EXPAND_KEY, JSON.stringify([...s]));
+    } catch {
+      /* 忽略存储失败 */
+    }
+  };
+  // 构建展开集合：有历史记录则沿用，否则默认全部展开（与旧行为一致）
+  const buildScopesExpanded = (tree: ScopeNode[]) => {
+    const stored = scopesExpandedFromStorage();
+    if (stored && stored.size > 0) return stored;
+    const all = new Set<string>();
+    const collect = (nodes: ScopeNode[]) => {
+      for (const node of nodes) {
+        all.add(node.path);
+        collect(node.children);
+      }
+    };
+    collect(tree);
+    return all;
+  };
 
   // 重新拉取工作区/项目/会话树（打开及绑定变更后回写）；必须定义在提前返回之前，
   // 与下方加载 effect 一起保证所有 hooks 都在 `if (!open) return null;` 之前稳定调用。
   const refreshScopes = () =>
     listSessionScopeTree().then((tree) => {
       setScopes(tree);
-      const expandAll = new Set<string>();
-      const collect = (nodes: ScopeNode[]) => {
-        for (const node of nodes) {
-          expandAll.add(node.path);
-          collect(node.children);
-        }
-      };
-      collect(tree);
-      setExpanded(expandAll);
+      setExpanded(buildScopesExpanded(tree));
       setScopesLoaded(true);
     });
 
@@ -211,15 +241,7 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
         const map = new Map<string, string[]>();
         for (const b of binds) map.set(b.path, b.promptIds);
         setBindings(map);
-        const expandAll = new Set<string>();
-        const collect = (nodes: ScopeNode[]) => {
-          for (const node of nodes) {
-            expandAll.add(node.path);
-            collect(node.children);
-          }
-        };
-        collect(tree);
-        setExpanded(expandAll);
+        setExpanded(buildScopesExpanded(tree));
         setScopesLoaded(true);
       })
       .catch(() => {
@@ -315,8 +337,29 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
     }
   };
 
+  // AI 生成：依据「技能标题 + 已输入内容」生成技能正文草稿，填入编辑区（仅生成，不落盘）
+  const handleAiGenerate = async () => {
+    const title = editTitle.trim();
+    if (!title) {
+      setError(t("pl.ai.genNeedTitle"));
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setMsg(null);
+    try {
+      const { content } = await generateDraft("skill", title, editBody);
+      setEditBody(content);
+      setMsg({ text: t("pl.ai.genDone") });
+    } catch {
+      setError(t("pl.ai.genFailed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // 切换某技能的启用状态（立即保存；与人格「启用」开关一致）。
-  // 禁用的技能不会出现在右侧绑定列表中，也不会被注入给 AI。
+  // 禁用的技能仍显示在右侧绑定列表（置灰、已有绑定保留可见），但不能新绑定，也不会被注入给 AI。
   const toggleEnabled = (p: SessionPrompt) => {
     setBusy(true);
     setError(null);
@@ -559,6 +602,9 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
               />
               <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5 }}>{t("pl.inject.contentHint")}</div>
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
+                <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={busy} onClick={() => void handleAiGenerate()}>
+                  {busy ? t("pl.ai.generating") : t("pl.ai.generate")}
+                </Button>
                 <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} disabled={busy} onClick={() => void handleSave(p)}>
                   {t("pl.personas.save")}
                 </Button>
@@ -568,7 +614,6 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
             <div
               style={{
                 background: TONE.row,
-                border: `1px solid ${TONE.border}`,
                 borderRadius: 7,
                 padding: "7px 9px",
                 minHeight: 40,
@@ -601,6 +646,7 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
       const next = new Set(prev);
       if (next.has(wsPath)) next.delete(wsPath);
       else next.add(wsPath);
+      persistScopesExpanded(next);
       return next;
     });
 
@@ -691,20 +737,20 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
       .finally(() => setBusy(false));
   };
 
-  // 配置面板：搜索 + 卡片列表，勾选即绑定的目标（只展示已启用技能；禁用技能不参与绑定）。
+  // 配置面板：搜索 + 卡片列表，勾选即绑定的目标。
+  // 展示全部技能：启用技能可勾选/取消；禁用技能置灰（按钮与内容），仅保留已有绑定可见、不能新选。
   // target 既可以是工作区/项目路径，也可以是会话 id（由 editingSession 判定走会话绑定 API）。
   const renderConfigPanel = (target: string): ReactNode => {
     const isSession = editingSession === target;
-    const bindable = prompts.filter((p) => p.enabled !== false);
     const kw = bindSearch.trim().toLowerCase();
     const filtered = kw
-      ? bindable.filter(
+      ? prompts.filter(
           (p) =>
             p.title.toLowerCase().includes(kw) ||
             (p.tags ?? [])[0]?.toLowerCase().includes(kw) ||
             p.body.toLowerCase().includes(kw),
         )
-      : bindable;
+      : prompts;
     return (
       <div
         style={{
@@ -725,7 +771,7 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
           placeholder={t("pl.inject.bindSearchPlaceholder")}
           style={{ ...inputStyle, background: TONE.panel }}
         />
-        {bindable.length === 0 ? (
+        {prompts.length === 0 ? (
           <div style={{ fontSize: 11.5, color: TONE.quiet, textAlign: "center", padding: "8px 0" }}>
             {t("pl.inject.empty")}
           </div>
@@ -745,10 +791,12 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
           >
             {filtered.map((p) => {
               const checked = draftIds.has(p.id);
+              const disabled = !p.enabled;
               return (
                 <label
                   key={p.id}
                   onClick={(e) => e.stopPropagation()}
+                  title={disabled ? t("pl.inject.disabledBindHint") : undefined}
                   style={{
                     display: "flex",
                     flexDirection: "column",
@@ -758,14 +806,15 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
                     border: `1px solid ${checked ? TONE.accent : TONE.border}`,
                     borderRadius: 8,
                     padding: "7px 8px",
-                    cursor: "pointer",
+                    cursor: disabled ? "not-allowed" : "pointer",
+                    opacity: disabled ? 0.55 : 1,
                   }}
                 >
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <input
                       type="checkbox"
                       checked={checked}
-                      disabled={busy}
+                      disabled={busy || disabled}
                       onChange={() =>
                         setDraftIds((prev) => {
                           const next = new Set(prev);
@@ -774,7 +823,7 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
                           return next;
                         })
                       }
-                      style={{ flexShrink: 0, accentColor: TONE.accent, cursor: busy ? "not-allowed" : "pointer" }}
+                      style={{ flexShrink: 0, accentColor: TONE.accent, cursor: busy || disabled ? "not-allowed" : "pointer" }}
                     />
                     <strong
                       style={{
@@ -1078,127 +1127,158 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
               </div>
             )}
 
-            {/* 内容区：两栏布局（技能管理 / 项目绑定），超出时独立滚动 */}
+            {/* 内容区：两栏布局（技能管理 / 项目绑定），左右两栏各自独立滚动 */}
             <div
               style={{
                 flex: 1,
                 minHeight: 0,
-                overflow: "auto",
-                paddingRight: 10,
                 display: "flex",
                 gap: 14,
                 paddingTop: 14,
                 paddingBottom: 4,
                 marginTop: 8,
-                alignItems: "flex-start",
               }}
             >
-              {/* 左栏：技能管理 */}
+              {/* 左栏：技能管理（独立滚动；
+              外层为普通块级滚动容器（与右栏一致），内容套一层纵向 flex 保持间距 */}
               <div
                 style={{
                   flex: "1 1 0",
                   minWidth: 0,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 10,
+                  minHeight: 0,
+                  height: "100%",
+                  boxSizing: "border-box",
+                  background: TONE.row,
+                  border: `1px solid ${TONE.border}`,
+                  borderRadius: 10,
+                  overflowY: "auto",
                 }}
               >
-                <div>
+                {/* 顶部标题：左栏内容向上滚动时悬浮固定在顶部（贴顶、无抖动、无空隙） */}
+                <div
+                  style={{
+                    position: "sticky",
+                    top: 0,
+                    zIndex: 3,
+                    padding: "10px 10px 8px",
+                    background: TONE.row,
+                    boxSizing: "border-box",
+                    borderBottom: `1px solid ${TONE.border}`,
+                  }}
+                >
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <span style={{ width: 3, height: 13, borderRadius: 2, background: TONE.accent, flexShrink: 0 }} />
-                    <span style={{ fontSize: 13, fontWeight: 600, color: TONE.text }}>{t("pl.inject.listTitle")}</span>
+                    <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: TONE.text }}>{t("pl.inject.listTitle")}</span>
                   </div>
                   <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5, marginTop: 3 }}>
                     {t("pl.inject.listHint")}
                   </div>
-                </div>
-
-                {/* 导入导出工具栏：勾选技能后导出（每条一个 md）/ 从单个 md 导入一个技能 */}
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5 }}>{t("pl.exportHint")}</div>
-                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-                    <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={busy} onClick={handleExport}>
-                      {t("pl.export")}
-                    </Button>
-                    <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={busy} onClick={() => importFileRef.current?.click()}>
-                      {t("pl.import")}
-                    </Button>
+                  {/* 导入导出工具栏：勾选技能后导出（每条一个 md）/ 从单个 md 导入一个技能（随标题一起悬浮） */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 10 }}>
+                    <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5 }}>{t("pl.exportHint")}</div>
+                    <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                      <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} title={t("pl.harnessSkill.btnTitle")} onClick={() => setHarnessOpen(true)}>
+                        {t("pl.harnessSkill.btn")}
+                      </Button>
+                      <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={busy} onClick={handleExport}>
+                        {t("pl.export")}
+                      </Button>
+                      <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={busy} onClick={() => importFileRef.current?.click()}>
+                        {t("pl.import")}
+                      </Button>
+                    </div>
+                  </div>
+                  {/* 专门的「新建技能」添加区（随标题一起悬浮） */}
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8,
+                      marginTop: 10,
+                      background: TONE.accentSoft,
+                      border: `1px dashed ${TONE.accent}`,
+                      borderRadius: 10,
+                      padding: 10,
+                    }}
+                  >
+                    <span style={{ fontSize: 12.5, fontWeight: 600, color: TONE.accent }}>
+                      + {t("pl.sessionPrompts.new")}
+                    </span>
+                    <span style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5, marginTop: -4 }}>
+                      {t("pl.inject.createHint")}
+                    </span>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <input
+                        value={createName}
+                        onChange={(e) => setCreateName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") void handleCreate();
+                        }}
+                        placeholder={t("pl.inject.namePlaceholder")}
+                        style={{ ...inputStyle, flex: 1 }}
+                      />
+                      <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} disabled={busy || !createName.trim()} onClick={() => void handleCreate()}>
+                        {t("pl.personas.save")}
+                      </Button>
+                    </div>
                   </div>
                 </div>
-
-                {/* 专门的「新建技能」添加区 */}
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 8,
-                    background: TONE.accentSoft,
-                    border: `1px dashed ${TONE.accent}`,
-                    borderRadius: 10,
-                    padding: 10,
-                  }}
-                >
-                  <span style={{ fontSize: 12.5, fontWeight: 600, color: TONE.accent }}>
-                    + {t("pl.sessionPrompts.new")}
-                  </span>
-                  <span style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5, marginTop: -4 }}>
-                    {t("pl.inject.createHint")}
-                  </span>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <input
-                      value={createName}
-                      onChange={(e) => setCreateName(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") void handleCreate();
-                      }}
-                      placeholder={t("pl.inject.namePlaceholder")}
-                      style={{ ...inputStyle, flex: 1 }}
-                    />
-                    <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} disabled={busy || !createName.trim()} onClick={() => void handleCreate()}>
-                      {t("pl.personas.save")}
-                    </Button>
-                  </div>
+                {/* 技能卡片列表（随内容滚动） */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "10px 10px 10px" }}>
+                  {!loaded ? (
+                    <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "22px 0" }}>
+                      {t("pl.achievements.loading")}
+                    </div>
+                  ) : prompts.length === 0 ? (
+                    <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "18px 0" }}>
+                      {t("pl.inject.empty")}
+                    </div>
+                  ) : (
+                    prompts.map((p) => renderPromptCard(p))
+                  )}
                 </div>
-
-                {/* 技能卡片列表 */}
-                {!loaded ? (
-                  <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "22px 0" }}>
-                    {t("pl.achievements.loading")}
-                  </div>
-                ) : prompts.length === 0 ? (
-                  <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "18px 0" }}>
-                    {t("pl.inject.empty")}
-                  </div>
-                ) : (
-                  prompts.map((p) => renderPromptCard(p))
-                )}
               </div>
 
-              {/* 右栏：工作区 / 项目绑定 */}
+              {/* 右栏：工作区 / 项目绑定（独立滚动） */}
               <div
                 style={{
                   flex: "1.15 1 0",
                   minWidth: 0,
+                  height: "100%",
+                  boxSizing: "border-box",
+                  minHeight: 0,
                   background: TONE.row,
                   border: `1px solid ${TONE.border}`,
                   borderRadius: 10,
-                  padding: 10,
-                  position: "sticky",
-                  top: 0,
+                  overflowY: "auto",
                 }}
               >
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <span style={{ width: 3, height: 13, borderRadius: 2, background: TONE.accent, flexShrink: 0 }} />
-                  <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: TONE.text }}>
-                    {t("pl.personas.scopes.title")}
-                  </span>
-                  <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} title={t("pl.refresh")} onClick={() => void refreshScopes().catch(() => setError(t("pl.inject.opFailed")))}>
-                    {t("pl.refresh")}
-                  </Button>
-                </div>
-                <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.6, marginTop: 4 }}>
-                  {t("pl.inject.projectNote")}
-                </div>
+                {/* 顶部标题 + 说明：内容向上滚动时悬浮固定在顶部（与左栏一致） */}
+                  <div
+                    style={{
+                      position: "sticky",
+                      top: 0,
+                      zIndex: 3,
+                      padding: "10px 10px 8px",
+                      background: TONE.row,
+                      boxSizing: "border-box",
+                      borderBottom: `1px solid ${TONE.border}`,
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ width: 3, height: 13, borderRadius: 2, background: TONE.accent, flexShrink: 0 }} />
+                      <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: TONE.text }}>
+                        {t("pl.personas.scopes.title")}
+                      </span>
+                      <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} title={t("pl.refresh")} onClick={() => void refreshScopes().catch(() => setError(t("pl.inject.opFailed")))}>
+                        {t("pl.refresh")}
+                      </Button>
+                    </div>
+                    <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.6, marginTop: 4 }}>
+                      {t("pl.inject.projectNote")}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", padding: "10px 10px 10px" }}>
                 {!scopesLoaded ? (
                   <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "14px 0" }}>
                     {t("pl.achievements.loading")}
@@ -1208,10 +1288,11 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
                     {t("pl.personas.scopes.empty")}
                   </div>
                 ) : (
-                  <div style={{ display: "flex", flexDirection: "column", marginTop: 4 }}>
+                  <div style={{ display: "flex", flexDirection: "column" }}>
                     {scopes.map((ws) => renderScopeNode(ws, 0))}
                   </div>
                 )}
+                  </div>
               </div>
             </div>
 
@@ -1304,6 +1385,8 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
             );
           })()
         : null}
+      {/* Harness 技能软控制开关弹窗（列表 ~/.dsh/skills 系统技能 + 项目技能） */}
+      <HarnessSkillModal open={harnessOpen} onClose={() => setHarnessOpen(false)} t={t} />
     </>
   );
 }

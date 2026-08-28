@@ -5,7 +5,7 @@
  * 绘制概览卡片、标签分布、最常使用、最近使用、每周趋势等图表。
  * 配色复用词库面板同款 TONE token，随宿主主题自动深浅；无第三方图表依赖。
  */
-import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { PLT } from "../../i18n/i18n.js";
 import { fallbackT } from "../../i18n/i18n.js";
 import { useDataChanged } from "../../services/data-sync.js";
@@ -16,8 +16,6 @@ import {
   type PromptStatsData,
   type StatsSnapshot,
 } from "../../services/api.js";
-import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
-import { plBtn } from "../../utils/button-style.js";
 import { getTone, useThemeSync } from "../../utils/theme.js";
 
 const MONO =
@@ -263,217 +261,6 @@ function TrendChart({ snapshots, T }: { snapshots: StatsSnapshot[]; T: PLT }): R
   );
 }
 
-/** 统计页「总览」：概览重点卡片 + 近 7 天分析，详细列表放在「明细」标签。 */
-export function StatsContent({
-  stats,
-  snapshots,
-  T,
-}: {
-  stats: LibraryStats;
-  snapshots: StatsSnapshot[];
-  T: PLT;
-}): ReactNode {
-  useThemeSync(); // 订阅宿主主题变化，切换白天/黑夜时刷新主题色
-  const TONE = getTone();
-  const usedRate = stats.total > 0 ? Math.round((stats.usedCount / stats.total) * 100) : 0;
-  // 最近一次每周统计快照（每 7 天自动统计一次），用于「近 7 天分析」
-  const lastSnap = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* 概览核心 KPI：大数字仪表盘，一眼定位关键指标 */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-        <KpiCard label={T("pl.stats.total")} value={stats.total} />
-        <KpiCard label={T("pl.stats.totalUsage")} value={stats.totalUsage} />
-        <KpiCard
-          label={T("pl.stats.usedRate")}
-          value={`${usedRate}%`}
-          sub={T("pl.stats.usedCount", { count: stats.usedCount })}
-        />
-        <KpiCard
-          label={T("pl.stats.aiRefined")}
-          value={`${stats.aiRefinedPct}%`}
-          sub={T("pl.stats.aiRefinedCount", { count: stats.aiRefinedCount })}
-        />
-      </div>
-
-      {/* 近 7 天速览副指标 */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-        <StatCard label={T("pl.stats.added7")} value={stats.addedIn7Days} />
-        <StatCard label={T("pl.stats.used7")} value={stats.usedIn7Days} />
-      </div>
-
-      {/* 近 7 天分析（最近一次每周统计快照，每 7 天自动统计一次） */}
-      <Section title={T("pl.stats.analysis")}>
-        {!lastSnap ? (
-          <div style={{ padding: "10px 12px", color: TONE.quiet, fontSize: 12, textAlign: "center" }}>
-            {T("pl.stats.analysisEmpty")}
-          </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ fontSize: 11, color: TONE.muted }}>
-              {T("pl.stats.analysisPeriod", { start: formatDay(lastSnap.stats.rangeStart), end: formatDay(lastSnap.stats.rangeEnd) })}
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-              <StatCard label={T("pl.stats.analysisAdded")} value={lastSnap.stats.addedCount} />
-              <StatCard
-                label={T("pl.stats.analysisUsage")}
-                value={lastSnap.stats.usageCount}
-                sub={T("pl.stats.analysisActive", { n: lastSnap.stats.usedPromptCount })}
-              />
-              <StatCard label={T("pl.stats.analysisAi")} value={lastSnap.stats.aiRefinedCount} />
-            </div>
-            {/* 每周快照的 AI 点评（生成快照时若 AI 可用自动写入） */}
-            {lastSnap.comment ? (
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 4,
-                  padding: "9px 11px",
-                  background: TONE.row,
-                  border: `1px solid ${TONE.border}`,
-                  borderRadius: 8,
-                }}
-              >
-                <span style={{ fontSize: 11, fontWeight: 560, color: TONE.accent }}>
-                  {T("pl.stats.aiComment")}
-                </span>
-                <p style={{ margin: 0, fontSize: 12, lineHeight: 1.6, color: TONE.text, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                  {lastSnap.comment}
-                </p>
-              </div>
-            ) : null}
-            {lastSnap.stats.addedTitles.length > 0 && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <span style={{ fontSize: 11, color: TONE.quiet }}>{T("pl.stats.analysisNewTitles")}</span>
-                {lastSnap.stats.addedTitles.map((t) => (
-                  <div
-                    key={t}
-                    style={{ padding: "5px 10px", background: TONE.row, border: `1px solid ${TONE.border}`, borderRadius: 7, fontSize: 12, color: TONE.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
-                    data-tip={t}
-                  >
-                    {t}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </Section>
-    </div>
-  );
-}
-
-/** 统计页「明细」：每周趋势、最常/最近使用、沉睡提示词等详细列表。 */
-function StatsDetails({
-  stats,
-  snapshots,
-  T,
-}: {
-  stats: LibraryStats;
-  snapshots: StatsSnapshot[];
-  T: PLT;
-}): ReactNode {
-  useThemeSync();
-  const TONE = getTone();
-  const topUsedRows = useMemo(
-    () =>
-      stats.topUsed.map((p) => ({
-        key: p.title,
-        label: p.title,
-        value: p.usageCount,
-        sub: formatAgo(p.lastUsedAt, T),
-      })),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [stats.topUsed],
-  )
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* 每周趋势（明细最上方） */}
-      <Section title={T("pl.stats.trend")}>
-        <TrendChart snapshots={snapshots} T={T} />
-      </Section>
-
-      {/* 最常使用 */}
-      <Section title={T("pl.stats.topUsed")}>
-        <BarList rows={topUsedRows} T={T} />
-      </Section>
-
-      {/* 最近使用 */}
-      <Section title={T("pl.stats.recentUsed")}>
-        {stats.recentUsed.length === 0 ? (
-          <div style={{ padding: "10px 12px", color: TONE.quiet, fontSize: 12, textAlign: "center" }}>
-            {T("pl.stats.emptyList")}
-          </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            {stats.recentUsed.map((p) => (
-              <div
-                key={p.title}
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: 8,
-                  padding: "6px 10px",
-                  background: TONE.row,
-                  border: `1px solid ${TONE.border}`,
-                  borderRadius: 7,
-                  alignItems: "baseline",
-                  minWidth: 0,
-                }}
-              >
-                <span style={{ fontSize: 12, color: TONE.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }} data-tip={p.title}>
-                  {p.title}
-                </span>
-                <span style={{ fontSize: 11, color: TONE.muted, flexShrink: 0, whiteSpace: "nowrap" }}>
-                  {formatAgo(p.lastUsedAt, T)}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-      </Section>
-
-      {/* 沉睡提示词 */}
-      <Section title={T("pl.stats.sleeper")}>
-        {stats.longestUnused.length === 0 ? (
-          <div style={{ padding: "10px 12px", color: TONE.quiet, fontSize: 12, textAlign: "center" }}>
-            {T("pl.stats.sleeperEmpty")}
-          </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            {stats.longestUnused.map((p) => (
-              <div
-                key={p.title}
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: 8,
-                  padding: "6px 10px",
-                  background: TONE.row,
-                  border: `1px solid ${TONE.border}`,
-                  borderRadius: 7,
-                  alignItems: "baseline",
-                  minWidth: 0,
-                }}
-              >
-                <span style={{ fontSize: 12, color: TONE.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }} data-tip={p.title}>
-                  {p.title}
-                </span>
-                <span style={{ fontSize: 11, color: TONE.quiet, flexShrink: 0, whiteSpace: "nowrap" }}>
-                  {T("pl.stats.days", { days: p.days })}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-      </Section>
-    </div>
-  );
-}
-
 /** 星期文案 i18n 键（getDay: 0=周日 … 6=周六）。 */
 const WEEK_KEYS = [
   "pl.stats.week0",
@@ -484,9 +271,6 @@ const WEEK_KEYS = [
   "pl.stats.week5",
   "pl.stats.week6",
 ] as const;
-
-/** 统计页相互独立的视图 Tab。 */
-type StatsTab = "overview" | "heatmap" | "lifecycle" | "details" | "insight";
 
 /** 使用热力图：7×24 网格，按本地时区「星期 × 小时」展示使用频率。 */
 function HeatmapChart({ heatmap, T }: { heatmap: HeatmapCell[]; T: PLT }): ReactNode {
@@ -554,40 +338,6 @@ function HeatmapChart({ heatmap, T }: { heatmap: HeatmapCell[]; T: PLT }): React
           })}
         </div>
       ))}
-    </div>
-  );
-}
-
-/** 生命周期：用「新增 → 复用 → 沉睡 → 回收站」四个阶段概览词库结构（数据来自统计），下方附「近 7 天最常使用」清单。 */
-function LifecycleSection({ stats, T }: { stats: LibraryStats; T: PLT }): ReactNode {
-  useThemeSync();
-  // 近 7 天最常使用的提示词（与生命周期「近 7 天复用」卡片呼应）
-  const topUsed7Rows = useMemo(
-    () =>
-      (stats.topUsed7 ?? []).map((p) => ({
-        key: p.title,
-        label: p.title,
-        value: p.count,
-      })),
-    [stats.topUsed7],
-  );
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-        <StatCard label={T("pl.stats.lcAdded")} value={stats.addedIn7Days} />
-        <StatCard
-          label={T("pl.stats.lcActive")}
-          value={stats.usedIn7Days}
-          sub={T("pl.stats.lcActive30", { n: stats.usedIn30Days })}
-        />
-        <StatCard label={T("pl.stats.lcDormant")} value={stats.unusedCount} />
-        <StatCard label={T("pl.stats.lcTrash")} value={stats.trashCount} />
-      </div>
-
-      {/* 近 7 天最常使用 */}
-      <Section title={T("pl.stats.topUsed7")}>
-        <BarList rows={topUsed7Rows} T={T} />
-      </Section>
     </div>
   );
 }
@@ -815,86 +565,259 @@ function HotRank({ stats, T }: { stats: LibraryStats; T: PLT }): ReactNode {
   );
 }
 
-/** 「洞察」视图：健康评分 + 成长曲线 + 使用高峰 + 词库热榜。 */
-function InsightSection({ data, T }: { data: PromptStatsData; T: PLT }): ReactNode {
-  useThemeSync();
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <Section title={T("pl.stats.healthTitle")}>
-        <HealthCard stats={data.stats} T={T} />
-      </Section>
-      <Section title={T("pl.stats.growthTitle")}>
-        <GrowthChart snapshots={data.snapshots} T={T} />
-      </Section>
-      <Section title={T("pl.stats.peakTitle")}>
-        <PeakInsight heatmap={data.heatmap ?? []} T={T} />
-      </Section>
-      <HotRank stats={data.stats} T={T} />
-    </div>
-  );
-}
-
-/** 统计页顶部的视图切换（胶囊式 Tab，样式对齐现有按钮）。 */
-function StatsTabBar({ active, onChange, T }: { active: StatsTab; onChange: (t: StatsTab) => void; T: PLT }): ReactNode {
+/** 汇总各统计视角的单页看板：去除顶部 tab 切换，一屏纵览全部指标。
+ *  返回左右两栏内容（左：总览核心；右：深度洞察），由 StatsPanel 组装成与人格管理一致的两栏布局。 */
+function StatsDashboard({
+  stats,
+  snapshots,
+  heatmap,
+  T,
+}: {
+  stats: LibraryStats;
+  snapshots: StatsSnapshot[];
+  heatmap: HeatmapCell[];
+  T: PLT;
+}): ReactNode {
+  useThemeSync(); // 订阅宿主主题变化，切换白天/黑夜时刷新主题色
   const TONE = getTone();
-  const tabs: Array<{ id: StatsTab; label: string }> = [
-    { id: "overview", label: T("pl.stats.tabOverview") },
-    { id: "heatmap", label: T("pl.stats.tabHeatmap") },
-    { id: "lifecycle", label: T("pl.stats.tabLifecycle") },
-    { id: "details", label: T("pl.stats.tabDetails") },
-    { id: "insight", label: T("pl.stats.tabInsight") },
-  ];
-  const activeStyle: CSSProperties = {
-    background: TONE.accentSoft,
-    color: TONE.accent,
-  };
+  const usedRate = stats.total > 0 ? Math.round((stats.usedCount / stats.total) * 100) : 0;
+  // 最近一次每周统计快照（每 7 天自动统计一次），用于「近 7 天分析」
+  const lastSnap = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
+  // 最常使用（全量）
+  const topUsedRows = stats.topUsed.map((p) => ({
+    key: p.title,
+    label: p.title,
+    value: p.usageCount,
+    sub: formatAgo(p.lastUsedAt, T),
+  }));
+
+  // 左栏：总览核心（健康评分 / 核心 KPI / 近 7 天分析 / 生命周期 / 每周趋势 / 成长曲线）
+  const left = (
+    <>
+      {/* 词库健康评分 */}
+      <Section title={T("pl.stats.healthTitle")}>
+        <HealthCard stats={stats} T={T} />
+      </Section>
+
+      {/* 概览核心 KPI：大数字仪表盘 */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        <KpiCard label={T("pl.stats.total")} value={stats.total} />
+        <KpiCard label={T("pl.stats.totalUsage")} value={stats.totalUsage} />
+        <KpiCard label={T("pl.stats.usedRate")} value={`${usedRate}%`} sub={T("pl.stats.usedCount", { count: stats.usedCount })} />
+        <KpiCard label={T("pl.stats.aiRefined")} value={`${stats.aiRefinedPct}%`} sub={T("pl.stats.aiRefinedCount", { count: stats.aiRefinedCount })} />
+      </div>
+
+      {/* 近 7 天分析（最近一次每周统计快照，每 7 天自动统计一次） */}
+      <Section title={T("pl.stats.analysis")}>
+        {!lastSnap ? (
+          <div style={{ padding: "10px 12px", color: TONE.quiet, fontSize: 12, textAlign: "center" }}>
+            {T("pl.stats.analysisEmpty")}
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ fontSize: 11, color: TONE.muted }}>
+              {T("pl.stats.analysisPeriod", { start: formatDay(lastSnap.stats.rangeStart), end: formatDay(lastSnap.stats.rangeEnd) })}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+              <StatCard label={T("pl.stats.analysisAdded")} value={lastSnap.stats.addedCount} />
+              <StatCard label={T("pl.stats.analysisUsage")} value={lastSnap.stats.usageCount} sub={T("pl.stats.analysisActive", { n: lastSnap.stats.usedPromptCount })} />
+              <StatCard label={T("pl.stats.analysisAi")} value={lastSnap.stats.aiRefinedCount} />
+            </div>
+            {/* 每周快照的 AI 点评（生成快照时若 AI 可用自动写入） */}
+            {lastSnap.comment ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: "9px 11px", background: TONE.row, border: `1px solid ${TONE.border}`, borderRadius: 8 }}>
+                <span style={{ fontSize: 11, fontWeight: 560, color: TONE.accent }}>{T("pl.stats.aiComment")}</span>
+                <p style={{ margin: 0, fontSize: 12, lineHeight: 1.6, color: TONE.text, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{lastSnap.comment}</p>
+              </div>
+            ) : null}
+            {/* 新增提示词 */}
+            {lastSnap.stats.addedTitles.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={{ fontSize: 11, color: TONE.quiet }}>{T("pl.stats.analysisNewTitles")}</span>
+                {lastSnap.stats.addedTitles.map((tt) => (
+                  <div key={tt} style={{ padding: "5px 10px", background: TONE.row, border: `1px solid ${TONE.border}`, borderRadius: 7, fontSize: 12, color: TONE.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} data-tip={tt}>
+                    {tt}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </Section>
+
+      {/* 生命周期：新增 → 复用 → 沉睡 → 回收站 */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        <StatCard label={T("pl.stats.lcAdded")} value={stats.addedIn7Days} />
+        <StatCard label={T("pl.stats.lcActive")} value={stats.usedIn7Days} sub={T("pl.stats.lcActive30", { n: stats.usedIn30Days })} />
+        <StatCard label={T("pl.stats.lcDormant")} value={stats.unusedCount} />
+        <StatCard label={T("pl.stats.lcTrash")} value={stats.trashCount} />
+      </div>
+
+      {/* 每周趋势 */}
+      <Section title={T("pl.stats.trend")}>
+        <TrendChart snapshots={snapshots} T={T} />
+      </Section>
+
+      {/* 成长曲线 */}
+      <Section title={T("pl.stats.growthTitle")}>
+        <GrowthChart snapshots={snapshots} T={T} />
+      </Section>
+    </>
+  );
+
+  // 右栏：深度洞察（使用高峰 / 热力图 / 热榜 / 最常使用 / 最近使用 / 沉睡提示词）
+  const right = (
+    <>
+      {/* 使用高峰洞察 */}
+      <Section title={T("pl.stats.peakTitle")}>
+        <PeakInsight heatmap={heatmap} T={T} />
+      </Section>
+
+      {/* 使用热力图 */}
+      <Section title={T("pl.stats.tabHeatmap")}>
+        <HeatmapChart heatmap={heatmap} T={T} />
+      </Section>
+
+      {/* 词库热榜 */}
+      <HotRank stats={stats} T={T} />
+
+      {/* 最常使用 */}
+      <Section title={T("pl.stats.topUsed")}>
+        <BarList rows={topUsedRows} T={T} />
+      </Section>
+
+      {/* 最近使用 */}
+      <Section title={T("pl.stats.recentUsed")}>
+        {stats.recentUsed.length === 0 ? (
+          <div style={{ padding: "10px 12px", color: TONE.quiet, fontSize: 12, textAlign: "center" }}>
+            {T("pl.stats.emptyList")}
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {stats.recentUsed.map((p) => (
+              <div key={p.title} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "6px 10px", background: TONE.row, border: `1px solid ${TONE.border}`, borderRadius: 7, alignItems: "baseline", minWidth: 0 }}>
+                <span style={{ fontSize: 12, color: TONE.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }} data-tip={p.title}>{p.title}</span>
+                <span style={{ fontSize: 11, color: TONE.muted, flexShrink: 0, whiteSpace: "nowrap" }}>{formatAgo(p.lastUsedAt, T)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+
+      {/* 沉睡提示词 */}
+      <Section title={T("pl.stats.sleeper")}>
+        {stats.longestUnused.length === 0 ? (
+          <div style={{ padding: "10px 12px", color: TONE.quiet, fontSize: 12, textAlign: "center" }}>
+            {T("pl.stats.sleeperEmpty")}
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {stats.longestUnused.map((p) => (
+              <div key={p.title} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "6px 10px", background: TONE.row, border: `1px solid ${TONE.border}`, borderRadius: 7, alignItems: "baseline", minWidth: 0 }}>
+                <span style={{ fontSize: 12, color: TONE.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }} data-tip={p.title}>{p.title}</span>
+                <span style={{ fontSize: 11, color: TONE.quiet, flexShrink: 0, whiteSpace: "nowrap" }}>{T("pl.stats.days", { days: p.days })}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+    </>
+  );
+
   return (
+    /* 内容区：与人格管理一致的两栏布局，左右两栏各自独立滚动 */
     <div
       style={{
+        flex: 1,
+        minHeight: 0,
         display: "flex",
-        gap: 4,
-        padding: 3,
-        background: TONE.row,
-        border: `1px solid ${TONE.border}`,
-        borderRadius: 14,
-        width: "100%",
-        boxSizing: "border-box",
+        gap: 14,
       }}
     >
-      {tabs.map((tb) => (
-        <button
-          key={tb.id}
-          type="button"
-          onClick={() => onChange(tb.id)}
+      {/* 左栏：总览核心（独立滚动） */}
+      <div
+        style={{
+          flex: "1 1 0",
+          minWidth: 0,
+          minHeight: 0,
+          height: "100%",
+          boxSizing: "border-box",
+          background: TONE.row,
+          border: `1px solid ${TONE.border}`,
+          borderRadius: 10,
+          overflowY: "auto",
+        }}
+      >
+        {/* 顶部标题：内容向上滚动时悬浮固定（与人格管理一致） */}
+        <div
           style={{
-            flex: 1,
-            height: 26,
-            padding: "0 10px",
-            border: "none",
-            borderRadius: 11,
-            fontSize: 12,
-            whiteSpace: "nowrap",
-            cursor: "pointer",
-            background: tb.id === active ? activeStyle.background : "transparent",
-            color: tb.id === active ? activeStyle.color : TONE.muted,
-            transition: "background .24s ease, color .24s ease",
+            position: "sticky",
+            top: 0,
+            zIndex: 3,
+            padding: "10px 10px 8px",
+            background: TONE.row,
+            borderBottom: `1px solid ${TONE.border}`,
           }}
         >
-          {tb.label}
-        </button>
-      ))}
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ width: 3, height: 13, borderRadius: 2, background: TONE.accent, flexShrink: 0 }} />
+            <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: TONE.text }}>
+              {T("pl.stats.tabOverview")}
+            </span>
+          </div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14, padding: "10px 10px 14px" }}>
+          {left}
+        </div>
+      </div>
+
+      {/* 右栏：深度洞察（独立滚动） */}
+      <div
+        style={{
+          flex: "1 1 0",
+          minWidth: 0,
+          minHeight: 0,
+          height: "100%",
+          boxSizing: "border-box",
+          background: TONE.row,
+          border: `1px solid ${TONE.border}`,
+          borderRadius: 10,
+          overflowY: "auto",
+        }}
+      >
+        {/* 顶部标题：内容向上滚动时悬浮固定（与人格管理一致） */}
+        <div
+          style={{
+            position: "sticky",
+            top: 0,
+            zIndex: 3,
+            padding: "10px 10px 8px",
+            background: TONE.row,
+            borderBottom: `1px solid ${TONE.border}`,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ width: 3, height: 13, borderRadius: 2, background: TONE.accent, flexShrink: 0 }} />
+            <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: TONE.text }}>
+              {T("pl.stats.tabInsight")}
+            </span>
+          </div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14, padding: "10px 10px 14px" }}>
+          {right}
+        </div>
+      </div>
     </div>
   );
 }
 
-/** 统计可视化面板（供词库面板在「统计」视图下渲染）。 */
-export function StatsPanel({ t, onBack }: { t?: PLT; onBack?: () => void }): ReactNode {
+/** 统计可视化面板（供看板弹窗渲染，单页纵览全部指标）。 */
+export function StatsPanel({ t }: { t?: PLT }): ReactNode {
   useThemeSync(); // 订阅宿主主题变化，切换白天/黑夜时刷新主题色
   const TONE = getTone();
   const T = t ?? fallbackT;
   const [data, setData] = useState<PromptStatsData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<StatsTab>("overview");
 
   const load = useCallback(() => {
     getStats()
@@ -924,63 +847,10 @@ export function StatsPanel({ t, onBack }: { t?: PLT; onBack?: () => void }): Rea
         fontFamily: MONO,
       }}
     >
-      {/* 顶部固定工具条：返回按钮 + 视图切换 Tab，固定在头部不随内容滚动 */}
-      {(onBack || data) && (
-        <div
-          style={{
-            flexShrink: 0,
-            display: "flex",
-            flexDirection: "column",
-            gap: 12,
-            padding: "12px 14px 0",
-          }}
-        >
-          {onBack && (
-            <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 8 }}>
-              <Button
-                type="button"
-                variant="primary"
-                size="sm"
-                className={plBtn("primary", "sm")}
-                onClick={onBack}
-                icon={
-                  <svg
-                    width="13"
-                    height="13"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M19 12H5M11 18l-6-6 6-6" />
-                  </svg>
-                }
-              >
-                {T("pl.stats.back")}
-              </Button>
-            </div>
-          )}
-          {data && <StatsTabBar active={tab} onChange={setTab} T={T} />}
-        </div>
-      )}
-      {/* 独立滚动内容区：过长时出现滚动条，头部保持固定 */}
-      <div
-        style={{
-          flex: 1,
-          minHeight: 0,
-          overflowY: "auto",
-          overflowX: "hidden",
-          padding: "12px 10px 18px",
-          display: "flex",
-          flexDirection: "column",
-          gap: 12,
-        }}
-      >
       {error && (
         <div
           style={{
+            flexShrink: 0,
             padding: "9px 12px",
             color: TONE.red,
             fontSize: 12,
@@ -1001,15 +871,8 @@ export function StatsPanel({ t, onBack }: { t?: PLT; onBack?: () => void }): Rea
         </div>
       )}
       {data && (
-        <>
-          {tab === "overview" && <StatsContent stats={data.stats} snapshots={data.snapshots} T={T} />}
-          {tab === "heatmap" && <HeatmapChart heatmap={data.heatmap ?? []} T={T} />}
-          {tab === "lifecycle" && <LifecycleSection stats={data.stats} T={T} />}
-          {tab === "details" && <StatsDetails stats={data.stats} snapshots={data.snapshots} T={T} />}
-          {tab === "insight" && <InsightSection data={data} T={T} />}
-        </>
+        <StatsDashboard stats={data.stats} snapshots={data.snapshots} heatmap={data.heatmap ?? []} T={T} />
       )}
-      </div>
     </div>
   );
 }

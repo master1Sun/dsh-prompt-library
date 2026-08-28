@@ -17,6 +17,9 @@ export function Pagination({
   page,
   totalPages,
   onChange,
+  prevLabel,
+  nextLabel,
+  textColor,
 }: {
   /** 当前页码，从 1 开始 */
   page: number;
@@ -24,8 +27,15 @@ export function Pagination({
   totalPages: number;
   /** 翻页回调 */
   onChange: (p: number) => void;
+  /** 上一页文案（i18n），默认「‹ 上一页」 */
+  prevLabel?: string;
+  /** 下一页文案（i18n），默认「下一页 ›」 */
+  nextLabel?: string;
+  /** 文字颜色覆盖，用于暗色浮层场景；默认使用组件内定义色 */
+  textColor?: string;
 }): ReactNode {
   if (totalPages <= 1) return null;
+  const text = textColor ?? TONE.text;
   return (
     <div
       style={{
@@ -38,7 +48,7 @@ export function Pagination({
         flexShrink: 0,
       }}
     >
-      <span style={{ fontSize: 12, color: TONE.muted }}>
+      <span style={{ fontSize: 12, color: text }}>
         {page} / {totalPages}
       </span>
       <div style={{ display: "flex", gap: 6 }}>
@@ -47,18 +57,18 @@ export function Pagination({
           size="sm"
           disabled={page <= 1}
           onClick={() => onChange(page - 1)}
-          style={{ color: TONE.text }}
+          style={{ color: text }}
         >
-          {"\u2039"} 上一页
+          {prevLabel ?? "\u2039 上一页"}
         </Button>
         <Button
           type="button"
           size="sm"
           disabled={page >= totalPages}
           onClick={() => onChange(page + 1)}
-          style={{ color: TONE.text }}
+          style={{ color: text }}
         >
-          下一页 {"\u203A"}
+          {nextLabel ?? `下一页 \u203A`}
         </Button>
       </div>
     </div>

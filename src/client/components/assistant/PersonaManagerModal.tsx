@@ -18,6 +18,7 @@ import { UNMATCHED_SCOPE_PATH } from "../../../types.js";
 import {
   createPersona as apiCreatePersona,
   deletePersona as apiDeletePersona,
+  generateDraft,
   listPersonas,
   listSessionScopeTree,
   setPersonaBinding as apiSetPersonaBinding,
@@ -93,20 +94,46 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
   // 展开的工作区路径集合（默认全部展开，便于看到所有项目）
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
+  // 工作区/项目树的展开/折叠状态持久化（人格管理右栏绑定树）：下次打开恢复到上次状态
+  const SCOPE_EXPAND_KEY = "pl:persona-tree-expanded";
+  const scopesExpandedFromStorage = (): Set<string> | null => {
+    try {
+      const raw = localStorage.getItem(SCOPE_EXPAND_KEY);
+      if (!raw) return null;
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? new Set<string>(arr) : null;
+    } catch {
+      return null;
+    }
+  };
+  const persistScopesExpanded = (s: Set<string>) => {
+    try {
+      localStorage.setItem(SCOPE_EXPAND_KEY, JSON.stringify([...s]));
+    } catch {
+      /* 忽略存储失败 */
+    }
+  };
+  // 构建展开集合：有历史记录则沿用，否则默认全部展开（与旧行为一致）
+  const buildScopesExpanded = (tree: ScopeNode[]) => {
+    const stored = scopesExpandedFromStorage();
+    if (stored && stored.size > 0) return stored;
+    const all = new Set<string>();
+    const collect = (nodes: ScopeNode[]) => {
+      for (const node of nodes) {
+        all.add(node.path);
+        collect(node.children);
+      }
+    };
+    collect(tree);
+    return all;
+  };
+
   // 重新拉取工作区/项目/会话树（打开及绑定变更后回写节点 bound）；必须定义在提前返回之前，
   // 与下方加载 effect 一起保证所有 hooks 都在 `if (!open) return null;` 之前稳定调用。
   const refreshScopes = () =>
     listSessionScopeTree().then((tree) => {
       setScopes(tree);
-      const expandAll = new Set<string>();
-      const collect = (nodes: ScopeNode[]) => {
-        for (const node of nodes) {
-          expandAll.add(node.path);
-          collect(node.children);
-        }
-      };
-      collect(tree);
-      setExpanded(expandAll);
+      setExpanded(buildScopesExpanded(tree));
       setScopesLoaded(true);
     });
 
@@ -246,6 +273,27 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
     }
   };
 
+  // AI 生成：依据「人格名称 + 已输入内容」生成 SOUL 正文草稿，填入编辑区（仅生成，不落盘）
+  const handleAiGenerate = async (p: PersonaView) => {
+    const name = (names[p.id] ?? p.name).trim();
+    if (!name) {
+      setError(t("pl.ai.genNeedTitle"));
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setMsg(null);
+    try {
+      const { content } = await generateDraft("soul", name, editContent);
+      setEditContent(content);
+      setMsg({ text: t("pl.ai.genDone") });
+    } catch {
+      setError(t("pl.ai.genFailed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // 切换启用状态（立即保存）
   const toggleEnabled = async (p: PersonaView) => {
     setBusy(true);
@@ -362,6 +410,7 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
       const next = new Set(prev);
       if (next.has(path)) next.delete(path);
       else next.add(path);
+      persistScopesExpanded(next);
       return next;
     });
 
@@ -711,6 +760,9 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
               />
               <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5 }}>{t("pl.personas.contentHint")}</div>
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
+                <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={busy || isDefault} onClick={() => void handleAiGenerate(p)}>
+                  {busy ? t("pl.ai.generating") : t("pl.ai.generate")}
+                </Button>
                 <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} disabled={busy || isDefault} onClick={() => void handleSave(p)}>
                   {t("pl.personas.save")}
                 </Button>
@@ -720,7 +772,6 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
             <div
               style={{
                 background: TONE.row,
-                border: `1px solid ${TONE.border}`,
                 borderRadius: 7,
                 padding: "7px 9px",
                 minHeight: 40,
@@ -805,146 +856,173 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
           </div>
         )}
 
-        {/* 内容区：两栏布局（灵魂管理 / 工作区项目绑定），超出时独立滚动 */}
+        {/* 内容区：两栏布局（灵魂管理 / 工作区项目绑定），左右两栏各自独立滚动 */}
         <div
           style={{
             flex: 1,
             minHeight: 0,
-            overflow: "auto",
-            /* 内容与滚动条之间预留 10px 间距（与官方一致） */
-            paddingRight: 10,
             display: "flex",
             gap: 14,
             paddingTop: 14,
             paddingBottom: 4,
             marginTop: 8,
-            alignItems: "flex-start",
           }}
         >
-          {/* 左栏：灵魂管理 */}
+          {/* 左栏：灵魂管理（独立滚动，滚动条与内容预留 10px 间距）；
+              外层为普通块级滚动容器（与右栏一致），内容套一层纵向 flex 保持间距 */}
           <div
             style={{
               flex: "1 1 0",
               minWidth: 0,
-              display: "flex",
-              flexDirection: "column",
-              gap: 10,
+              minHeight: 0,
+              height: "100%",
+              boxSizing: "border-box",
+              background: TONE.row,
+              border: `1px solid ${TONE.border}`,
+              borderRadius: 10,
+              overflowY: "auto",
             }}
           >
-            <div>
+            {/* 顶部标题：左栏内容向上滚动时悬浮固定在顶部（贴顶，无空隙、无抖动） */}
+            <div
+              style={{
+                position: "sticky",
+                top: 0,
+                zIndex: 3,
+                padding: "10px 10px 8px",
+                background: TONE.row,
+                borderBottom: `1px solid ${TONE.border}`,
+              }}
+            >
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span style={{ width: 3, height: 13, borderRadius: 2, background: TONE.accent, flexShrink: 0 }} />
-                <span style={{ fontSize: 13, fontWeight: 600, color: TONE.text }}>{t("pl.personas.listTitle")}</span>
+                <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: TONE.text }}>{t("pl.personas.listTitle")}</span>
               </div>
               <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5, marginTop: 3 }}>
                 {t("pl.personas.listHint")}
               </div>
-            </div>
-
-            {/* 导入导出工具栏：勾选人格后导出（每格一个 md）/ 从单个 md 导入一个文案 */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5 }}>{t("pl.exportHint")}</div>
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-                <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={busy} onClick={handleExport}>
-                  {t("pl.export")}
-                </Button>
-                <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={busy} onClick={() => importFileRef.current?.click()}>
-                  {t("pl.import")}
-                </Button>
+              {/* 导入导出工具栏：勾选人格后导出（每格一个 md）/ 从单个 md 导入一个文案（随标题一起悬浮） */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 10 }}>
+                <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5 }}>{t("pl.exportHint")}</div>
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                  <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={busy} onClick={handleExport}>
+                    {t("pl.export")}
+                  </Button>
+                  <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={busy} onClick={() => importFileRef.current?.click()}>
+                    {t("pl.import")}
+                  </Button>
+                </div>
+              </div>
+              {/* 专门的「新建灵魂」添加区（随标题一起悬浮，与技能管理左侧一致） */}
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                  marginTop: 10,
+                  background: TONE.accentSoft,
+                  border: `1px dashed ${TONE.accent}`,
+                  borderRadius: 10,
+                  padding: 10,
+                }}
+              >
+                <span style={{ fontSize: 12.5, fontWeight: 600, color: TONE.accent }}>
+                  + {t("pl.personas.createTitle")}
+                </span>
+                <span style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5, marginTop: -4 }}>
+                  {t("pl.personas.createHint")}
+                </span>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    value={createName}
+                    onChange={(e) => setCreateName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void handleCreate();
+                    }}
+                    placeholder={t("pl.personas.namePlaceholder")}
+                    style={{ ...inputStyle, flex: 1 }}
+                  />
+                  <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} disabled={busy || !createName.trim()} onClick={() => void handleCreate()}>
+                    {t("pl.personas.save")}
+                  </Button>
+                </div>
               </div>
             </div>
-
-            {/* 专门的「新建灵魂」添加区 */}
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 8,
-                background: TONE.accentSoft,
-                border: `1px dashed ${TONE.accent}`,
-                borderRadius: 10,
-                padding: 10,
-              }}
-            >
-              <span style={{ fontSize: 12.5, fontWeight: 600, color: TONE.accent }}>
-                + {t("pl.personas.createTitle")}
-              </span>
-              <span style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5, marginTop: -4 }}>
-                {t("pl.personas.createHint")}
-              </span>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <input
-                  value={createName}
-                  onChange={(e) => setCreateName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void handleCreate();
-                  }}
-                  placeholder={t("pl.personas.namePlaceholder")}
-                  style={{ ...inputStyle, flex: 1 }}
-                />
-                <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} disabled={busy || !createName.trim()} onClick={() => void handleCreate()}>
-                  {t("pl.personas.save")}
-                </Button>
-              </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "10px 10px 10px" }}>
+              {/* 人格卡片列表 */}
+              {!loaded ? (
+                <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "22px 0" }}>
+                  {t("pl.achievements.loading")}
+                </div>
+              ) : (
+                <>
+                  {defaultPersona && renderPersonaCard(defaultPersona)}
+                  {customPersonas.length === 0 ? (
+                    <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "18px 0" }}>
+                      {t("pl.personas.empty")}
+                    </div>
+                  ) : (
+                    customPersonas.map((p) => renderPersonaCard(p))
+                  )}
+                </>
+              )}
             </div>
-
-            {/* 人格卡片列表 */}
-            {!loaded ? (
-              <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "22px 0" }}>
-                {t("pl.achievements.loading")}
-              </div>
-            ) : (
-              <>
-                {defaultPersona && renderPersonaCard(defaultPersona)}
-                {customPersonas.length === 0 ? (
-                  <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "18px 0" }}>
-                    {t("pl.personas.empty")}
-                  </div>
-                ) : (
-                  customPersonas.map((p) => renderPersonaCard(p))
-                )}
-              </>
-            )}
           </div>
 
-          {/* 右栏：工作区 / 项目绑定 */}
+          {/* 右栏：工作区 / 项目绑定（独立滚动） */}
           <div
             style={{
               flex: "1.15 1 0",
               minWidth: 0,
+              height: "100%",
+              boxSizing: "border-box",
+              minHeight: 0,
               background: TONE.row,
               border: `1px solid ${TONE.border}`,
               borderRadius: 10,
-              padding: 10,
-              position: "sticky",
-              top: 0,
+              overflowY: "auto",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ width: 3, height: 13, borderRadius: 2, background: TONE.accent, flexShrink: 0 }} />
-              <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: TONE.text }}>
-                {t("pl.personas.scopes.title")}
-              </span>
-              <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} title={t("pl.refresh")} onClick={() => void refreshScopes().catch(() => setError(t("pl.personas.opFailed")))}>
-                {t("pl.refresh")}
-              </Button>
+            {/* 顶部标题 + 说明：内容向上滚动时悬浮固定在顶部（与左栏一致） */}
+            <div
+              style={{
+                position: "sticky",
+                top: 0,
+                zIndex: 3,
+                padding: "10px 10px 8px",
+                background: TONE.row,
+                boxSizing: "border-box",
+                borderBottom: `1px solid ${TONE.border}`,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ width: 3, height: 13, borderRadius: 2, background: TONE.accent, flexShrink: 0 }} />
+                <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: TONE.text }}>
+                  {t("pl.personas.scopes.title")}
+                </span>
+                <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} title={t("pl.refresh")} onClick={() => void refreshScopes().catch(() => setError(t("pl.personas.opFailed")))}>
+                  {t("pl.refresh")}
+                </Button>
+              </div>
+              <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.6, marginTop: 4 }}>
+                {t("pl.personas.scopes.hint")}
+              </div>
             </div>
-            <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.6, marginTop: 4 }}>
-              {t("pl.personas.scopes.hint")}
+            <div style={{ display: "flex", flexDirection: "column", padding: "10px 10px 10px" }}>
+              {!scopesLoaded ? (
+                <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "14px 0" }}>
+                  {t("pl.achievements.loading")}
+                </div>
+              ) : scopes.length === 0 ? (
+                <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "14px 0" }}>
+                  {t("pl.personas.scopes.empty")}
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column" }}>
+                  {scopes.map((ws) => renderScopeNode(ws, 0))}
+                </div>
+              )}
             </div>
-            {!scopesLoaded ? (
-              <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "14px 0" }}>
-                {t("pl.achievements.loading")}
-              </div>
-            ) : scopes.length === 0 ? (
-              <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "14px 0" }}>
-                {t("pl.personas.scopes.empty")}
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", marginTop: 4 }}>
-                {scopes.map((ws) => renderScopeNode(ws, 0))}
-              </div>
-            )}
           </div>
         </div>
 

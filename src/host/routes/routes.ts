@@ -11,17 +11,24 @@
  * 所有响应使用 ApiResponse 信封。
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
 import { fileURLToPath } from "node:url";
 import type { WebRoute } from "@deepseek-ai/dsh-host-webserver";
 import type { ApiResponse, PluginSettings, Prompt, PromptInput, PromptPatch } from "../../types.js";
-import { commentOnStats, generateIntro, generateSkillDescriptor, listAiSelectables, polishPromptBody, todayLocalDate } from "../services/ai/ai.js";
+import { commentOnStats, generateDraft, generateIntro, generateSkillDescriptor, listAiSelectables, polishPromptBody, todayLocalDate } from "../services/ai/ai.js";
 import {
+  exportAsSessionPrompts,
   exportPromptsAsSkills,
   importSkillEntries,
   importSkillsFromDisk,
   listAvailableSkills,
+  listHarnessSkillToggles,
+  listSkillsFromDir,
   parseSkillRaw,
+  setHarnessSkillToggle,
 } from "../services/ai/skills.js";
 import {
   autoLearn,
@@ -84,12 +91,48 @@ import {
   updatePersonaWithContent,
 } from "../services/persona/persona-service.js";
 import { listSessionScopeTree } from "../services/session-scope/session-scope.js";
+import { listSessionRecords } from "../services/session-scope/session-scope.js";
+import { downloadDir } from "../utils/paths.js";
 
 const PREFIX = "/api/prompt-library";
 
 function json<T>(res: ServerResponse, status: number, body: ApiResponse<T>): void {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(body));
+}
+
+/** 后端导出序列化：与前端 serializeExport 保持一致的输出，供导出写盘使用。 */
+function buildExportFile(
+  format: string,
+  prompts: Array<{ title: string; body: string; tags?: string[] }>,
+): { fileName: string; content: string } | null {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+  const base = `prompt-library-${stamp}`;
+  const csvEscape = (v: string) => (/[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+  if (format === "json") {
+    return {
+      fileName: `${base}.json`,
+      content: JSON.stringify({ version: 1, exportedAt: Date.now(), prompts }, null, 2),
+    };
+  }
+  if (format === "csv") {
+    const lines = ["title,body,tags"];
+    for (const p of prompts) {
+      lines.push(`${csvEscape(p.title)},${csvEscape(p.body)},${csvEscape((p.tags ?? []).join("|"))}`);
+    }
+    return { fileName: `${base}.csv`, content: lines.join("\r\n") };
+  }
+  if (format === "md") {
+    const parts: string[] = [];
+    for (const p of prompts) {
+      const tagsLine = p.tags && p.tags.length ? `\n\n标签：${p.tags.join("、")}` : "";
+      parts.push(`# ${p.title}${tagsLine}\n\n${(p.body ?? "").trim()}`);
+    }
+    return { fileName: `${base}.md`, content: parts.join("\n\n---\n\n") + "\n" };
+  }
+  return null;
 }
 
 function readJsonBody(req: IncomingMessage): Promise<unknown> {
@@ -167,6 +210,27 @@ function extractIds(body: unknown): string[] {
       ? body
       : [];
   return list.filter((x): x is string => typeof x === "string");
+}
+
+/**
+ * 解析最近活跃会话的项目路径（agent.session.header.cwd）。
+ * 项目级技能导出据此写盘到 <cwd>/.dsh/skills；无活跃会话或会话查询不可用时返回 null。
+ */
+async function resolveCurrentProjectCwd(): Promise<string | null> {
+  let records: Array<{ id: string; cwd: string | null }> = [];
+  try {
+    records = await listSessionRecords();
+  } catch {
+    records = [];
+  }
+  // 优先取最近活跃会话的 cwd；若其 id 匹配不到或无活跃会话，回退到任一会话的 cwd，
+  // 避免返回 null 导致项目技能（<cwd>/.dsh/skills）扫描被跳过。
+  const scope = getCurrentSessionScope();
+  if (scope) {
+    const byScope = records.find((r) => r.id === scope)?.cwd;
+    if (byScope) return byScope;
+  }
+  return records.find((r) => r.cwd)?.cwd || null;
 }
 
 export function makePromptRoutes(): WebRoute[] {
@@ -256,6 +320,36 @@ export function makePromptRoutes(): WebRoute[] {
         return json(res, 200, { ok: true, data });
       }
 
+      // POST /export/save — 由后端按勾选 ids 与格式组织数据，并写入系统「下载」目录，返回保存路径。
+      // 前端只传递 ids + format，避免大数据量（提示词正文）往返；
+      // 写盘由后端完成，桌面端不弹「选择保存路径」对话框，且写完后才响应，前端随之提示成功。
+      if (method === "POST" && segments[0] === "export" && segments[1] === "save") {
+        const body = await readJsonBody(req);
+        const obj = (typeof body === "object" && body !== null ? body : {}) as { ids?: unknown; format?: unknown };
+        const ids = Array.isArray(obj.ids) ? obj.ids.filter((x): x is string => typeof x === "string") : undefined;
+        const format = typeof obj.format === "string" ? obj.format : "json";
+        const data = await exportPrompts(ids && ids.length > 0 ? ids : undefined);
+        const file = buildExportFile(
+          format,
+          data.prompts.map((p) => ({ title: p.title, body: p.body, tags: p.tags })),
+        );
+        if (!file) return json(res, 400, { ok: false, error: "bad request" });
+        const dir = downloadDir();
+        await mkdir(dir, { recursive: true });
+        // 同名处理：下载目录已有同名文件时，按 Windows 风格追加序号 `name (n).ext`，避免覆盖
+        const ext = file.fileName.match(/\.([^.]*)$/)?.[1] ?? "";
+        const base = ext ? file.fileName.slice(0, -(ext.length + 1)) : file.fileName;
+        let finalName = file.fileName;
+        let n = 1;
+        while (existsSync(join(dir, finalName))) {
+          finalName = ext ? `${base} (${n}).${ext}` : `${base} (${n})`;
+          n++;
+        }
+        const target = join(dir, finalName);
+        await writeFile(target, file.content, "utf8");
+        return json(res, 200, { ok: true, data: { count: data.prompts.length, filePath: target } });
+      }
+
       // POST /import — 从备份内容导入（合并式：同 id 覆盖，其余新增）
       if (method === "POST" && segments[0] === "import" && segments.length === 1) {
         const body = await readJsonBody(req);
@@ -321,6 +415,20 @@ export function makePromptRoutes(): WebRoute[] {
         return json(res, 200, { ok: true, data });
       }
 
+      // POST /skills/scan-dir — 递归扫描任意指定目录下的 md 文件为可导入技能条目（「扫描文件夹」导入）
+      if (method === "POST" && tail === "/skills/scan-dir") {
+        const raw = await readJsonBody(req);
+        const dir =
+          typeof raw === "object" &&
+          raw !== null &&
+          typeof (raw as { dir?: unknown }).dir === "string"
+            ? (raw as { dir: string }).dir.trim()
+            : "";
+        if (!dir) return json(res, 400, { ok: false, error: "invalid body: {dir}" });
+        const data = await listSkillsFromDir(dir);
+        return json(res, 200, { ok: true, data });
+      }
+
       // POST /skills/parse — 解析一段 md 原始文本（frontmatter + 正文）为可编辑条目（供「选择本地 md 文件」导入）
       if (method === "POST" && tail === "/skills/parse") {
         const raw = await readJsonBody(req);
@@ -351,7 +459,18 @@ export function makePromptRoutes(): WebRoute[] {
         return json(res, 200, { ok: true, data: result });
       }
 
-      // POST /skills/export/entries — 把用户在弹窗中编辑后的技能条目写盘为 DSH 技能
+      // GET /skills/export/project-cwd — 解析当前项目路径（导出弹窗「项目技能」范围用，用于展示保存位置）
+      if (method === "GET" && tail === "/skills/export/project-cwd") {
+        const cwd = await resolveCurrentProjectCwd();
+        return json(res, 200, { ok: true, data: { cwd } });
+      }
+
+      // POST /skills/export/entries — 把用户在弹窗中编辑后的技能条目导出为 DSH 技能。
+      // body.scope 控制导出范围：
+      //   global（缺省）→ 写盘到 ~/.dsh/skills/<name>/SKILL.md（通用技能）；
+      //   project → 写盘到 <项目路径>/.dsh/skills/<name>/SKILL.md（项目技能）；
+      //     body.rootPath 为用户手动填写的项目路径（未自动解析到当前项目时由前端传入）；
+      //   private → 创建为会话级技能并绑定当前会话（私有技能，仅本会话注入）。
       if (method === "POST" && tail === "/skills/export/entries") {
         const raw = await readJsonBody(req);
         const list =
@@ -364,7 +483,36 @@ export function makePromptRoutes(): WebRoute[] {
         if (entries.length === 0) {
           return json(res, 400, { ok: false, error: "invalid body: {entries: SkillEntry[]}" });
         }
-        const result = await exportPromptsAsSkills(entries);
+        const scope =
+          typeof raw === "object" && raw !== null && (raw as { scope?: unknown }).scope === "project"
+            ? "project"
+            : typeof raw === "object" && raw !== null && (raw as { scope?: unknown }).scope === "private"
+              ? "private"
+              : "global";
+        let result;
+        if (scope === "private") {
+          // 私有：转会话级技能入库并绑定最近活跃会话
+          result = await exportAsSessionPrompts(entries, getCurrentSessionScope());
+        } else {
+          // project 作用域：优先用用户手动填写的导出路径 rootPath（项目路径），
+          // 否则自动解析当前项目路径；技能写盘为 <项目路径>/<name>/SKILL.md
+          const manualRoot =
+            typeof raw === "object" &&
+            raw !== null &&
+            typeof (raw as { rootPath?: unknown }).rootPath === "string"
+              ? (raw as { rootPath: string }).rootPath.trim()
+              : "";
+          const projectRoot = scope === "project" ? manualRoot || (await resolveCurrentProjectCwd()) : null;
+          if (scope === "project" && !projectRoot) {
+            return json(res, 400, {
+              ok: false,
+              error: "未指定导出路径，且无法确定当前项目路径，请填写项目路径后重试",
+            });
+          }
+          // project 作用域：写盘到 <项目>/.dsh/skills/<name>/SKILL.md（项目级技能根目录）
+          const exportRoot = scope === "project" ? join(projectRoot!, ".dsh", "skills") : undefined;
+          result = await exportPromptsAsSkills(entries, exportRoot);
+        }
         return json(res, 200, { ok: true, data: result });
       }
 
@@ -394,6 +542,29 @@ export function makePromptRoutes(): WebRoute[] {
           settings,
         );
         return json(res, 200, { ok: true, data: result });
+      }
+
+      // GET /skills/harness/list — 列出 system（~/.dsh/skills）与当前项目（<项目>/.dsh/skills）的
+      //   harness 技能及其开关状态（供「技能管理」里的软控制开关弹窗展示/勾选）。
+      if (method === "GET" && tail === "/skills/harness/list") {
+        const projectRoot = await resolveCurrentProjectCwd();
+        const items = await listHarnessSkillToggles(projectRoot);
+        return json(res, 200, { ok: true, data: { items, projectRoot } });
+      }
+
+      // POST /skills/harness/toggle — 更新某 harness 技能的开关（软控制：禁用清单注入系统提示）。
+      if (method === "POST" && tail === "/skills/harness/toggle") {
+        const raw = await readJsonBody(req);
+        const id =
+          typeof raw === "object" &&
+          raw !== null &&
+          typeof (raw as { id?: unknown }).id === "string"
+            ? (raw as { id: string }).id.trim()
+            : "";
+        const enabled = typeof raw === "object" && raw !== null ? (raw as { enabled?: unknown }).enabled : undefined;
+        if (!id) return json(res, 400, { ok: false, error: "invalid body: {id: string, enabled: boolean}" });
+        setHarnessSkillToggle(id, typeof enabled === "boolean" ? enabled : true);
+        return json(res, 200, { ok: true, data: { id, enabled: typeof enabled === "boolean" ? enabled : true } });
       }
 
       // POST /trash/restore — 从回收站恢复一批提示词
@@ -475,6 +646,36 @@ export function makePromptRoutes(): WebRoute[] {
         if (stats.trashCount) lines.push(`回收站有 ${stats.trashCount} 条待清理。`);
         const suggestion = await commentOnStats(lines.join("\n"), settings, lang).catch(() => "");
         return json(res, 200, { ok: true, data: { suggestion } });
+      }
+
+      // POST /ai/draft — 依据「标题 + 已有内容」用 AI 生成技能 / 人格正文草稿
+      // （人格管理 / 技能管理编辑区「AI 生成」按钮：只返回文本，不落盘、不写回）
+      if (method === "POST" && tail === "/ai/draft") {
+        const raw = await readJsonBody(req);
+        if (typeof raw !== "object" || raw === null) {
+          return json(res, 400, { ok: false, error: "invalid body: {kind, title, input}" });
+        }
+        const { kind, title, input, lang } = raw as {
+          kind?: unknown;
+          title?: unknown;
+          input?: unknown;
+          lang?: unknown;
+        };
+        if ((kind !== "soul" && kind !== "skill") || typeof title !== "string" || !title.trim()) {
+          return json(res, 400, { ok: false, error: "invalid body: {kind: 'soul'|'skill', title: string}" });
+        }
+        const settings = await getSettings();
+        const result = await generateDraft(
+          kind,
+          title.trim(),
+          typeof input === "string" ? input.trim() : "",
+          settings,
+          lang === "en" ? "en" : "zh",
+        );
+        if (!result.content) {
+          return json(res, 503, { ok: false, error: "AI 不可用或生成失败，请确认已连接 LLM 服务" });
+        }
+        return json(res, 200, { ok: true, data: { content: result.content } });
       }
 
       // GET /settings — 获取设置
@@ -799,7 +1000,7 @@ export function makePromptRoutes(): WebRoute[] {
       }
 
       // DELETE /session-prompts/:id — 删除会话级技能（同时清理绑定与临时注入引用）
-      if (method === "DELETE" && segments[0] === "session-prompts" && segments.length === 2 && segments[1] !== "bindings" && segments[1] !== "active") {
+      if (method === "DELETE" && segments[0] === "session-prompts" && segments.length === 2 && segments[1] !== "bindings" && segments[1] !== "active" && segments[1] !== "session") {
         const removed = deleteSessionPrompt(segments[1] ?? "");
         if (!removed) return json(res, 404, { ok: false, error: "not found" });
         return json(res, 200, { ok: true, data: { id: segments[1] } });

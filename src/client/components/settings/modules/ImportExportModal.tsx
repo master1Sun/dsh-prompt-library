@@ -7,6 +7,7 @@
  *
  * 由词库助手右键菜单打开，弹窗只能通过关闭按钮手动关闭，不响应遮罩点击。
  */
+import { createPortal } from "react-dom";
 import {
   useCallback,
   useEffect,
@@ -15,58 +16,49 @@ import {
   useState,
   type ChangeEvent,
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 import type { Prompt } from "../../../../types.js";
 import {
-  exportPrompts as apiExport,
+  deletePrompt as apiDelete,
   listPrompts as apiListPrompts,
+  saveExportFile,
+  updatePrompt as apiUpdate,
 } from "../../../services/api.js";
 import { notifyDataChanged } from "../../../services/data-sync.js";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { plBtn } from "../../../utils/button-style.js";
 import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../../../utils/dialog-style.js";
+import { getTone, useThemeSync } from "../../../utils/theme.js";
 import { type PLTranslate, usePLT } from "../../../i18n/i18n.js";
+import { insertVariableAt } from "../../common/TemplateVariables.js";
+import { TagInput } from "../../common/TagInput.js";
+import { ConfirmDialog } from "../../common/ConfirmDialog.js";
+import { DialogCloseButton } from "../../common/DialogCloseButton.js";
+import { BookIcon } from "../../common/BookIcon.js";
 import { SkillImportModal } from "./SkillImportModal.js";
 import { ImportEditModal } from "./ImportEditModal.js";
 import {
   parseImportFile,
-  serializeExport,
   type TransferFormat,
 } from "../../../services/data-formats.js";
 
 const MONO =
   "var(--dsw-font-family, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Helvetica, Arial, sans-serif)";
 
-const TONE = {
-  text: "var(--dsw-alias-label-primary, #f2f6fc)",
-  muted: "var(--dsw-alias-label-secondary, #9daabd)",
-  quiet: "var(--dsw-alias-label-tertiary, #718096)",
-  panel: "var(--dsw-alias-bg-layer-1, #171f2b)",
-  row: "var(--dsw-alias-bg-layer-3, #1d2735)",
-  border: "var(--dsw-alias-border-l2, rgba(196, 211, 232, 0.16))",
-  accent: "var(--dsw-alias-brand-primary, #8ec5ff)",
-  red: "var(--dsw-alias-state-error-primary, #ff6b6b)",
-} as const;
-
-/** 导入/导出分区卡片样式。 */
-const sectionCardStyle: CSSProperties = {
+/** 编辑表单通用输入框样式。 */
+const inputStyle: CSSProperties = {
+  width: "100%",
   boxSizing: "border-box",
-  display: "flex",
-  flexDirection: "column",
-  gap: 10,
-  padding: "12px 14px",
-  background: TONE.row,
-  border: `1px solid ${TONE.border}`,
-  borderRadius: 10,
-};
-
-/** 分区卡片标题行：标题 + 说明，baseline 对齐可换行。 */
-const sectionTitleStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "baseline",
-  gap: 8,
-  flexWrap: "wrap",
+  padding: "6px 9px",
+  color: "var(--dsw-alias-label-primary, #f2f6fc)",
+  background: "var(--dsw-alias-bg-layer-3, #1d2735)",
+  border: "1px solid var(--dsw-alias-border-l2, rgba(196, 211, 232, 0.16))",
+  borderRadius: 7,
+  fontFamily: MONO,
+  fontSize: 13,
+  outline: "none",
 };
 
 /** 导出勾选列表中的单条提示词（卡片式）。 */
@@ -75,8 +67,16 @@ function PromptCheckRow(props: {
   body: string;
   checked: boolean;
   onToggle: () => void;
+  onView: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  viewLabel: string;
+  editLabel: string;
+  deleteLabel: string;
 }): ReactNode {
-  const { title, body, checked, onToggle } = props;
+  const { title, body, checked, onToggle, onView, onEdit, onDelete, viewLabel, editLabel, deleteLabel } = props;
+  // 行内取值跟随父级主题同步重渲染，保证白天/黑夜一致
+  const TONE = getTone();
   return (
     <label
       className="pl-data-card"
@@ -124,6 +124,50 @@ function PromptCheckRow(props: {
           >
             {title}
           </span>
+          {/* 行内操作：查看 / 编辑 / 删除（按钮点击需阻断事件冒泡，避免误触发勾选） */}
+          <span
+            style={{ display: "inline-flex", alignItems: "center", gap: 2, flexShrink: 0 }}
+            onClick={(e) => e.preventDefault()}
+          >
+            {[
+              { label: viewLabel, color: TONE.muted, action: onView },
+              { label: editLabel, color: TONE.accent, action: onEdit },
+              { label: deleteLabel, color: TONE.red, action: onDelete },
+            ].map((b) => (
+              <button
+                key={b.label}
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  b.action();
+                }}
+                style={{
+                  flexShrink: 0,
+                  border: "none",
+                  outline: "none",
+                  background: "transparent",
+                  color: b.color,
+                  cursor: "pointer",
+                  fontSize: 11,
+                  fontFamily: MONO,
+                  padding: "2px 5px",
+                  borderRadius: 5,
+                  transition: "background-color .18s, color .18s",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = "var(--dsw-alias-interactive-bg-hover)";
+                  e.currentTarget.style.color = TONE.text;
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = "transparent";
+                  e.currentTarget.style.color = b.color;
+                }}
+              >
+                {b.label}
+              </button>
+            ))}
+          </span>
         </span>
         <span
           style={{
@@ -153,6 +197,19 @@ export function ImportExportModal(props: {
 }): ReactNode {
   const { open, onClose, t } = props;
   const T = usePLT(t);
+  useThemeSync(); // 订阅宿主主题变化，切换白天/黑夜时刷新主题色
+  const TONE = getTone();
+  // 导入/导出分区卡片样式（跟随主题 token，与人格管理 / 技能管理分区一致）
+  const sectionCardStyle: CSSProperties = {
+    boxSizing: "border-box",
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+    padding: "12px 14px",
+    background: TONE.row,
+    border: `1px solid ${TONE.border}`,
+    borderRadius: 10,
+  };
   const importRef = useRef<HTMLInputElement | null>(null);
 
   const [promptList, setPromptList] = useState<Prompt[]>([]);
@@ -176,8 +233,19 @@ export function ImportExportModal(props: {
   const [exportView, setExportView] = useState<"list" | "group">("list");
   const [exportCollapsed, setExportCollapsed] = useState<Set<string>>(new Set());
 
+  // 待查看详情的提示词（查看弹层，仅可通过关闭按钮关闭）
+  const [viewing, setViewing] = useState<Prompt | null>(null);
+  // 编辑中的提示词：标题 / 正文 / 标签（标签为单选，兼容下拉组件）
+  const [editing, setEditing] = useState<{ id: string; title: string; body: string; tags: string } | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
+  const editBodyRef = useRef<HTMLTextAreaElement | null>(null);
+  // 待确认删除的提示词（自定义确认弹窗，替代系统 confirm）
+  const [deleteConfirm, setDeleteConfirm] = useState<Prompt | null>(null);
+
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const msgTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 导出成功提示框（导出的 promptId）——点击「确定」关闭
+  const [exportDoneMsg, setExportDoneMsg] = useState<string | null>(null);
 
   const showMsg = useCallback((text: string, error = false) => {
     setMsg({ text, error });
@@ -246,28 +314,13 @@ export function ImportExportModal(props: {
       showMsg(T("pl.exportNeedSelect"), true);
       return;
     }
-    apiExport(ids).then(
-      (backup) => {
-        const file = serializeExport(
-          exportFormat,
-          backup.prompts.map((p) => ({
-            title: p.title,
-            body: p.body,
-            tags: p.tags,
-          })),
-        );
-        const blob = new Blob([file.content], { type: file.mime });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = file.fileName;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-        showMsg(T("pl.exported", { count: backup.prompts.length }));
+    // 走后端下载：前端只传 ids + format，后端拉取数据并组织文件写入系统「下载」目录。
+    // 写完后才 resolve，避开浏览器下载「选择保存路径」对话框的时序问题，也不拉取正文大文本。
+    saveExportFile(ids, exportFormat).then(
+      (r) => {
+        setExportDoneMsg(T("pl.exportedPath", { count: r.count, path: r.filePath }));
       },
-      (e: unknown) => showMsg(e instanceof Error ? e.message : String(e), true),
+      (e) => showMsg(e instanceof Error ? e.message : String(e), true),
     );
   }, [exportSelected, exportFormat, showMsg, T]);
 
@@ -320,14 +373,101 @@ export function ImportExportModal(props: {
     [showMsg, T],
   );
 
+  // 刷新提示词列表：编辑 / 删除成功后同步数据（通知宿主并重新拉取）
+  const refreshList = useCallback(() => {
+    notifyDataChanged();
+    apiListPrompts().then(
+      (list) => setPromptList(list),
+      () => {},
+    );
+  }, []);
+
+  /** 打开查看详情弹层。 */
+  const openView = useCallback((p: Prompt) => setViewing(p), []);
+
+  /** 打开编辑弹层（标签预填首个，兼容单选下拉）。 */
+  const openEdit = useCallback((p: Prompt) => {
+    setEditError(null);
+    setEditing({
+      id: p.id,
+      title: p.title,
+      body: p.body,
+      tags: (p.tags ?? [])[0] ?? "",
+    });
+  }, []);
+
+  /** 在正文光标处插入 {{变量名}}（有选中文本时以选中内容为变量名）。 */
+  const insertEditVar = useCallback(() => {
+    if (!editing) return;
+    const textarea = editBodyRef.current;
+    const scrollTop = textarea?.scrollTop ?? 0;
+    insertVariableAt(
+      textarea,
+      editing.body,
+      (next) => setEditing({ ...editing, body: next }),
+      T("pl.insertVariableDefault"),
+    );
+    // 状态更新重渲染 + 光标定位后再恢复滚动位置，避免正文较长时插入变量后跳回顶部
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (textarea) textarea.scrollTop = scrollTop;
+      });
+    });
+  }, [editing, T]);
+
+  /** 保存编辑：更新词库中的提示词并刷新列表。 */
+  const saveEdit = useCallback(() => {
+    if (!editing) return;
+    const title = editing.title.trim();
+    if (!title || !editing.body) {
+      setEditError(T("pl.requireTitleBody"));
+      return;
+    }
+    const tags = editing.tags.trim() ? [editing.tags.trim()] : [];
+    apiUpdate(editing.id, { title, body: editing.body, tags }).then(
+      () => {
+        setEditing(null);
+        setEditError(null);
+        showMsg(T("pl.updated"));
+        refreshList();
+      },
+      (e: unknown) => setEditError(e instanceof Error ? e.message : String(e)),
+    );
+  }, [editing, T, showMsg, refreshList]);
+
+  /** 请求删除提示词：弹出确认对话框。 */
+  const requestDelete = useCallback((p: Prompt) => setDeleteConfirm(p), []);
+
+  /** 确认删除：从词库删除并移入回收站，刷新列表并清空相关勾选。 */
+  const confirmDelete = useCallback(() => {
+    if (!deleteConfirm) return;
+    apiDelete(deleteConfirm.id).then(
+      () => {
+        setDeleteConfirm(null);
+        setExportSelected((prev) => {
+          const next = new Set(prev);
+          next.delete(deleteConfirm.id);
+          return next;
+        });
+        showMsg(T("pl.deleted"));
+        refreshList();
+      },
+      (e: unknown) => {
+        setDeleteConfirm(null);
+        showMsg(e instanceof Error ? e.message : String(e), true);
+      },
+    );
+  }, [deleteConfirm, showMsg, refreshList]);
+
   if (!open) return null;
 
-  return (
+  return createPortal(
     <div
       role="dialog"
       aria-modal="true"
       aria-label={T("pl.moduleImportExport")}
       className={PL_DIALOG_OVERLAY}
+      onClick={(e) => e.stopPropagation()}
     >
       <style>{PL_DIALOG_CSS}</style>
       <style>{`
@@ -340,52 +480,35 @@ export function ImportExportModal(props: {
       <div
         className={PL_DIALOG}
         style={{
-          width: 820,
-          maxWidth: "90%",
-          height: "min(680px, calc(100vh - 60px))",
-          gap: 12,
+          position: "relative",
+          width: 860,
+          height: 760,
+          maxWidth: "calc(100vw - 40px)",
+          maxHeight: "calc(100vh - 40px)",
         }}
       >
-        {/* 标题 + 关闭按钮（仅通过按钮手动关闭） */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-          <strong style={{ fontSize: 15, fontWeight: 560, flex: 1, minWidth: 0 }}>
+        {/* 标题行 + 右上角关闭按钮（仅通过按钮手动关闭） */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          <BookIcon color={TONE.accent} />
+          <strong style={{ flex: 1, fontSize: 15, fontWeight: 600, color: TONE.text, minWidth: 0 }}>
             {T("pl.moduleImportExport")}
           </strong>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={T("pl.close")}
-            data-tip={T("pl.close")}
-            style={{
-              flexShrink: 0,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              width: 26,
-              height: 26,
-              border: "none",
-              outline: "none",
-              borderRadius: 6,
-              background: "transparent",
-              color: TONE.muted,
-              cursor: "pointer",
-              fontSize: 15,
-              lineHeight: 1,
-              transition: "background-color .24s cubic-bezier(.22,1,.36,1), color .24s cubic-bezier(.22,1,.36,1)",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = "var(--dsw-alias-interactive-bg-hover)";
-              e.currentTarget.style.color = TONE.text;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = "transparent";
-              e.currentTarget.style.color = TONE.muted;
-            }}
-          >
-            ✕
-          </button>
+          <DialogCloseButton onClick={onClose} label={T("pl.close")} />
         </div>
-        <div style={{ fontSize: 12, color: TONE.quiet, lineHeight: 1.6, flexShrink: 0 }}>
+        {/* 模块说明（与人格管理 / 技能管理说明框一致） */}
+        <div
+          style={{
+            marginTop: 10,
+            fontSize: 11.5,
+            lineHeight: 1.6,
+            color: TONE.quiet,
+            background: TONE.accentSoft,
+            border: `1px solid ${TONE.border}`,
+            borderRadius: 7,
+            padding: "7px 10px",
+            flexShrink: 0,
+          }}
+        >
           {T("pl.moduleImportExportDesc")}
         </div>
 
@@ -397,6 +520,7 @@ export function ImportExportModal(props: {
               fontSize: 12,
               lineHeight: 1.5,
               color: msg.error ? TONE.red : TONE.text,
+              marginTop: 8,
             }}
           >
             {msg.text}
@@ -413,13 +537,19 @@ export function ImportExportModal(props: {
             display: "flex",
             flexDirection: "column",
             gap: 10,
+            marginTop: 8,
+            paddingTop: 14,
+            paddingBottom: 4,
           }}
         >
           {/* 导入卡片 */}
           <div style={sectionCardStyle}>
-            <div style={sectionTitleStyle}>
-              <strong style={{ fontSize: 13, color: TONE.text }}>{T("pl.importSection")}</strong>
-              <span style={{ fontSize: 11, color: TONE.quiet }}>{T("pl.importSectionDesc")}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ width: 3, height: 13, borderRadius: 2, background: TONE.accent, flexShrink: 0 }} />
+              <strong style={{ fontSize: 13, fontWeight: 600, color: TONE.text }}>{T("pl.importSection")}</strong>
+            </div>
+            <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5, marginTop: 3 }}>
+              {T("pl.importSectionDesc")}
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <Button
@@ -445,11 +575,14 @@ export function ImportExportModal(props: {
             </div>
           </div>
 
-          {/* 导出卡片 */}
-          <div style={sectionCardStyle}>
-            <div style={sectionTitleStyle}>
-              <strong style={{ fontSize: 13, color: TONE.text }}>{T("pl.exportSection")}</strong>
-              <span style={{ fontSize: 11, color: TONE.quiet }}>{T("pl.exportSectionDesc")}</span>
+          {/* 导出卡片（flex 拉伸占满剩余高度，避免分组视图下方留白） */}
+          <div style={{ ...sectionCardStyle, flex: 1, minHeight: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ width: 3, height: 13, borderRadius: 2, background: TONE.accent, flexShrink: 0 }} />
+              <strong style={{ fontSize: 13, fontWeight: 600, color: TONE.text }}>{T("pl.exportSection")}</strong>
+            </div>
+            <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5, marginTop: 3 }}>
+              {T("pl.exportSectionDesc")}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <label
@@ -553,9 +686,9 @@ export function ImportExportModal(props: {
               >
                 {T("pl.skillExport")}
               </Button>
-              <span style={{ fontSize: 11, color: TONE.quiet }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: exportSelected.size > 0 ? TONE.accent : TONE.quiet }}>
                 {exportSelected.size > 0
-                  ? `${exportSelected.size}/${promptList.length}`
+                  ? `${T("pl.export.selectedCount", { selected: exportSelected.size, total: promptList.length })}`
                   : T("pl.sidebar.total", { count: promptList.length })}
               </span>
             </div>
@@ -575,7 +708,8 @@ export function ImportExportModal(props: {
                   display: "flex",
                   flexDirection: "column",
                   gap: 10,
-                  maxHeight: 300,
+                  flex: 1,
+                  minHeight: 0,
                   overflow: "auto",
                   padding: "12px",
                   boxSizing: "border-box",
@@ -660,6 +794,12 @@ export function ImportExportModal(props: {
                             body={prompt.body}
                             checked={exportSelected.has(prompt.id)}
                             onToggle={() => toggleExport(prompt.id)}
+                            onView={() => openView(prompt)}
+                            onEdit={() => openEdit(prompt)}
+                            onDelete={() => requestDelete(prompt)}
+                            viewLabel={T("pl.view")}
+                            editLabel={T("pl.edit")}
+                            deleteLabel={T("pl.delete")}
                           />
                         ))}
                     </div>
@@ -672,7 +812,8 @@ export function ImportExportModal(props: {
                   display: "flex",
                   flexDirection: "column",
                   gap: 6,
-                  maxHeight: 380,
+                  flex: 1,
+                  minHeight: 0,
                   overflow: "auto",
                   padding: "12px",
                   boxSizing: "border-box",
@@ -688,6 +829,12 @@ export function ImportExportModal(props: {
                     body={prompt.body}
                     checked={exportSelected.has(prompt.id)}
                     onToggle={() => toggleExport(prompt.id)}
+                    onView={() => openView(prompt)}
+                    onEdit={() => openEdit(prompt)}
+                    onDelete={() => requestDelete(prompt)}
+                    viewLabel={T("pl.view")}
+                    editLabel={T("pl.edit")}
+                    deleteLabel={T("pl.delete")}
                   />
                 ))}
               </div>
@@ -705,7 +852,15 @@ export function ImportExportModal(props: {
         />
 
         {/* 技能导入弹窗 */}
-        <SkillImportModal open={skillImportOpen} onClose={() => setSkillImportOpen(false)} t={t} />
+        <SkillImportModal
+          open={skillImportOpen}
+          onClose={() => setSkillImportOpen(false)}
+          t={t}
+          onImported={() => {
+            notifyDataChanged();
+            apiListPrompts().then((list) => setPromptList(list));
+          }}
+        />
 
         {/* 通用格式导入弹窗 */}
         <ImportEditModal
@@ -713,14 +868,7 @@ export function ImportExportModal(props: {
           onClose={() => setImportEditOpen(false)}
           t={t}
           initialEntries={importEntries}
-          onImported={(res) => {
-            showMsg(
-              T("pl.imported", {
-                imported: res.imported,
-                updated: res.updated,
-                skipped: res.skipped,
-              }),
-            );
+          onImported={() => {
             notifyDataChanged();
             apiListPrompts().then((list) => setPromptList(list));
           }}
@@ -733,17 +881,245 @@ export function ImportExportModal(props: {
           t={t}
           mode="export"
           initialEntries={skillExportInitial}
-          onExported={(result) => {
-            const errNote = result.errors.length
-              ? T("pl.skillModal.savedExportErrors", { n: result.errors.length })
-              : "";
-            const names = result.items.length
-              ? `：${result.items.map((i) => i.name).join(", ")}`
-              : "";
-            showMsg(`${T("pl.skillModal.savedExport", { exported: result.exported })}${names}${errNote}`);
-          }}
         />
+
+        {/* 查看详情弹层：展示完整标题 / 标签 / 正文，仅可通过关闭按钮关闭 */}
+        {viewing && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={T("pl.view")}
+            style={{
+              position: "absolute",
+              inset: 0,
+              zIndex: 10,
+              display: "flex",
+              flexDirection: "column",
+              background: TONE.panel,
+              borderRadius: 12,
+            }}
+          >
+            <div
+              style={{
+                flexShrink: 0,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "10px 14px",
+                borderBottom: `1px solid ${TONE.border}`,
+              }}
+            >
+              <strong
+                style={{
+                  flex: "1 1 auto",
+                  minWidth: 0,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+                data-tip={viewing.title}
+              >
+                {viewing.title}
+              </strong>
+              <DialogCloseButton onClick={() => setViewing(null)} label={T("pl.close")} />
+            </div>
+            {viewing.tags && viewing.tags.length > 0 && (
+              <div style={{ flexShrink: 0, display: "flex", flexWrap: "wrap", gap: 5, padding: "8px 14px 0" }}>
+                {viewing.tags.map((tag) => (
+                  <span
+                    key={tag}
+                    style={{
+                      maxWidth: 96,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      padding: "2px 8px",
+                      borderRadius: 8,
+                      fontSize: 11,
+                      color: TONE.accent,
+                      background: "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 12%, transparent)",
+                    }}
+                    data-tip={tag}
+                  >
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            )}
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                overflow: "auto",
+                padding: "12px 14px",
+                fontSize: 13,
+                lineHeight: 1.7,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                color: TONE.text,
+              }}
+            >
+              {viewing.body || " "}
+            </div>
+          </div>
+        )}
+
+        {/* 编辑弹层：修改标题 / 正文 / 标签，保存后写入词库 */}
+        {editing && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={T("pl.editPrompt")}
+            style={{
+              position: "absolute",
+              inset: 0,
+              zIndex: 11,
+              display: "flex",
+              flexDirection: "column",
+              background: TONE.panel,
+              borderRadius: 12,
+            }}
+          >
+            <div
+              style={{
+                flexShrink: 0,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "10px 14px",
+                borderBottom: `1px solid ${TONE.border}`,
+              }}
+            >
+              <strong style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600 }}>
+                {T("pl.editPrompt")}
+              </strong>
+              <DialogCloseButton
+                onClick={() => {
+                  setEditing(null);
+                  setEditError(null);
+                }}
+                label={T("pl.close")}
+              />
+            </div>
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                overflow: "auto",
+                padding: "12px 14px",
+                display: "flex",
+                flexDirection: "column",
+                gap: 9,
+              }}
+            >
+              <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
+                {T("pl.titleField")}
+                <input
+                  value={editing.title}
+                  onChange={(e) => setEditing({ ...editing, title: e.target.value })}
+                  style={inputStyle}
+                />
+              </label>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
+                <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  {T("pl.bodyField")}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className={plBtn("ghost", "sm")}
+                    style={{ flex: "0 0 auto" }}
+                    onMouseDown={(e: ReactMouseEvent<HTMLButtonElement>) => e.preventDefault()}
+                    onClick={(e: ReactMouseEvent<HTMLButtonElement>) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      insertEditVar();
+                    }}
+                    data-tip={T("pl.insertVariableTitle")}
+                  >
+                    {`{{${T("pl.insertVariableDefault")}}}`}
+                  </Button>
+                </span>
+                <textarea
+                  ref={editBodyRef}
+                  value={editing.body}
+                  onChange={(e) => setEditing({ ...editing, body: e.target.value })}
+                  rows={6}
+                  style={{ ...inputStyle, resize: "vertical", minHeight: 220, lineHeight: 1.6, whiteSpace: "pre-wrap" }}
+                />
+              </div>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: TONE.muted }}>
+                {T("pl.tagsField")}
+                <TagInput
+                  value={editing.tags}
+                  onChange={(v) => setEditing({ ...editing, tags: v })}
+                  suggestions={Array.from(new Set(promptList.flatMap((p) => p.tags ?? [])))}
+                  inputStyle={inputStyle}
+                  t={t}
+                />
+              </label>
+              {editError && <div style={{ color: TONE.red, fontSize: 12 }}>{editError}</div>}
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className={plBtn("ghost", "sm")}
+                  onClick={() => {
+                    setEditing(null);
+                    setEditError(null);
+                  }}
+                >
+                  {T("pl.cancel")}
+                </Button>
+                <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={saveEdit}>
+                  {T("pl.save")}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 删除确认弹窗（自定义，替代系统 confirm） */}
+        <ConfirmDialog
+          open={!!deleteConfirm}
+          danger
+          message={T("pl.confirmDelete", { title: deleteConfirm?.title ?? "" })}
+          confirmLabel={T("pl.delete")}
+          cancelLabel={T("pl.cancel")}
+          onCancel={() => setDeleteConfirm(null)}
+          onConfirm={confirmDelete}
+        />
+
+        {/* 导出成功提示框：点击「确定」关闭；覆盖在弹窗上方，半透明遮罩区分层级 */}
+        {exportDoneMsg && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              zIndex: 100,
+              borderRadius: 12,
+              background: "rgba(0, 0, 0, 0.32)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 24,
+            }}
+          >
+            <div className={PL_DIALOG} style={{ width: 320, maxWidth: "100%", gap: 14, position: "static" }} onClick={(e) => e.stopPropagation()}>
+              <div style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{exportDoneMsg}</div>
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={() => setExportDoneMsg(null)}>
+                  {T("pl.confirm")}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

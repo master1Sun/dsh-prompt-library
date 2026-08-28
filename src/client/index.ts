@@ -23,6 +23,7 @@ import { ContextRecommendations } from "./components/chat/ContextRecommendations
 import { SettingsSection } from "./components/settings/SettingsSection.js";
 import { en, NS, zh } from "./i18n/i18n.js";
 import { startDataChangedSubscription } from "./services/data-sync.js";
+import { registerWorkspaces } from "./services/workspace-picker.js";
 import {
   registerSettingsNavIcon,
   SETTINGS_NAV_CSS,
@@ -30,7 +31,7 @@ import {
 } from "./utils/settings-nav-icon.js";
 
 /** 此插件的 apply 依赖的客户端服务。 */
-export const inject = ["slots", "locale"];
+export const inject = ["slots", "locale", "workspaces"];
 
 /** 我们使用的两个服务的最小 ctx 类型。 */
 interface ClientCtx {
@@ -53,9 +54,24 @@ interface ClientCtx {
       component: (props: unknown) => ReactNode,
     ): () => void;
   };
+  /** 宿主工作区运行时（由 dsh-client-runtime 提供），提供目录选择与浏览能力。 */
+  workspaces: {
+    pickDirectory(): Promise<string | null>;
+    listDirectory(path?: string, signal?: AbortSignal): Promise<{
+      path: string;
+      home: string;
+      crumbs: { name: string; path: string; hidden: boolean }[];
+      entries: { name: string; path: string; hidden: boolean }[];
+      truncated: boolean;
+    }>;
+    createDirectory(path: string, name: string): Promise<string>;
+  };
 }
 
 export function apply(ctx: ClientCtx): void {
+  // 缓存宿主工作区运行时引用，供目录选择（技能导出项目路径）使用
+  registerWorkspaces(ctx.workspaces ?? null);
+
   // 注册完整中英文字典：系统语言切换后自动跟随
   ctx.effect(
     () => ctx.locale.register(NS, { zh, en }),

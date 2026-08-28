@@ -37,7 +37,14 @@ const MANUAL_KEYS = [
   "pl.announce.manual.3",
   "pl.announce.manual.4",
   "pl.announce.manual.5",
+  "pl.announce.manual.6",
+  "pl.announce.manual.7",
+  "pl.announce.manual.8",
+  "pl.announce.manual.9",
 ] as const;
+
+/** 注意事项对应的 i18n 键（按顺序展示）：聚焦人格/技能注入与其他插件的冲突及关闭前的清理提醒。 */
+const NOTES_KEYS = ["pl.announce.notes.0", "pl.announce.notes.1", "pl.announce.notes.2"] as const;
 
 /**
  * 去除字符串中的 HTML 标签并解码常见实体（科技快讯 RS 摘要可能残留标签）。
@@ -279,17 +286,17 @@ export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
       aria-modal="true"
       aria-label={t("pl.announce.title")}
       className={PL_DIALOG_OVERLAY}
-      onClick={onClose}
+      onClick={(e) => e.stopPropagation()}
     >
       <style>{PL_DIALOG_CSS}</style>
       <style>{`@keyframes plPageFade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}.pl-page-turn{animation:plPageFade .32s ease-out}`}</style>
       <div
-        onClick={(e) => e.stopPropagation()}
         className={PL_DIALOG}
         style={{
-          width: 780,
+          width: 860,
+          height: 760,
           maxWidth: "calc(100vw - 40px)",
-          maxHeight: "min(700px, calc(100vh - 40px))",
+          maxHeight: "calc(100vh - 40px)",
         }}
       >
         {/* 右上角关闭按钮（仅按钮触发） */}
@@ -455,136 +462,132 @@ export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
             </div>
           </header>
 
-          {/* ── 报纸正文（四宫格，期次切换时整块淡入翻页） ── */}
+          {/* ── 报纸正文（左右两栏：左 = 日报+快讯，右 = 手册+版本；各自独立滚动，期次切换整块淡入翻页） ── */}
           <div
             key={daily?.date ?? currentDate}
             className="pl-page-turn"
-            style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}
+            style={{ display: "flex", flex: 1, minHeight: 0, gap: 14 }}
           >
-            {/* 四宫格：上排 = 每日日报 + 科技快讯；下排 = 使用手册 + 版本；两行均分弹窗剩余高度 */}
+            {/* 左栏：每日日报 + 科技快讯（独立滚动） */}
             <div
               style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gridTemplateRows: "1fr 1fr",
-                gap: 20,
-                flex: 1,
+                flex: "1 1 0",
+                minWidth: 0,
                 minHeight: 0,
+                height: "100%",
+                boxSizing: "border-box",
+                background: TONE.row,
+                border: `1px solid ${TONE.border}`,
+                borderRadius: 10,
+                overflowY: "auto",
               }}
             >
-              {/* 上左：每日日报（AI → 词库统计）；与科技快讯等高，内容超出则裁切 */}
-              <section
+              {/* 顶部标题：内容向上滚动时悬浮固定 */}
+              <div
                 style={{
-                  minWidth: 0,
-                  height: "100%",
-                  display: "flex",
-                  flexDirection: "column",
-                  overflow: "hidden",
+                  position: "sticky",
+                  top: 0,
+                  zIndex: 3,
+                  padding: "10px 10px 8px",
+                  background: TONE.row,
+                  borderBottom: `1px solid ${TONE.border}`,
                 }}
               >
-                <ColumnTitle>{t("pl.announce.dailyTitle")}</ColumnTitle>
-                {loadingHint || !daily?.report || daily.report.length === 0 ? (
-                  <div style={{ fontSize: 12, color: TONE.quiet, fontStyle: "italic", lineHeight: 1.7 }}>
-                    {t("pl.announce.noDaily")}
-                  </div>
-                ) : (
-                  <ul
-                    style={{
-                      margin: 0,
-                      padding: "0 6px 0 0",
-                      listStyle: "none",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 9,
-                      flex: 1,
-                      minHeight: 0,
-                      overflowY: "auto",
-                    }}
-                  >
-                    {daily.report.map((item, i) => (
-                      <li key={i} style={{ display: "flex", gap: 8 }}>
-                        <span
-                          style={{
-                            flexShrink: 0,
-                            fontSize: 11,
-                            lineHeight: "20px",
-                            fontFamily: SERIF,
-                            fontWeight: 700,
-                            color: TONE.accent,
-                          }}
-                        >
-                          {String(i + 1).padStart(2, "0")}
-                        </span>
-                        <div style={{ minWidth: 0 }}>
-                          <div
-                            style={{
-                              fontFamily: SERIF,
-                              fontSize: 13.5,
-                              fontWeight: 700,
-                              color: TONE.text,
-                              lineHeight: 1.4,
-                              marginBottom: 2,
-                            }}
-                          >
-                            {item.headline}
-                          </div>
-                          <div style={{ fontSize: 12, color: TONE.muted, lineHeight: 1.6 }}>{item.body}</div>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
-
-              {/* 上右：科技快讯（IT之家 优先，失败回退 AI）；与日报等高，内容超出则裁切 */}
-              <section
-                style={{
-                  minWidth: 0,
-                  borderLeft: `1px solid ${TONE.border}`,
-                  paddingLeft: 18,
-                  height: "100%",
-                  display: "flex",
-                  flexDirection: "column",
-                  overflow: "hidden",
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <ColumnTitle>{t("pl.announce.techTitle")}</ColumnTitle>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ width: 3, height: 13, borderRadius: 2, background: TONE.accent, flexShrink: 0 }} />
+                  <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: TONE.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {t("pl.announce.dailyTitle")} · {t("pl.announce.techTitle")}
+                  </span>
                 </div>
-                {loadingHint || !daily?.news || daily.news.length === 0 ? (
-                  <div style={{ fontSize: 12, color: TONE.quiet, fontStyle: "italic", lineHeight: 1.7 }}>
-                    {t("pl.announce.noDaily")}
-                  </div>
-                ) : (
-                  <ul
-                    style={{
-                      margin: 0,
-                      padding: "0 6px 0 0",
-                      listStyle: "none",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 10,
-                      flex: 1,
-                      minHeight: 0,
-                      overflowY: "auto",
-                    }}
-                  >
-                    {daily.news.map((item, i) => (
-                      <li key={i} style={{ borderBottom: `1px dotted ${TONE.border}`, paddingBottom: 8 }}>
-                        <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 18, padding: "12px 10px 14px" }}>
+                {/* 每日日报（AI → 词库统计） */}
+                <div>
+                  <ColumnTitle>{t("pl.announce.dailyTitle")}</ColumnTitle>
+                  {loadingHint || !daily?.report || daily.report.length === 0 ? (
+                    <div style={{ fontSize: 12, color: TONE.quiet, fontStyle: "italic", lineHeight: 1.7 }}>
+                      {t("pl.announce.noDaily")}
+                    </div>
+                  ) : (
+                    <ul
+                      style={{
+                        margin: 0,
+                        padding: "0 6px 0 0",
+                        listStyle: "none",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 9,
+                      }}
+                    >
+                      {daily.report.map((item, i) => (
+                        <li key={i} style={{ display: "flex", gap: 8 }}>
                           <span
                             style={{
                               flexShrink: 0,
-                              fontSize: 10.5,
-                              lineHeight: "18px",
+                              fontSize: 11,
+                              lineHeight: "20px",
                               fontFamily: SERIF,
                               fontWeight: 700,
-                              color: TONE.quiet,
+                              color: TONE.accent,
                             }}
                           >
                             {String(i + 1).padStart(2, "0")}
                           </span>
                           <div style={{ minWidth: 0 }}>
+                            <div
+                              style={{
+                                fontFamily: SERIF,
+                                fontSize: 13.5,
+                                fontWeight: 700,
+                                color: TONE.text,
+                                lineHeight: 1.4,
+                                marginBottom: 2,
+                              }}
+                            >
+                              {item.headline}
+                            </div>
+                            <div style={{ fontSize: 12, color: TONE.muted, lineHeight: 1.6 }}>{item.body}</div>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+
+                {/* 科技快讯（IT之家 优先，失败回退 AI） */}
+                <div>
+                  <ColumnTitle>{t("pl.announce.techTitle")}</ColumnTitle>
+                  {loadingHint || !daily?.news || daily.news.length === 0 ? (
+                    <div style={{ fontSize: 12, color: TONE.quiet, fontStyle: "italic", lineHeight: 1.7 }}>
+                      {t("pl.announce.noDaily")}
+                    </div>
+                  ) : (
+                    <ul
+                      style={{
+                        margin: 0,
+                        padding: "0 6px 0 0",
+                        listStyle: "none",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 10,
+                      }}
+                    >
+                      {daily.news.map((item, i) => (
+                        <li key={i} style={{ borderBottom: `1px dotted ${TONE.border}`, paddingBottom: 8 }}>
+                          <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+                            <span
+                              style={{
+                                flexShrink: 0,
+                                fontSize: 10.5,
+                                lineHeight: "18px",
+                                fontFamily: SERIF,
+                                fontWeight: 700,
+                                color: TONE.quiet,
+                              }}
+                            >
+                              {String(i + 1).padStart(2, "0")}
+                            </span>
+                            <div style={{ minWidth: 0 }}>
                               <div
                                 style={{
                                   fontFamily: SERIF,
@@ -599,167 +602,167 @@ export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
                               <div style={{ fontSize: 12, color: TONE.muted, lineHeight: 1.55, marginTop: 1 }}>
                                 {sanitizeText(item.summary)}
                               </div>
-                            {item.url && (
-                              <a
-                                href={item.url}
-                                target="_blank"
-                                rel="noreferrer noopener"
-                                style={{
-                                  fontSize: 11.5,
-                                  color: TONE.accent,
-                                  textDecoration: "none",
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  gap: 3,
-                                  marginTop: 3,
-                                }}
-                              >
-                                {t("pl.announce.openLink")} →
-                              </a>
-                            )}
+                              {item.url && (
+                                <a
+                                  href={item.url}
+                                  target="_blank"
+                                  rel="noreferrer noopener"
+                                  style={{
+                                    fontSize: 11.5,
+                                    color: TONE.accent,
+                                    textDecoration: "none",
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: 3,
+                                    marginTop: 3,
+                                  }}
+                                >
+                                  {t("pl.announce.openLink")} →
+                                </a>
+                              )}
+                            </div>
                           </div>
-                        </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* 右栏：使用手册 + 版本（独立滚动） */}
+            <div
+              style={{
+                flex: "1 1 0",
+                minWidth: 0,
+                minHeight: 0,
+                height: "100%",
+                boxSizing: "border-box",
+                background: TONE.row,
+                border: `1px solid ${TONE.border}`,
+                borderRadius: 10,
+                overflowY: "auto",
+              }}
+            >
+              {/* 顶部标题：内容向上滚动时悬浮固定 */}
+              <div
+                style={{
+                  position: "sticky",
+                  top: 0,
+                  zIndex: 3,
+                  padding: "10px 10px 8px",
+                  background: TONE.row,
+                  borderBottom: `1px solid ${TONE.border}`,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ width: 3, height: 13, borderRadius: 2, background: TONE.accent, flexShrink: 0 }} />
+                  <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: TONE.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {t("pl.announce.manualTitle")} · {t("pl.announce.noticeTitle")}
+                  </span>
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 18, padding: "12px 10px 14px" }}>
+                {/* 使用手册 */}
+                <div>
+                  <ColumnTitle>{t("pl.announce.manualTitle")}</ColumnTitle>
+                  <ul
+                    style={{
+                      margin: 0,
+                      padding: 0,
+                      listStyle: "none",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 10,
+                    }}
+                  >
+                    {manualItems.map((item, idx) => (
+                      <li
+                        key={idx}
+                        style={{
+                          display: "flex",
+                          alignItems: "flex-start",
+                          gap: 8,
+                          fontSize: 13,
+                          lineHeight: 1.65,
+                          color: TONE.muted,
+                        }}
+                      >
+                        <span
+                          style={{
+                            flexShrink: 0,
+                            width: 5,
+                            height: 5,
+                            borderRadius: "50%",
+                            background: TONE.accent,
+                            marginTop: 8,
+                          }}
+                        />
+                        <span>{item}</span>
                       </li>
                     ))}
                   </ul>
-                )}
-              </section>
+                </div>
 
-              {/* 下左：使用手册 */}
-              <section
-                style={{
-                  minWidth: 0,
-                  borderTop: `1px solid ${TONE.border}`,
-                  paddingTop: 16,
-                  height: "100%",
-                  display: "flex",
-                  flexDirection: "column",
-                  overflow: "hidden",
-                }}
-              >
-                <ColumnTitle>{t("pl.announce.manualTitle")}</ColumnTitle>
-                <ul
-                  style={{
-                    margin: 0,
-                    padding: 0,
-                    listStyle: "none",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 10,
-                    flex: 1,
-                    minHeight: 0,
-                    overflowY: "auto",
-                  }}
-                >
-                  {manualItems.map((item, idx) => (
-                    <li
-                      key={idx}
+                {/* 版本（紧凑） */}
+                <div>
+                  <ColumnTitle>{t("pl.announce.noticeTitle")}</ColumnTitle>
+                  {latest ? (
+                    <ul
                       style={{
+                        margin: 0,
+                        padding: 0,
+                        listStyle: "none",
                         display: "flex",
-                        alignItems: "flex-start",
-                        gap: 8,
-                        fontSize: 13,
-                        lineHeight: 1.65,
-                        color: TONE.muted,
+                        flexDirection: "column",
+                        gap: 10,
                       }}
                     >
-                      <span
-                        style={{
-                          flexShrink: 0,
-                          width: 5,
-                          height: 5,
-                          borderRadius: "50%",
-                          background: TONE.accent,
-                          marginTop: 8,
-                        }}
-                      />
-                      <span>{item}</span>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-
-              {/* 下右：版本（紧凑） */}
-              <section
-                style={{
-                  minWidth: 0,
-                  borderTop: `1px solid ${TONE.border}`,
-                  borderLeft: `1px solid ${TONE.border}`,
-                  paddingLeft: 18,
-                  paddingTop: 16,
-                  height: "100%",
-                  display: "flex",
-                  flexDirection: "column",
-                  overflow: "hidden",
-                }}
-              >
-                <ColumnTitle>{t("pl.announce.noticeTitle")}</ColumnTitle>
-                {latest ? (
-                  <>
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "baseline",
-                        gap: 8,
-                        flexWrap: "wrap",
-                        minWidth: 0,
-                        flexShrink: 0,
-                      }}
-                    >
-                      <span
-                        style={{
-                          fontFamily: SERIF,
-                          fontSize: 12.5,
-                          fontWeight: 700,
-                          color: TONE.accent,
-                          letterSpacing: 0.3,
-                        }}
-                      >
-                        v{latest.version}
-                      </span>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: TONE.text }}>{latest.title}</span>
-                      {latest.date && (
-                        <span style={{ fontSize: 10.5, color: TONE.quiet, fontWeight: 500 }}>{latest.date}</span>
-                      )}
-                    </div>
-                    {latest.items.length > 0 && (
-                      <ul
-                        style={{
-                          margin: 0,
-                          padding: "8px 6px 0 0",
-                          listStyle: "none",
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: 6,
-                          flex: 1,
-                          minHeight: 0,
-                          overflowY: "auto",
-                        }}
-                      >
-                        {latest.items.map((item, i) => (
+                      {NOTES_KEYS.map((key, i) => {
+                        // 重点高亮：仅将条目冒号前的主题词用主题色标出，正文保持普通文字
+                        const raw = t(key);
+                        const ci = raw.search(/[:：]/);
+                        const head = ci >= 0 ? raw.slice(0, ci + 1) : "";
+                        const rest = ci >= 0 ? raw.slice(ci + 1) : raw;
+                        return (
                           <li
                             key={i}
                             style={{
                               display: "flex",
-                              gap: 6,
-                              fontSize: 11.5,
+                              gap: 8,
+                              alignItems: "flex-start",
+                              fontSize: 13,
                               lineHeight: 1.65,
                               color: TONE.muted,
                             }}
                           >
-                            <span style={{ flexShrink: 0, color: TONE.accent, fontWeight: 700 }}>·</span>
-                            <span>{item}</span>
+                            <span
+                              style={{
+                                flexShrink: 0,
+                                color: TONE.accent,
+                                fontWeight: 700,
+                                lineHeight: 1.65,
+                              }}
+                            >
+                              ·
+                            </span>
+                            <span>
+                              {head && (
+                                <strong style={{ color: TONE.accent, fontWeight: 700 }}>{head}</strong>
+                              )}
+                              {rest}
+                            </span>
                           </li>
-                        ))}
-                      </ul>
-                    )}
-                  </>
-                ) : (
-                  <span style={{ fontSize: 12, color: TONE.quiet, fontStyle: "italic" }}>
-                    {t("pl.announce.noNotice")}
-                  </span>
-                )}
-              </section>
+                        );
+                      })}
+                    </ul>
+                  ) : (
+                    <span style={{ fontSize: 12, color: TONE.quiet, fontStyle: "italic" }}>
+                      {t("pl.announce.noNotice")}
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         </div>

@@ -103,6 +103,9 @@ interface AiLogCopy {
   skillRetry: (n: number) => string;
   skillParseFail: (t: string) => string;
   skillDone: (name: string, n: number) => string;
+  draftStart: (kind: string, title: string) => string;
+  draftNoLlm: string;
+  draftDone: (kind: string, n: number) => string;
 }
 
 /** 构建 AI 日志文案（按语言），zh / en 双语同步维护。 */
@@ -147,6 +150,9 @@ function buildAiLogCopy(lang: string): AiLogCopy {
       skillRetry: (n) => `skill: transient failure, retry #${n}`,
       skillParseFail: (t) => `skill: model output could not be parsed as JSON: ${t}`,
       skillDone: (name, n) => `skill: done name="${name}" description length=${n}`,
+      draftStart: (kind, title) => `draft: start kind=${kind} title="${title}"`,
+      draftNoLlm: "draft: skipped (llm service not injected)",
+      draftDone: (kind, n) => `draft: done kind=${kind} result length=${n}`,
     };
   }
   return {
@@ -188,6 +194,9 @@ function buildAiLogCopy(lang: string): AiLogCopy {
     skillRetry: (n) => `skill: 瞬时失败，重试第 ${n} 次`,
     skillParseFail: (t) => `skill: 模型输出无法解析为 JSON：${t}`,
     skillDone: (name, n) => `skill: 完成 name="${name}" 描述长度=${n}`,
+    draftStart: (kind, title) => `draft: 开始 kind=${kind} title="${title}"`,
+    draftNoLlm: "draft: 跳过（llm 服务未注入）",
+    draftDone: (kind, n) => `draft: 完成 kind=${kind} 结果长度=${n}`,
   };
 }
 
@@ -963,6 +972,97 @@ export async function generateSkillDescriptor(
     }
     logAI(aiLogCopy().skillDone(parsed.name, parsed.description.length));
     return { desc: parsed };
+  }
+  return { fail: "empty" };
+}
+
+/** AI 生成失败原因码：no-llm 未连接 LLM / route 无可用模型 / empty 模型返回空。 */
+export type DraftGenerateFail = "no-llm" | "route" | "empty";
+
+/** AI 生成结果：{ content } 成功；{ fail } 失败并给出原因码。 */
+export interface DraftGenerateResult {
+  content?: string;
+  fail?: DraftGenerateFail;
+}
+
+/**
+ * 依据「标题 + 用户输入」用 AI 生成一段技能（skill）或人格（soul）正文草稿。
+ * 供人格管理 / 技能管理编辑区「AI 生成」按钮使用：仅生成文本返回，不落盘、不写回。
+ * 返回 { content } 表示成功；{ fail } 表示失败并给出原因码（前端展示准确提示）。
+ * 模型返回空文本多为瞬时故障，自动重试最多 3 次后再判定失败。
+ */
+export async function generateDraft(
+  kind: "soul" | "skill",
+  title: string,
+  input: string,
+  settings: PluginSettings,
+  lang: "zh" | "en" = "zh",
+): Promise<DraftGenerateResult> {
+  logAI(aiLogCopy().draftStart(kind, title));
+  if (!llm) {
+    logAI(aiLogCopy().draftNoLlm);
+    return { fail: "no-llm" };
+  }
+  const candidates = await resolveCandidates(llm, settings);
+  if (candidates.length === 0) return { fail: "route" };
+  const enMode = lang === "en";
+  const system = enMode
+    ? kind === "soul"
+      ? [
+          "You are an expert at writing a SOUL.md persona for an AI assistant. Based on the given persona name and any draft notes, write a complete, well-structured persona definition.",
+          "",
+          "Requirements:",
+          "- Write the full SOUL.md content in English, with clear sections (identity, tone, working rules) using Markdown headings;",
+          "- Keep it practical and warm, matching the persona's purpose; avoid clichés;",
+          "- Output only the SOUL.md content — no extra explanation, no code fence.",
+        ].join("\n")
+      : [
+          "You are an expert at writing a DSH skill (SKILL.md) instruction for an AI assistant. Based on the given skill title and any draft notes, write a complete, actionable skill definition.",
+          "",
+          "Requirements:",
+          "- Write the full skill content in English, starting with a short summary, then concrete instructions the assistant should follow, using Markdown;",
+          "- Keep it specific, actionable and easy to reuse; avoid vagueness;",
+          "- Output only the skill content — no extra explanation, no code fence.",
+        ].join("\n")
+    : kind === "soul"
+      ? [
+          "你是一名擅长编写 AI 人格（SOUL.md）的专家。根据用户给的人格名称与草稿，生成一段完整、结构清晰的人格设定。",
+          "",
+          "要求：",
+          "- 用中文写完整的 SOUL.md 内容，用 Markdown 标题分节（身份设定 / 语气风格 / 工作规范等）；",
+          "- 内容务实、有温度，贴合人格用途，避免套话空话；",
+          "- 只输出 SOUL.md 正文，不要任何解释，不要 Markdown 代码块。",
+        ].join("\n")
+      : [
+          "你是一名擅长编写 DSH 技能（SKILL.md）指令的专家。根据用户给的技能标题与草稿，生成一段完整、可直接复用的技能定义。",
+          "",
+          "要求：",
+          "- 用中文写完整技能正文，先写一段简短用途说明，再写具体、可执行的指令（用 Markdown 组织）；",
+          "- 内容具体、可落地、便于复用，避免空泛；",
+          "- 只输出技能正文，不要任何解释，不要 Markdown 代码块。",
+        ].join("\n");
+  const content = [
+    `标题：${title}`,
+    input && input.trim() ? `以下是已有的草稿 / 补充要求（可在此基础完善）：\n${input.trim()}` : "（暂无草稿，请根据标题展开完整内容）",
+  ].join("\n\n");
+  // 注意：这里不使用 withSoulSystem 注入当前人格，保证生成内容只跟「标题 + 输入」相关，
+  // 不携带其它人格 / 技能等无关上下文。
+  const sysText = system;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const text = await collectTextWithFallback(llm, candidates, sysText, content);
+    if (!text) {
+      if (attempt < 2) logAI(aiLogCopy().skillRetry(attempt + 1));
+      else return { fail: "empty" };
+      continue;
+    }
+    // 清理可能的代码块包裹后直接作为草稿返回
+    const cleaned = text
+      .replace(/^```(?:md|markdown|soul|skill)?\s*/i, "")
+      .replace(/\s*```$/, "")
+      .trim();
+    if (!cleaned) return { fail: "empty" };
+    logAI(aiLogCopy().draftDone(kind, cleaned.length));
+    return { content: cleaned };
   }
   return { fail: "empty" };
 }

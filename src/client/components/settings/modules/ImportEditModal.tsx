@@ -18,11 +18,13 @@ import {
 } from "react";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { plBtn } from "../../../utils/button-style.js";
-import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../../../utils/dialog-style.js";
 import { type PLTranslate, usePLT } from "../../../i18n/i18n.js";
 import { importPrompts as apiImport, listTags as apiListTags } from "../../../services/api.js";
 import { notifyDataChanged } from "../../../services/data-sync.js";
 import { insertVariableAt } from "../../common/TemplateVariables.js";
+import { ImportResultPanel, type ImportResultRow } from "../../common/ImportResultPanel.js";
+import { DialogCloseButton } from "../../common/DialogCloseButton.js";
+import { BookIcon } from "../../common/BookIcon.js";
 import type { TransferPrompt } from "../../../services/data-formats.js";
 
 const MONO =
@@ -37,6 +39,7 @@ const TONE = {
   border: "var(--dsw-alias-border-l2, rgba(196, 211, 232, 0.16))",
   borderStrong: "var(--dsw-alias-border-l3, rgba(196, 211, 232, 0.31))",
   accent: "var(--dsw-alias-brand-primary, #8ec5ff)",
+  accentSoft: "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 18%, transparent)",
   success: "var(--dsw-alias-state-success-primary, #78dda0)",
   red: "var(--dsw-alias-state-error-primary, #ff6b6b)",
 } as const;
@@ -179,6 +182,8 @@ export function ImportEditModal(props: {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   // 下拉可选标签（既有标签名列表），打开时拉取
   const [tagOptions, setTagOptions] = useState<string[]>([]);
+  // 导入完成后的逐条结果（展示成功/失败/跳过，用户点击「完成」后关闭）
+  const [result, setResult] = useState<{ summary: string; rows: ImportResultRow[] } | null>(null);
 
   // 打开时拉取既有标签，用于下拉选择
   useEffect(() => {
@@ -214,6 +219,7 @@ export function ImportEditModal(props: {
     setMsg(null);
     setCollapsed({});
     setSaving(false);
+    setResult(null);
   }, [open]);
 
   /** 更新某条目字段；编辑会使之前的校验与修复记录失效。 */
@@ -358,15 +364,36 @@ export function ImportEditModal(props: {
         setSaving(false);
         notifyDataChanged();
         onImported?.(res);
-        // 导入成功后关闭弹窗，回到词库管理面板
-        onClose();
+        // 导入成功后展示逐条结果，由用户点击「完成」关闭弹窗
+        setResult({
+          summary: T("pl.imported", {
+            imported: res.imported,
+            updated: res.updated,
+            skipped: res.skipped,
+          }),
+          rows: (res.items ?? []).map((item) => ({
+            title: item.title || T("pl.importEdit.untitledPrompt"),
+            label:
+              item.status === "imported"
+                ? T("pl.resultImported")
+                : item.status === "updated"
+                  ? T("pl.resultUpdated")
+                  : T("pl.resultSkipped"),
+            kind:
+              item.status === "imported"
+                ? "ok"
+                : item.status === "updated"
+                  ? "updated"
+                  : "skipped",
+          })),
+        });
       },
       (err: unknown) => {
         setSaving(false);
         setMsg({ text: err instanceof Error ? err.message : String(err), error: true });
       },
     );
-  }, [validation, saving, entries, onClose, onImported, T]);
+  }, [validation, saving, entries, onImported, T]);
 
   if (!open) return null;
 
@@ -378,64 +405,46 @@ export function ImportEditModal(props: {
       role="dialog"
       aria-modal="true"
       aria-label={T("pl.importEdit.title")}
-      className={PL_DIALOG_OVERLAY}
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: "absolute",
+        inset: 0,
+        zIndex: 10,
+        display: "flex",
+        flexDirection: "column",
+        background: TONE.panel,
+        borderRadius: 12,
+        padding: "18px 7px 18px 10px",
+        boxSizing: "border-box",
+      }}
     >
-      <style>{PL_DIALOG_CSS}</style>
-      <div
-        className={PL_DIALOG}
-        style={{
-          width: 1020,
-          maxWidth: "90%",
-          height: "min(720px, calc(100vh - 60px))",
-          gap: 12,
-        }}
-      >
         {/* 标题 + 关闭按钮（弹窗仅通过按钮手动关闭） */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-          <strong style={{ fontSize: 15, fontWeight: 560, flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          <BookIcon color={TONE.accent} />
+          <strong style={{ fontSize: 15, fontWeight: 600, flex: 1, minWidth: 0, color: TONE.text }}>
             {T("pl.importEdit.title")}
           </strong>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={T("pl.close")}
-            data-tip={T("pl.close")}
-            style={{
-              flexShrink: 0,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              width: 26,
-              height: 26,
-              border: "none",
-              outline: "none",
-              borderRadius: 6,
-              background: "transparent",
-              color: TONE.muted,
-              cursor: "pointer",
-              fontSize: 15,
-              lineHeight: 1,
-              transition:
-                "background-color .24s cubic-bezier(.22,1,.36,1), color .24s cubic-bezier(.22,1,.36,1)",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = "var(--dsw-alias-interactive-bg-hover)";
-              e.currentTarget.style.color = TONE.text;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = "transparent";
-              e.currentTarget.style.color = TONE.muted;
-            }}
-          >
-            ✕
-          </button>
+          <DialogCloseButton onClick={onClose} label={T("pl.close")} />
         </div>
-        <div style={{ fontSize: 12, color: TONE.quiet, lineHeight: 1.6, flexShrink: 0 }}>
+        {/* 模块说明（与人格管理 / 技能管理说明框一致） */}
+        <div
+          style={{
+            marginTop: 10,
+            fontSize: 11.5,
+            lineHeight: 1.6,
+            color: TONE.quiet,
+            background: TONE.accentSoft,
+            border: `1px solid ${TONE.border}`,
+            borderRadius: 7,
+            padding: "7px 10px",
+            flexShrink: 0,
+          }}
+        >
           {T("pl.importEdit.subtitle")}
         </div>
 
         {/* 工具栏：全选 / 取消全选 + 勾选计数 */}
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0, marginTop: 10 }}>
           <label
             style={{
               display: "inline-flex",
@@ -466,6 +475,7 @@ export function ImportEditModal(props: {
             display: "flex",
             flexDirection: "column",
             gap: 10,
+            marginTop: 10,
           }}
         >
           {entries.length === 0 ? (
@@ -683,20 +693,21 @@ export function ImportEditModal(props: {
         </div>
 
         {/* 操作反馈 */}
-        {msg && (
+        {!result && msg && (
           <div
             style={{
               flexShrink: 0,
               fontSize: 12,
               lineHeight: 1.5,
               color: msg.error ? TONE.red : TONE.text,
+              marginTop: 8,
             }}
           >
             {msg.text}
           </div>
         )}
         {/* 校验结果：错误清单 + 一键修复 */}
-        {validation && (
+        {!result && validation && (
           <div
             role="alert"
             style={{
@@ -763,7 +774,7 @@ export function ImportEditModal(props: {
           </div>
         )}
         {/* 修复结果清单 */}
-        {fixLog.length > 0 && (
+        {!result && fixLog.length > 0 && (
           <div
             style={{
               flexShrink: 0,
@@ -798,38 +809,50 @@ export function ImportEditModal(props: {
           </div>
         )}
 
-        {/* 底部操作：校验 + 导入（仅校验通过后可用） */}
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            justifyContent: "flex-end",
-            alignItems: "center",
-            flexShrink: 0,
-          }}
-        >
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className={plBtn("ghost", "sm")}
-            onClick={handleValidate}
+        {/* 导入结果面板：逐条展示成功/失败/跳过 */}
+        {result && (
+          <ImportResultPanel
+            title={T("pl.resultTitle")}
+            summary={result.summary}
+            rows={result.rows}
+            onDone={onClose}
+            doneLabel={T("pl.resultDone")}
+          />
+        )}
+
+        {/* 底部操作：校验 + 导入（仅校验通过后可用，展示结果后仅剩「完成」） */}
+        {!result && (
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              justifyContent: "flex-end",
+              alignItems: "center",
+              flexShrink: 0,
+            }}
           >
-            {T("pl.skillModal.validate")}
-          </Button>
-          <Button
-            type="button"
-            variant="primary"
-            size="sm"
-            className={plBtn("primary", "sm")}
-            onClick={handleSave}
-            disabled={!validation?.ok || saving || checkedCount === 0}
-            data-tip={validation?.ok ? "" : T("pl.skillModal.selectHint")}
-          >
-            {saving ? T("pl.importEdit.importing") : T("pl.importEdit.import")}
-          </Button>
-        </div>
-      </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={plBtn("ghost", "sm")}
+              onClick={handleValidate}
+            >
+              {T("pl.skillModal.validate")}
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              className={plBtn("primary", "sm")}
+              onClick={handleSave}
+              disabled={!validation?.ok || saving || checkedCount === 0}
+              data-tip={validation?.ok ? "" : T("pl.skillModal.selectHint")}
+            >
+              {saving ? T("pl.importEdit.importing") : T("pl.importEdit.import")}
+            </Button>
+          </div>
+        )}
     </div>
   );
 }

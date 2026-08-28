@@ -4,7 +4,9 @@
  * - 「选择本地 md 文件」逐份解析导入（frontmatter + 正文 → 标题 / 摘要 / 正文）；
  * - 「扫描 Skills 目录」批量列出可导入技能；
  * - 每条目可编辑标题 / 摘要 / 正文，正文支持插入 {{变量名}} 占位符；
- * - 「校验」检查必填项与模板变量括号配对，只有校验通过后才能保存入库。
+ * - 「AI 补充」（仅导出模式）直接用 AI 自动补全技能名与摘要；「校验」检查必填项
+ *   （标题 / 正文，导出模式还校验技能名 / 摘要）与模板变量括号配对；
+ *   只有校验通过后才能保存入库 / 导出技能。
  *
  * 弹窗只能通过关闭按钮或保存/取消操作手动关闭，不响应遮罩点击。
  */
@@ -19,20 +21,31 @@ import {
 } from "react";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { plBtn } from "../../../utils/button-style.js";
-import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../../../utils/dialog-style.js";
 import { type PLT, type PLTranslate, usePLT } from "../../../i18n/i18n.js";
 import {
   describeSkill,
   exportSkillEntries,
+  getExportProjectCwd,
   importSkillEntries,
   listAvailableSkills,
   parseSkillRaw,
+  scanSkillDir,
   type SkillDescribeFail,
   type SkillEntry,
-  type SkillExportResult,
+  type SkillExportScope,
+  type SkillImportResult,
 } from "../../../services/api.js";
 import { notifyDataChanged } from "../../../services/data-sync.js";
+import {
+  isDirectoryBrowserAvailable,
+  isDirectoryPickerAvailable,
+  pickExportDirectory,
+} from "../../../services/workspace-picker.js";
 import { insertVariableAt } from "../../common/TemplateVariables.js";
+import { ImportResultPanel, type ImportResultRow } from "../../common/ImportResultPanel.js";
+import { DirectoryPickerModal } from "../../common/DirectoryPickerModal.js";
+import { DialogCloseButton } from "../../common/DialogCloseButton.js";
+import { BookIcon } from "../../common/BookIcon.js";
 
 const MONO =
   'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif)';
@@ -46,6 +59,7 @@ const TONE = {
   border: "var(--dsw-alias-border-l2, rgba(196, 211, 232, 0.16))",
   borderStrong: "var(--dsw-alias-border-l3, rgba(196, 211, 232, 0.31))",
   accent: "var(--dsw-alias-brand-primary, #8ec5ff)",
+  accentSoft: "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 18%, transparent)",
   success: "var(--dsw-alias-state-success-primary, #78dda0)",
   red: "var(--dsw-alias-state-error-primary, #ff6b6b)",
 } as const;
@@ -113,6 +127,27 @@ function kebabFromName(raw: string, fallback: number): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 40);
   return slug || `skill-file-${fallback}`;
+}
+
+/** 手动填写的项目导出路径记忆键：上次输入过则下次打开自动预填。 */
+const PROJECT_PATH_KEY = "pl:skill:export:projectPath";
+
+/** 读取上次手动填写的项目导出路径（无记录或失败时返回空串）。 */
+function loadSavedProjectPath(): string {
+  try {
+    return localStorage.getItem(PROJECT_PATH_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** 记录手动填写/选择的项目导出路径，供下次打开自动填充（忽略空值）。 */
+function saveProjectPath(path: string): void {
+  try {
+    if (path.trim()) localStorage.setItem(PROJECT_PATH_KEY, path.trim());
+  } catch {
+    /* 忽略：记忆失败不影响导出 */
+  }
 }
 
 /** 把 kebab-case 技能名转成可读标题（如 prompt-writing → Prompt Writing）；空名返回空串。 */
@@ -248,24 +283,27 @@ export function SkillImportModal(props: {
     body: string;
     summary?: string;
   }>;
-  /** 导出成功回调（用于管理面板展示结果）。 */
-  onExported?: (result: SkillExportResult) => void;
+  /** 导入成功回调（用于管理面板刷新数据）。 */
+  onImported?: (result: SkillImportResult) => void;
 }): ReactNode {
-  const { open, onClose, t, mode = "import", initialEntries, onExported } = props;
+  const { open, onClose, t, mode = "import", initialEntries, onImported } = props;
   const T = usePLT(t);
   const [entries, setEntries] = useState<EditableEntry[]>([]);
   const [validation, setValidation] = useState<ValidateResult | null>(null);
   const [fixLog, setFixLog] = useState<string[]>([]);
+  // 导出模式：校验时给正文 {{变量名}} 赋值的改动清单（{{var}} → [var]）
+  const [fillLog, setFillLog] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
-  // 导出模式 AI 校验状态：idle 未触发 / running 生成中 / done 已生成
+  // 导出模式 AI 补充状态：idle 未触发 / running 生成中 / done 已生成
   const [aiState, setAiState] = useState<"idle" | "running" | "done">("idle");
-  // 导出模式 AI 校验结果：成功条数 + 失败清单（skipped 表示校验未通过未执行 AI）
+  // 导出模式 AI 补充结果：成功条数 + 失败清单
   const [aiResult, setAiResult] = useState<{
     done: number;
     errors: { title: string; reason: string }[];
-    skipped?: boolean;
   } | null>(null);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  // 导入/导出完成后的逐条结果（展示成功/失败/跳过，用户点击「完成」后关闭）
+  const [result, setResult] = useState<{ title: string; summary: string; rows: ImportResultRow[] } | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   // 导出模式：自定义 JSON 数据文件输入
   const jsonRef = useRef<HTMLInputElement | null>(null);
@@ -273,6 +311,16 @@ export function SkillImportModal(props: {
   const seqRef = useRef(0);
   // 每个条目的折叠状态（key → 是否折叠），默认展开
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  // 导出模式：导出范围（通用 / 项目 / 私有），决定后端写盘位置与绑定方式
+  const [exportScope, setExportScope] = useState<SkillExportScope>("global");
+  // 导出模式：当前项目路径（「项目技能」范围展示保存位置用）；未自动解析到时可让用户手动填写
+  const [projectCwd, setProjectCwd] = useState<string | null>(null);
+  const [projectCwdLoading, setProjectCwdLoading] = useState(false);
+  const [projectPathInput, setProjectPathInput] = useState("");
+  // 浏览式目录选择弹窗（桌面端无原生目录选择器时的回退方案）
+  const [dirPickerOpen, setDirPickerOpen] = useState(false);
+  // 导入模式「扫描文件夹」目录选择弹窗开关
+  const [scanDirPickerOpen, setScanDirPickerOpen] = useState(false);
 
   // 打开弹窗时重置上次的状态；导入模式自动扫描一次 Skills 目录，导出模式加载勾选的词库条目
   useEffect(() => {
@@ -280,10 +328,18 @@ export function SkillImportModal(props: {
     setEntries([]);
     setValidation(null);
     setFixLog([]);
+    setFillLog([]);
     setMsg(null);
     setCollapsed({});
     setAiState("idle");
     setAiResult(null);
+    setResult(null);
+    setExportScope("global");
+    setProjectCwd(null);
+    setProjectCwdLoading(false);
+    setProjectPathInput("");
+    setDirPickerOpen(false);
+    setScanDirPickerOpen(false);
     if (mode === "export") {
       addEntries(
         (initialEntries ?? []).map((e) => ({
@@ -298,25 +354,60 @@ export function SkillImportModal(props: {
       );
       return;
     }
-    listAvailableSkills().then(
-      (list) => {
-        if (list.length === 0) return;
-        addEntries(
-          list.map((s) => ({
-            name: s.name,
-            title: s.title,
-            body: s.body,
-            summary: s.summary,
-            exists: s.exists,
-            source: "disk" as const,
-          })),
-        );
-      },
-      () => {
-        /* 扫描失败静默，用户仍可通过「选择 md 文件」导入 */
-      },
-    );
+    // 导入模式不自动扫描 Skills 目录：默认保持空列表，
+    // 仅在用户点击「扫描」后才会列出 ~/.dsh/skills 下的技能
   }, [open]);
+
+  // 导出模式选中「项目技能」时，向 host 解析当前项目路径，用于展示保存位置；
+  // 解析不到时由用户在下方面板手动填写导出路径
+  useEffect(() => {
+    if (!open || mode !== "export" || exportScope !== "project") return;
+    let alive = true;
+    setProjectCwdLoading(true);
+    getExportProjectCwd()
+      .then(({ cwd }) => {
+        if (!alive) return;
+        setProjectCwd(cwd);
+        // 当前会话没有关联项目路径（cwd 为 null）时，把上次手动填写的项目路径预填到输入框
+        if (!cwd) setProjectPathInput(loadSavedProjectPath());
+        setProjectCwdLoading(false);
+      })
+      .catch(() => {
+        if (!alive) return;
+        // 读取项目路径失败时，同样把上次手动填写的项目路径预填到输入框
+        setProjectCwd(null);
+        setProjectPathInput(loadSavedProjectPath());
+        setProjectCwdLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [open, mode, exportScope]);
+
+  /** 选择项目导出路径：优先宿主原生目录选择器；桌面端仅提供 browse 时回退到内置浏览弹窗。 */
+  const handlePickDirectory = useCallback(async () => {
+    // 1) 原生目录选择器（native capability）：可用时优先使用
+    if (isDirectoryPickerAvailable()) {
+      try {
+        const dir = await pickExportDirectory();
+        if (dir) {
+          setProjectPathInput(dir);
+          setMsg(null);
+          return;
+        }
+        // 原生选择器被用户取消：不打开浏览弹窗
+        return;
+      } catch {
+        // 原生能力不可用（桌面端报 host.pickDirectory needs the native capability）→ 回退到浏览式
+      }
+    }
+    // 2) 浏览式目录选择（browse capability）：打开内置目录浏览弹窗
+    if (!isDirectoryBrowserAvailable()) {
+      setMsg({ text: T("pl.skillModal.directoryPickerUnavailable"), error: true });
+      return;
+    }
+    setDirPickerOpen(true);
+  }, [T]);
 
   /** 批量追加条目（按 key 去重），并清空上次校验结果与修复记录。 */
   const addEntries = useCallback(
@@ -441,7 +532,7 @@ export function SkillImportModal(props: {
     listAvailableSkills().then(
       (list) => {
         if (list.length === 0) {
-          setMsg({ text: T("pl.skillImportNone"), error: false });
+          setMsg({ text: T("pl.skillModal.scanSkillsEmpty"), error: false });
           return;
         }
         addEntries(
@@ -464,11 +555,62 @@ export function SkillImportModal(props: {
     );
   }, [addEntries, T]);
 
+  /** 调用后端递归扫描指定目录，扫描结果追加为可导入条目。 */
+  const runScanDir = useCallback(
+    (dir: string) => {
+      scanSkillDir(dir).then(
+        (list) => {
+          if (list.length === 0) {
+            setMsg({ text: T("pl.skillModal.scanDirEmpty"), error: false });
+            return;
+          }
+          addEntries(
+            list.map((s) => ({
+              name: s.name,
+              title: s.title,
+              body: s.body,
+              summary: s.summary,
+              exists: s.exists,
+              source: "disk" as const,
+            })),
+          );
+        },
+        (err: unknown) => {
+          setMsg({ text: err instanceof Error ? err.message : String(err), error: true });
+        },
+      );
+    },
+    [addEntries, T],
+  );
+
+  /** 打开目录选择器选择文件夹（优先原生，回退浏览式弹窗），选中后扫描其中的 md 文件。 */
+  const scanFolder = useCallback(async () => {
+    if (isDirectoryPickerAvailable()) {
+      try {
+        const dir = await pickExportDirectory();
+        if (dir) {
+          runScanDir(dir);
+          return;
+        }
+        // 原生选择器被用户取消：不打开浏览弹窗
+        return;
+      } catch {
+        // 原生能力不可用 → 回退到浏览式
+      }
+    }
+    if (!isDirectoryBrowserAvailable()) {
+      setMsg({ text: T("pl.skillModal.directoryPickerUnavailable"), error: true });
+      return;
+    }
+    setScanDirPickerOpen(true);
+  }, [runScanDir, T]);
+
   /** 更新某条目字段；编辑会使之前的校验与修复记录失效。 */
   const updateEntry = useCallback((key: string, patch: Partial<EditableEntry>) => {
     setEntries((prev) => prev.map((e) => (e.key === key ? { ...e, ...patch } : e)));
     setValidation(null);
     setFixLog([]);
+    setFillLog([]);
     setAiState("idle");
     setAiResult(null);
   }, []);
@@ -490,6 +632,18 @@ export function SkillImportModal(props: {
   /** 折叠 / 展开单条技能框。 */
   const toggleCollapse = useCallback((key: string) => {
     setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
+  }, []);
+
+  /** 切换导出范围：重置结果面板/校验/AI 状态，避免上次导出遗留的「完成」面板阻塞重新导出。 */
+  const changeScope = useCallback((scope: SkillExportScope) => {
+    setExportScope(scope);
+    setResult(null);
+    setValidation(null);
+    setFixLog([]);
+    setFillLog([]);
+    setAiState("idle");
+    setAiResult(null);
+    setMsg(null);
   }, []);
 
   /** 在正文光标处插入 {{变量名}}（有选中文本时以选中内容作为变量名）。
@@ -546,9 +700,55 @@ export function SkillImportModal(props: {
     [T],
   );
 
-  /** 校验全部勾选条目，返回结构化问题清单（含可修复标记）。 */
+  /** 导出模式校验时给正文 {{变量名}} 赋值：替换为方括号包裹的自然语言占位 [name]。
+   * 返回替换后的正文 + 每条替换记录（{{name}} → [name]），供校验详情展示改动。 */
+  const wrapTemplateVars = useCallback(
+    (body: string): { body: string; changes: string[] } => {
+      const changes: string[] = [];
+      const defaultVar = T("pl.skillModal.varFixDefault");
+      let out = "";
+      let i = 0;
+      const len = body.length;
+      while (i < len) {
+        if (body.startsWith("{{", i)) {
+          const close = body.indexOf("}}", i + 2);
+          if (close === -1) {
+            // 未闭合 {{：取余下可用文本作为变量名，替换后结束
+            const rest = body
+              .slice(i + 2)
+              .replace(/[{}]/g, " ")
+              .replace(/\s+/g, " ")
+              .trim();
+            const name = rest || defaultVar;
+            out += `[${name}]`;
+            changes.push(`{{${name}}} → [${name}]`);
+            i = len;
+            continue;
+          }
+          const inner = body.slice(i + 2, close);
+          const name = inner.replace(/[{}]/g, " ").replace(/\s+/g, " ").trim() || defaultVar;
+          out += `[${name}]`;
+          changes.push(`{{${inner.trim() || name}}} → [${name}]`);
+          i = close + 2;
+          continue;
+        }
+        if (body.startsWith("}}", i)) {
+          // 多余的 }} 视为非法直接丢弃
+          i += 2;
+          continue;
+        }
+        out += body[i];
+        i += 1;
+      }
+      return { body: out, changes };
+    },
+    [T],
+  );
+
+  /** 校验全部勾选条目，返回结构化问题清单（含可修复标记）。
+   * requireNameAndSummary：导出模式为 true，技能名 / 摘要也纳入必填（AI 补充完成后会自动触发校验）。 */
   const validateEntries = useCallback(
-    (list: EditableEntry[]): ValidateResult => {
+    (list: EditableEntry[], requireNameAndSummary: boolean): ValidateResult => {
       const checked = list.filter((e) => e.checked);
       const issues: EntryIssue[] = [];
       for (const e of checked) {
@@ -559,6 +759,23 @@ export function SkillImportModal(props: {
             entryTitle,
             message: T("pl.skillModal.titleRequired"),
             fixable: true,
+          });
+        }
+        // 导出模式：技能名 / 摘要缺失时提示用户补全（摘要可由 AI 补充自动生成）
+        if (requireNameAndSummary && !e.name.trim()) {
+          issues.push({
+            key: e.key,
+            entryTitle,
+            message: T("pl.skillModal.nameRequired"),
+            fixable: false,
+          });
+        }
+        if (requireNameAndSummary && !e.summary.trim()) {
+          issues.push({
+            key: e.key,
+            entryTitle,
+            message: T("pl.skillModal.summaryRequired"),
+            fixable: false,
           });
         }
         if (!e.body.trim()) {
@@ -578,24 +795,50 @@ export function SkillImportModal(props: {
     [T, validateTemplateVars],
   );
 
-  /** 校验全部勾选条目：必填项 + 模板变量格式，问题以结构化清单展示。
-   * 导出模式校验通过后自动执行 AI 操作：逐条生成英文技能名与描述（正文 {{变量名}} 原样保留并在描述中补全）。 */
-  const handleValidate = useCallback(async () => {
+  /** 校验全部勾选条目：必填项 + 模板变量格式，问题以结构化清单展示（不触发 AI）。
+   * 导出模式：校验前先给含 {{变量名}} 的正文赋值（→ [name]），并把改动记录到 fillLog 在详情中列出。 */
+  const handleValidate = useCallback(() => {
     if (entries.filter((e) => e.checked).length === 0) {
       setMsg({ text: T("pl.skillModal.emptyChecked"), error: true });
       return;
     }
-    const result = validateEntries(entries);
-    setValidation(result);
-    setFixLog([]);
     setMsg(null);
-    // 导出模式：校验通过后合并 AI 操作，逐条生成技能名与描述；
-    // 校验未通过或非导出模式时清空上次 AI 结果，避免底部提示残留旧数据
-    if (mode !== "export" || !result.ok) {
-      setAiState("idle");
-      setAiResult(null);
+    setFixLog([]);
+    setFillLog([]);
+    let list = entries;
+    if (mode === "export") {
+      // 导出模式：给正文里的 {{变量名}} 统一赋值（方括号占位），并汇总改动清单
+      const log: string[] = [];
+      let next = entries;
+      for (let k = 0; k < next.length; k++) {
+        const e = next[k]!;
+        if (!e.checked) continue;
+        const w = wrapTemplateVars(e.body);
+        if (w.body === e.body) continue;
+        for (const c of w.changes) {
+          log.push(`「${e.title.trim() || T("pl.skillModal.unnamed")}」${c}`);
+        }
+        next = next.map((x) => (x.key === e.key ? { ...x, body: w.body } : x));
+      }
+      if (log.length > 0) {
+        setFillLog(log);
+        setEntries(next); // 写入赋值后的正文，确保导出使用处理后的内容
+        list = next;
+      }
+    }
+    const result = validateEntries(list, mode === "export");
+    setValidation(result);
+  }, [entries, mode, T, validateEntries, wrapTemplateVars]);
+
+  /** AI 补充（仅导出模式）：直接逐条用 AI 生成英文技能名与摘要
+   * （正文 {{变量名}} 原样保留，描述中自动补全占位符说明）；
+   * 生成完成后自动触发校验，校验通过后即可导出。 */
+  const handleAiEnhance = useCallback(async () => {
+    if (entries.filter((e) => e.checked).length === 0) {
+      setMsg({ text: T("pl.skillModal.emptyChecked"), error: true });
       return;
     }
+    setMsg(null);
     setAiState("running");
     setAiResult(null);
     const checked = entries.filter((e) => e.checked);
@@ -626,20 +869,22 @@ export function SkillImportModal(props: {
       }
     }
     // 应用 AI 结果：补全技能名/摘要，并标记失败条目（行内红色高亮 + 原因）
-    setEntries((prev) =>
-      prev.map((e) => {
-        const update = updates.get(e.key);
-        if (update) return { ...e, ...update, aiFailed: false, aiFailReason: undefined };
-        const error = errors.find((err) => err.key === e.key);
-        if (error && e.checked) return { ...e, aiFailed: true, aiFailReason: error.reason };
-        return e;
-      }),
-    );
+    const next = entries.map((e) => {
+      const update = updates.get(e.key);
+      if (update) return { ...e, ...update, aiFailed: false, aiFailReason: undefined };
+      const error = errors.find((err) => err.key === e.key);
+      if (error && e.checked) return { ...e, aiFailed: true, aiFailReason: error.reason };
+      return e;
+    });
+    setEntries(next);
     setAiState("done");
     setAiResult({
       done: updates.size,
       errors: errors.map(({ title, reason }) => ({ title, reason })),
     });
+    // 补充完成后自动触发校验，校验通过后即可导出
+    setFixLog([]);
+    setValidation(validateEntries(next, mode === "export"));
   }, [entries, mode, T, validateEntries]);
 
   /** 一键修复：自动修复可修复的问题（补全标题、修复模板变量），并展示修复内容后重新校验。 */
@@ -654,8 +899,8 @@ export function SkillImportModal(props: {
     });
     setEntries(next);
     setFixLog(fixLog);
-    setValidation(validateEntries(next));
-  }, [entries, validation, T, validateEntries]);
+    setValidation(validateEntries(next, mode === "export"));
+  }, [entries, validation, T, validateEntries, mode]);
 
   /** 保存勾选条目：导入模式入库、导出模式写盘（仅在校验通过后可点）。 */
   const handleSave = useCallback(() => {
@@ -667,6 +912,19 @@ export function SkillImportModal(props: {
     }
     setSaving(true);
     if (mode === "export") {
+      // 项目技能：优先用输入框（可手动输入或用「浏览」选择）中的路径，其次自动解析到的当前项目路径
+      let rootPath: string | undefined;
+      if (exportScope === "project") {
+        const targetPath = projectPathInput.trim() || projectCwd || "";
+        if (!targetPath) {
+          setSaving(false);
+          setMsg({ text: T("pl.skillModal.projectPathEmpty"), error: true });
+          return;
+        }
+        rootPath = targetPath;
+        // 记录本次导出的项目路径，供下次打开自动填充
+        saveProjectPath(targetPath);
+      }
       const payload: SkillEntry[] = checked.map((e) => ({
         promptId: e.promptId,
         name: e.name,
@@ -674,18 +932,40 @@ export function SkillImportModal(props: {
         body: e.body,
         summary: e.summary,
       }));
-      exportSkillEntries(payload).then(
-        (result) => {
-          setSaving(false);
-          onExported?.(result);
-          // 导出写盘成功后关闭弹窗，回到词库管理面板
-          onClose();
-        },
-        (err: unknown) => {
-          setSaving(false);
-          setMsg({ text: err instanceof Error ? err.message : String(err), error: true });
-        },
-      );
+      exportSkillEntries(payload, exportScope, rootPath).then(
+          (res) => {
+            setSaving(false);
+            // 导出成功后展示逐条结果，由用户点击「完成」关闭弹窗
+            const rows: ImportResultRow[] = [
+              ...res.items.map((i) => ({
+                title: i.title,
+                label: T("pl.resultExported"),
+                kind: "ok" as const,
+              })),
+              ...res.errors.map((e) => ({
+                title: e.title,
+                label: T("pl.resultFail"),
+                kind: "error" as const,
+                reason: e.reason,
+              })),
+            ];
+            const errNote = res.errors.length
+              ? T("pl.skillModal.savedExportErrors", { n: res.errors.length })
+              : "";
+            const rootNote = res.root
+              ? T("pl.skillModal.exportRoot", { root: res.root })
+              : "";
+            setResult({
+              title: T("pl.resultExportTitle"),
+              summary: `${T("pl.skillModal.savedExport", { exported: res.exported })} · ${rootNote}${errNote}`,
+              rows,
+            });
+          },
+          (err: unknown) => {
+            setSaving(false);
+            setMsg({ text: err instanceof Error ? err.message : String(err), error: true });
+          },
+        );
       return;
     }
     const payload: SkillEntry[] = checked.map((e) => ({
@@ -695,18 +975,49 @@ export function SkillImportModal(props: {
       summary: e.summary,
     }));
     importSkillEntries(payload).then(
-      () => {
+      (res) => {
         setSaving(false);
         notifyDataChanged();
-        // 保存成功后关闭弹窗，回到词库管理面板
-        onClose();
+        onImported?.(res);
+        // 导入成功后展示逐条结果，由用户点击「完成」关闭弹窗
+        const rows: ImportResultRow[] = [
+          ...res.items.map((i) => ({
+            title: i.title,
+            label:
+              i.status === "updated"
+                ? T("pl.resultUpdated")
+                : i.status === "skipped"
+                  ? T("pl.resultSkipped")
+                  : T("pl.resultImported"),
+            kind:
+              i.status === "updated"
+                ? ("updated" as const)
+                : i.status === "skipped"
+                  ? ("skipped" as const)
+                  : ("ok" as const),
+          })),
+          ...res.errors.map((e) => ({
+            title: e.name,
+            label: T("pl.resultFail"),
+            kind: "error" as const,
+            reason: e.reason,
+          })),
+        ];
+        const errNote = res.errors.length
+          ? T("pl.skillModal.savedErrors", { n: res.errors.length })
+          : "";
+        setResult({
+          title: T("pl.resultTitle"),
+          summary: `${T("pl.skillModal.saved", { imported: res.imported, updated: res.updated })}${errNote}`,
+          rows,
+        });
       },
       (err: unknown) => {
         setSaving(false);
         setMsg({ text: err instanceof Error ? err.message : String(err), error: true });
       },
     );
-  }, [validation, saving, entries, mode, onClose, onExported, T]);
+  }, [validation, saving, entries, mode, exportScope, projectCwd, projectPathInput, onImported, T]);
 
   if (!open) return null;
 
@@ -717,64 +1028,47 @@ export function SkillImportModal(props: {
       role="dialog"
       aria-modal="true"
       aria-label={T(mode === "export" ? "pl.skillModal.exportTitle" : "pl.skillModal.title")}
-      className={PL_DIALOG_OVERLAY}
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: "absolute",
+        inset: 0,
+        zIndex: 10,
+        display: "flex",
+        flexDirection: "column",
+        background: TONE.panel,
+        borderRadius: 12,
+        padding: "18px 7px 18px 10px",
+        boxSizing: "border-box",
+      }}
     >
-      <style>{PL_DIALOG_CSS}</style>
-      <div
-        className={PL_DIALOG}
-        style={{
-          width: 1020,
-          maxWidth: "90%",
-          height: "min(720px, calc(100vh - 60px))",
-          gap: 12,
-        }}
-      >
         {/* 标题 + 关闭按钮（弹窗仅通过按钮手动关闭） */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-          <strong style={{ fontSize: 15, fontWeight: 560, flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          <BookIcon color={TONE.accent} />
+          <strong style={{ fontSize: 15, fontWeight: 600, flex: 1, minWidth: 0, color: TONE.text }}>
             {T(mode === "export" ? "pl.skillModal.exportTitle" : "pl.skillModal.title")}
           </strong>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={T("pl.close")}
-            data-tip={T("pl.close")}
-            style={{
-              flexShrink: 0,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              width: 26,
-              height: 26,
-              border: "none",
-              outline: "none",
-              borderRadius: 6,
-              background: "transparent",
-              color: TONE.muted,
-              cursor: "pointer",
-              fontSize: 15,
-              lineHeight: 1,
-              transition: "background-color .24s cubic-bezier(.22,1,.36,1), color .24s cubic-bezier(.22,1,.36,1)",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = "var(--dsw-alias-interactive-bg-hover)";
-              e.currentTarget.style.color = TONE.text;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = "transparent";
-              e.currentTarget.style.color = TONE.muted;
-            }}
-          >
-            ✕
-          </button>
+          <DialogCloseButton onClick={onClose} label={T("pl.close")} />
         </div>
-        <div style={{ fontSize: 12, color: TONE.quiet, lineHeight: 1.6, flexShrink: 0 }}>
+        {/* 模块说明（与人格管理 / 技能管理说明框一致） */}
+        <div
+          style={{
+            marginTop: 10,
+            fontSize: 11.5,
+            lineHeight: 1.6,
+            color: TONE.quiet,
+            background: TONE.accentSoft,
+            border: `1px solid ${TONE.border}`,
+            borderRadius: 7,
+            padding: "7px 10px",
+            flexShrink: 0,
+          }}
+        >
           {T(mode === "export" ? "pl.skillModal.exportSubtitle" : "pl.skillModal.subtitle")}
         </div>
 
         {/* 工具栏（仅导入模式）：选择文件 / 扫描目录 */}
         {mode === "import" && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flexShrink: 0, marginTop: 10 }}>
             <Button
               type="button"
               variant="primary"
@@ -793,6 +1087,15 @@ export function SkillImportModal(props: {
             >
               {T("pl.skillModal.scanSkills")}
             </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={plBtn("ghost", "sm")}
+              onClick={scanFolder}
+            >
+              {T("pl.skillModal.scanFolder")}
+            </Button>
             <span style={{ fontSize: 11, color: TONE.quiet }}>
               {entries.length === 0
                 ? T("pl.skillModal.selectHint")
@@ -801,9 +1104,136 @@ export function SkillImportModal(props: {
           </div>
         )}
 
+        {/* 导出范围（仅导出模式）：通用 / 项目 / 私有 三选一，决定技能写盘位置与注入方式 */}
+        {mode === "export" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0, marginTop: 10 }}>
+            <div style={{ fontSize: 12, fontWeight: 560, color: TONE.muted }}>
+              {T("pl.skillModal.exportScope")}
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              {(
+                [
+                  {
+                    value: "global",
+                    label: T("pl.skillModal.scopeGlobal"),
+                    desc: T("pl.skillModal.scopeGlobalDesc"),
+                    path: "~/.dsh/skills/",
+                  },
+                  {
+                    value: "project",
+                    label: T("pl.skillModal.scopeProject"),
+                    desc: T("pl.skillModal.scopeProjectDesc"),
+                    path: projectCwd ? `${projectCwd}` : T("pl.skillModal.projectNoPath"),
+                  },
+                  {
+                    value: "private",
+                    label: T("pl.skillModal.scopePrivate"),
+                    desc: T("pl.skillModal.scopePrivateDesc"),
+                    path: "~/.dsh/prompt-library/session-prompts/",
+                  },
+                ] as Array<{ value: SkillExportScope; label: string; desc: string; path: string }>
+              ).map((opt) => {
+                const active = exportScope === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => changeScope(opt.value)}
+                    aria-pressed={active}
+                    style={{
+                      flex: 1,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 3,
+                      padding: "8px 10px",
+                      textAlign: "left",
+                      borderRadius: 8,
+                      cursor: "pointer",
+                      fontFamily: MONO,
+                      background: active
+                        ? "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 10%, transparent)"
+                        : TONE.row,
+                      border: `1px solid ${
+                        active ? "var(--dsw-alias-brand-primary, #8ec5ff)" : TONE.border
+                      }`,
+                      transition:
+                        "border-color .24s cubic-bezier(.22,1,.36,1), background-color .24s cubic-bezier(.22,1,.36,1)",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!active) e.currentTarget.style.borderColor = TONE.borderStrong;
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!active) e.currentTarget.style.borderColor = TONE.border;
+                    }}
+                  >
+                    <span style={{ fontSize: 12, fontWeight: 560, color: active ? TONE.accent : TONE.text }}>
+                      {opt.label}
+                    </span>
+                    <span style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5 }}>{opt.desc}</span>
+                    <span
+                      style={{
+                        fontSize: 10,
+                        lineHeight: 1.4,
+                        color: active ? TONE.accent : TONE.quiet,
+                        overflowWrap: "anywhere",
+                      }}
+                    >
+                      {opt.path}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            {/* 项目技能：始终展示路径输入框，支持手动输入或用「浏览」选择目录填充；
+                已解析到当前项目路径时自动预填，用户可随时修改导出位置 */}
+            {exportScope === "project" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: projectCwdLoading
+                      ? TONE.quiet
+                      : projectCwd
+                        ? TONE.quiet
+                        : TONE.red,
+                  }}
+                >
+                  {projectCwdLoading
+                    ? T("pl.skillModal.projectPathResolving")
+                    : projectCwd
+                      ? T("pl.skillModal.projectPathHintResolved")
+                      : T("pl.skillModal.projectPathHint")}
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input
+                    type="text"
+                    value={projectPathInput || projectCwd || ""}
+                    onChange={(e) => setProjectPathInput(e.target.value)}
+                    placeholder={T("pl.skillModal.projectPathPlaceholder")}
+                    spellCheck={false}
+                    disabled={projectCwdLoading}
+                    style={inputStyle}
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className={plBtn("ghost", "sm")}
+                    onClick={handlePickDirectory}
+                    disabled={projectCwdLoading}
+                    style={{ flexShrink: 0, minWidth: 64 }}
+                  >
+                    {T("pl.skillModal.browse")}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* 工具栏（仅导出模式）：上传自定义 JSON 数据追加技能条目 */}
         {mode === "export" && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flexShrink: 0, marginTop: 10 }}>
             <Button
               type="button"
               variant="ghost"
@@ -821,7 +1251,7 @@ export function SkillImportModal(props: {
         )}
 
         {/* 条目列表：可滚动 */}
-        <div style={{ flex: 1, minHeight: 0, overflow: "auto", paddingRight: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ flex: 1, minHeight: 0, overflow: "auto", paddingRight: 10, paddingTop: 14, display: "flex", flexDirection: "column", gap: 10, marginTop: 10 }}>
           {entries.length === 0 ? (
             <div
               style={{
@@ -1021,7 +1451,7 @@ export function SkillImportModal(props: {
                       disabled={!entry.checked}
                       style={inputStyle}
                     />
-                    {/* 正文 + 插入变量 */}
+                    {/* 正文 + 插入变量（插入变量仅导入模式展示，导出技能不带变量占位符） */}
                     <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
                       <textarea
                         ref={(el) => {
@@ -1041,18 +1471,20 @@ export function SkillImportModal(props: {
                           whiteSpace: "pre-wrap",
                         }}
                       />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className={plBtn("ghost", "sm")}
-                        onClick={() => insertVar(entry.key)}
-                        disabled={!entry.checked}
-                        data-tip={T("pl.insertVariableTitle")}
-                        style={{ flexShrink: 0 }}
-                      >
-                        {T("pl.skillModal.insertVar")}
-                      </Button>
+                      {mode !== "export" && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className={plBtn("ghost", "sm")}
+                          onClick={() => insertVar(entry.key)}
+                          disabled={!entry.checked}
+                          data-tip={T("pl.insertVariableTitle")}
+                          style={{ flexShrink: 0 }}
+                        >
+                          {T("pl.skillModal.insertVar")}
+                        </Button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1085,19 +1517,20 @@ export function SkillImportModal(props: {
         </div>
 
         {/* 校验结果 / 操作反馈 */}
-        {msg && (
+        {!result && msg && (
           <div
             style={{
               flexShrink: 0,
               fontSize: 12,
               lineHeight: 1.5,
               color: msg.error ? TONE.red : TONE.text,
+              marginTop: 8,
             }}
           >
             {msg.text}
           </div>
         )}
-        {validation && (
+        {!result && validation && (
           <div
             role="alert"
             style={{
@@ -1163,7 +1596,7 @@ export function SkillImportModal(props: {
             )}
           </div>
         )}
-        {fixLog.length > 0 && (
+        {!result && fixLog.length > 0 && (
           <div
             style={{
               flexShrink: 0,
@@ -1197,9 +1630,45 @@ export function SkillImportModal(props: {
             </ul>
           </div>
         )}
+        {!result && fillLog.length > 0 && (
+          <div
+            style={{
+              flexShrink: 0,
+              display: "flex",
+              flexDirection: "column",
+              gap: 4,
+              padding: "7px 10px",
+              borderRadius: 7,
+              fontSize: 12,
+              lineHeight: 1.5,
+              color: TONE.accent,
+              background:
+                "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 8%, transparent)",
+              border:
+                "1px solid color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 40%, transparent)",
+            }}
+          >
+            <div>{T("pl.skillModal.fillDone", { count: fillLog.length })}</div>
+            <ul
+              style={{
+                margin: "0 0 0 8px",
+                padding: 0,
+                display: "flex",
+                flexDirection: "column",
+                gap: 3,
+              }}
+            >
+              {fillLog.map((f, idx) => (
+                <li key={idx} style={{ listStyle: "none" }}>
+                  {f}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
-        {/* 导出模式 AI 校验底部提示：校验通过后自动用 AI 生成技能名与描述，反馈生成进度与结果 */}
-        {mode === "export" && aiState !== "idle" && (
+        {/* 导出模式 AI 补充底部提示：AI 补充按钮触发，反馈生成进度与结果 */}
+        {!result && mode === "export" && aiState !== "idle" && (
           <div
             role={aiState === "done" ? "status" : undefined}
             style={{
@@ -1264,37 +1733,61 @@ export function SkillImportModal(props: {
           </div>
         )}
 
-        {/* 底部操作：校验（导出模式合并 AI，校验通过后自动生成）+ 保存（仅校验通过后可用） */}
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center", flexShrink: 0 }}>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className={plBtn("ghost", "sm")}
-            onClick={handleValidate}
-            disabled={mode === "export" && aiState === "running"}
-          >
-            {mode === "export" ? T("pl.skillModal.validateAi") : T("pl.skillModal.validate")}
-          </Button>
-          <Button
-            type="button"
-            variant="primary"
-            size="sm"
-            className={plBtn("primary", "sm")}
-            onClick={handleSave}
-            disabled={
-              !validation?.ok || saving || checkedCount === 0 || (mode === "export" && aiState === "running")
-            }
-            data-tip={validation?.ok ? "" : T("pl.skillModal.selectHint")}
-          >
-            {saving
-              ? T("pl.skillModal.saving")
-              : mode === "export"
-                ? T("pl.skillModal.saveExport")
-                : T("pl.skillModal.save")}
-          </Button>
-        </div>
-      </div>
+        {/* 导入/导出结果面板：逐条展示成功/失败/跳过 */}
+        {result && (
+          <ImportResultPanel
+            title={result.title}
+            summary={result.summary}
+            rows={result.rows}
+            onDone={onClose}
+            doneLabel={T("pl.resultDone")}
+          />
+        )}
+
+        {/* 底部操作：AI 补充（仅导出模式，放最左边）+ 校验 + 保存（仅校验通过后可用） */}
+        {!result && (
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center", flexShrink: 0 }}>
+            {mode === "export" && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className={plBtn("ghost", "sm")}
+                onClick={handleAiEnhance}
+                disabled={aiState === "running"}
+                data-tip={T("pl.skillModal.aiEnhanceHint")}
+              >
+                {T("pl.skillModal.aiEnhance")}
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={plBtn("ghost", "sm")}
+              onClick={handleValidate}
+            >
+              {T("pl.skillModal.validate")}
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              className={plBtn("primary", "sm")}
+              onClick={handleSave}
+              disabled={
+                !validation?.ok || saving || checkedCount === 0 || (mode === "export" && aiState === "running")
+              }
+              data-tip={validation?.ok ? "" : T("pl.skillModal.selectHint")}
+            >
+              {saving
+                ? T("pl.skillModal.saving")
+                : mode === "export"
+                  ? T("pl.skillModal.saveExport")
+                  : T("pl.skillModal.save")}
+            </Button>
+          </div>
+        )}
 
       {/* 选择本地 md 文件用的隐藏文件输入 */}
       <input
@@ -1311,6 +1804,29 @@ export function SkillImportModal(props: {
         accept="application/json,.json"
         style={{ display: "none" }}
         onChange={onPickJson}
+      />
+      {/* 浏览式目录选择弹窗（桌面端无原生目录选择器时的回退方案） */}
+      <DirectoryPickerModal
+        open={dirPickerOpen}
+        initialPath={projectPathInput || projectCwd || ""}
+        onPick={(dir) => {
+          setProjectPathInput(dir);
+          setMsg(null);
+          setDirPickerOpen(false);
+        }}
+        onClose={() => setDirPickerOpen(false)}
+        t={T}
+      />
+      {/* 「扫描文件夹」目录选择弹窗：选中后递归扫描其中的 md 文件 */}
+      <DirectoryPickerModal
+        open={scanDirPickerOpen}
+        initialPath=""
+        onPick={(dir) => {
+          setScanDirPickerOpen(false);
+          runScanDir(dir);
+        }}
+        onClose={() => setScanDirPickerOpen(false)}
+        t={T}
       />
     </div>
   );

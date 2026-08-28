@@ -33,6 +33,12 @@ export function dataDir(): string {
 
 // ── 数据文件 ────────────────────────────────────────────────────────────────
 
+/** 系统「下载」目录：Windows 取 `USERPROFILE\\Downloads`，其余平台为 `~/Downloads`。 */
+export function downloadDir(): string {
+  const home = process.env.USERPROFILE || homedir();
+  return join(home, "Downloads");
+}
+
 /** 词库文件：~/.dsh/prompt-library/prompts.json */
 export function storePath(): string {
   return join(dataDir(), "prompts.json");

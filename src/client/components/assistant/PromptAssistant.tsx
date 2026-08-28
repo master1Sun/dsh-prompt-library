@@ -37,8 +37,7 @@ import { PromptInjectPanel } from "./PromptInjectPanel.js";
 import { WhaleStage } from "./WhaleStage.js";
 import { DashboardModal } from "./DashboardModal.js";
 import { ImportExportModal } from "../settings/modules/ImportExportModal.js";
-import { TagsModal } from "../settings/modules/TagsModal.js";
-import { TrashModal } from "../settings/modules/TrashModal.js";
+import { TagDataModal } from "../settings/modules/TagDataModal.js";
 import {
   HOVER_SEQUENCE,
   SEQUENCES,
@@ -607,8 +606,11 @@ export function PromptAssistant(props: Props): ReactNode {
   // 动效鲸鱼（dshpet）走 WhaleStage 的 dsh-pet webm 双缓冲 video；素材失败时回退此处经典雪碧图。
   const [sheet, setSheet] = useState<SpriteSheet | null>(null);
   const [whaleBroken, setWhaleBroken] = useState(false); // 鲸鱼 webm 加载失败时回退经典助手
+  const [sheetFailed, setSheetFailed] = useState(false); // 鲸鱼静态素材加载失败时回退经典助手
   const [clickRev, setClickRev] = useState(0); // 鲸鱼点击回应动画触发计数
   const spriteRef = useRef<HTMLDivElement | null>(null);
+  // 已加载雪碧图对应的形象；形象切换时据此清空旧图，避免残留旧款
+  const spriteCharRef = useRef<PetCharacter | null>(null);
   // 鼠标是否悬停在助手上：悬停时播放打招呼序列（小动画）
   const [hovering, setHovering] = useState(false);
   const spriteTopic: SpriteTopic =
@@ -631,17 +633,26 @@ export function PromptAssistant(props: Props): ReactNode {
   );
   useEffect(() => {
     let alive = true;
+    // 形象切换时清空旧雪碧图并复位失败标记，避免残留旧款或误判失败；
+    // 仅切换形象才重置，普通雪碧图换装（等级/主题/心情变化）保留当前帧不闪断
+    if (spriteCharRef.current !== null && spriteCharRef.current !== character) {
+      setSheet(null);
+      setSheetFailed(false);
+    }
+    spriteCharRef.current = character;
     const load =
       character === "whale" ? getWhaleSpriteSheet() : getSpriteSheet(spriteOpts);
     load
       .then((s) => {
         if (!alive) return;
         if (s === null) return;
+        if (spriteCharRef.current !== character) return; // 已切换其他形象，丢弃过期结果
         setSheet(s);
       })
-      // 经典雪碧图生成失败时回退：清空，保持经典 SVG 不打断现有展示
+      // 经典雪碧图生成失败时回退：清空，保持经典 SVG 不打断现有展示；
+      // 鲸鱼静态素材加载失败时标记 sheetFailed，由渲染层回退经典助手
       .catch(() => {
-        if (alive) setSheet(null);
+        if (alive && spriteCharRef.current === character) setSheetFailed(true);
       });
     return () => {
       alive = false;
@@ -758,8 +769,7 @@ export function PromptAssistant(props: Props): ReactNode {
   const [dashboardOpen, setDashboardOpen] = useState(false);
   // 数据管理弹窗：右键菜单「数据管理」→ 三个子项分别打开
   const [importExportOpen, setImportExportOpen] = useState(false);
-  const [tagsOpen, setTagsOpen] = useState(false);
-  const [trashOpen, setTrashOpen] = useState(false);
+  const [tagDataOpen, setTagDataOpen] = useState(false);
   // 右键菜单「数据管理」子菜单是否展开
   const [dataMenuOpen, setDataMenuOpen] = useState(false);
   // 右键迷你菜单：记录弹出位置（clientX/Y）；点击外部或菜单项后关闭
@@ -1385,6 +1395,9 @@ export function PromptAssistant(props: Props): ReactNode {
                     "drop-shadow(0 2px 7px color-mix(in srgb, var(--dsw-alias-label-primary, #1f2937) 45%, transparent))",
                 }}
               />
+            ) : character === "whale" && !sheetFailed ? (
+              /* 鲸鱼款·静态素材加载中：保持空白，不闪经典米兔；加载失败才回退下方经典 SVG */
+              null
             ) : (
               <svg
                 width={PERSON_SIZE}
@@ -1642,31 +1655,14 @@ export function PromptAssistant(props: Props): ReactNode {
                         onClick={() => {
                           setCtxMenu(null);
                           setDataMenuOpen(false);
-                          setTagsOpen(true);
+                          setTagDataOpen(true);
                         }}
                       >
                         <CtxIcon bg="rgba(139, 92, 246, .12)" color="#8b5cf6">
                           <path d="M3 4.5A1.5 1.5 0 0 1 4.5 3h3l5 5-4.5 4.5-5-5v-3Z" />
                           <circle cx="6.4" cy="6.4" r=".4" strokeWidth="2" />
                         </CtxIcon>
-                        {T("pl.moduleTags")}
-                      </div>
-                      <div
-                        className="pl-ctx-sub"
-                        onClick={() => {
-                          setCtxMenu(null);
-                          setDataMenuOpen(false);
-                          setTrashOpen(true);
-                        }}
-                      >
-                        <CtxIcon
-                          bg="rgba(220, 38, 38, .1)"
-                          color="var(--dsw-alias-state-error-primary, #dc2626)"
-                        >
-                          <path d="M5 4.5h6v8.5a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 5 13V4.5Z" />
-                          <path d="M4 4.5h8M6.7 2.5h2.6" />
-                        </CtxIcon>
-                        {T("pl.moduleTrash")}
+                        {T("pl.moduleTagData")}
                       </div>
                     </>
                   )}
@@ -1779,14 +1775,13 @@ export function PromptAssistant(props: Props): ReactNode {
         onClose={() => setDashboardOpen(false)}
         t={T}
       />
-      {/* 数据管理：右键菜单「数据管理」→ 导入导出 / 标签 / 回收站 三个独立弹窗 */}
+      {/* 数据管理：右键菜单「数据管理」→ 导入导出 / 标签数据 两个独立弹窗 */}
       <ImportExportModal
         open={importExportOpen}
         onClose={() => setImportExportOpen(false)}
         t={T}
       />
-      <TagsModal open={tagsOpen} onClose={() => setTagsOpen(false)} t={T} />
-      <TrashModal open={trashOpen} onClose={() => setTrashOpen(false)} t={T} />
+      <TagDataModal open={tagDataOpen} onClose={() => setTagDataOpen(false)} t={T} />
     </>
   );
 }

@@ -26,7 +26,6 @@ import {
   listTags as apiListTags,
   updatePrompt as apiUpdate,
   usePrompt as apiUse,
-  learnPrompt as apiLearn,
   polishPrompt as apiPolish,
 } from "../utils/api.js";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
@@ -36,7 +35,6 @@ import { SelectionAddPrompt } from "./SelectionAddPrompt.js";
 import { Pagination } from "./Pagination.js";
 import { TagInput } from "./TagInput.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
-import { AUTO_LEARN_TOAST_MS, AUTO_LEARN_UNDO_MS, useAutoLearn } from "../utils/auto-learn.js";
 import { isRecent, markRecent } from "../utils/recent-created.js";
 import { rowBackground } from "../utils/theme.js";
 import { notifyDataChanged, useDataChanged, useExportDownloaded, useFillDraft } from "../utils/data-sync.js";
@@ -626,20 +624,10 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
   });
   // 编辑表单正文输入框引用：供「插入变量 {{}}」定位光标
   const bodyRef = useRef<HTMLTextAreaElement>(null);
-  const [toast, setToast] = useState<{ visible: boolean; text?: string; undoId?: string }>({ visible: false });
+  const [toast, setToast] = useState<{ visible: boolean; text?: string }>({ visible: false });
   // 模板变量填充弹窗：插入含 {{变量}} 的提示词前弹出
   // fromOverlay：由 # 浮层触发，确认后需替换「#」及其后的筛选内容
   const [template, setTemplate] = useState<{ prompt: Prompt; mode: "insert" | "overwrite"; fromOverlay?: boolean } | null>(null);
-  // 手动确认模式：记录待确认入库的正文，聊天框弹出保存/取消
-  // text：当前待保存正文（可编辑）；original：首次学习到的原稿；showOriginal：对比视图，true 时展示原稿（只读）
-  // 自动学习内容统一使用配置的自动学习标签（autoLearnTag），不做手动标签选择
-  const [pendingConfirm, setPendingConfirm] = useState<{ text: string; original: string; showOriginal: boolean; summary?: string } | null>(null);
-  // 手动确认里是否点过「AI 润色」：点过则保存后不再触发后台 AI 完善
-  const [polishConfirmUsed, setPolishConfirmUsed] = useState(false);
-  // 确认卡片内的 AI 润色加载状态
-  const [polishConfirmLoading, setPolishConfirmLoading] = useState(false);
-  // 确认卡片内 AI 润色失败提示（再次点击润色时清除）
-  const [polishConfirmError, setPolishConfirmError] = useState<string | null>(null);
   // 查看弹层：点击列表项「查看」显示完整标题/标签/正文
   const [viewing, setViewing] = useState<Prompt | null>(null);
   // 查看详情「AI 优化」：润色状态、结果与原稿/润色稿切换
@@ -674,10 +662,10 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
     if (body) inputActions.setDraft(body);
   });
 
-  const showToast = useCallback((text?: string, undoId?: string) => {
-    setToast({ visible: true, text, undoId });
-    // 带「撤销」的 toast 展示更久，留足操作时间；普通提示按默认时长
-    setTimeout(() => setToast({ visible: false }), undoId ? AUTO_LEARN_UNDO_MS : AUTO_LEARN_TOAST_MS);
+  const showToast = useCallback((text?: string) => {
+    setToast({ visible: true, text });
+    // 提示 toast 展示一段时间后自动消失
+    setTimeout(() => setToast({ visible: false }), 2500);
   }, []);
 
   const refresh = useCallback(() => {
@@ -720,44 +708,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
     showToast(T("pl.exported", { count }));
   }, [showToast, T]));
 
-  // 自动学习
-  useAutoLearn(draft, prompts, settings, useCallback((learned: Prompt) => {
-    // 通知两侧面板重新加载，展示自动学习结果（此刻可能还未被 AI 完善）
-    notifyDataChanged();
-    // 自动学习 toast 附带「撤销」入口：撤销即删除刚入库的这条（移入回收站，可恢复）
-    showToast(undefined, learned.id);
-    // 若开启 AI 智能完善：AI 回写是异步的（约 10~30 秒）。
-    // 轮询列表直到该条提示词完成 AI 完善（aiRefined === true），
-    // 再刷新展示 AI 生成的标题/标签/摘要，避免前端一直停留在自动完善结果。
-    if (!settings.aiEnrichEnabled) return;
-    const started = Date.now();
-    const maxWaitMs = 60_000;
-    const timer = setInterval(async () => {
-      if (Date.now() - started > maxWaitMs) {
-        clearInterval(timer);
-        return;
-      }
-      try {
-        const list = await apiList();
-        const updated = list.find((p) => p.id === learned.id);
-        if (updated?.aiRefined) {
-          clearInterval(timer);
-          setPrompts(list);
-          // AI 完善回写完成后，同样通知两侧面板同步刷新
-          notifyDataChanged();
-        }
-      } catch {
-        // 拉取失败忽略，等待下一轮
-      }
-    }, 4000);
-  }, [showToast, settings.aiEnrichEnabled]),
-  // 手动确认模式回调：学习到正文后不自动保存，交由界面弹出保存/取消
-  useCallback((text: string) => {
-    setPendingConfirm({ text, original: text, showOriginal: false });
-    setPolishConfirmUsed(false);
-  }, []));
-
-  // 组件挂载即加载提示词列表（供 # 触发 / 自动学习使用，不依赖面板是否打开）
+  // 组件挂载即加载提示词列表（供 # 触发等后台能力使用，不依赖面板是否打开）
   useEffect(() => {
     if (phase === "idle") refresh();
   }, [phase, refresh]);
@@ -964,72 +915,13 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
       if (panel && panel.contains(t)) return;
       // 点击触发按钮 / 悬浮容器内部 → 不关闭（保留按钮自身的 toggle）
       if (t.closest("[data-prompt-library]")) return;
-      // 编辑表单、待确认卡片或查看弹层正在操作 → 不强关，避免误丢内容/打断查看
-      if (editing || pendingConfirm !== null || viewing) return;
+      // 编辑表单或查看弹层正在操作 → 不强关，避免误丢内容/打断查看
+      if (editing || viewing) return;
       setOpen(false);
     };
     document.addEventListener("mousedown", onDocMouseDown, true);
     return () => document.removeEventListener("mousedown", onDocMouseDown, true);
-  }, [open, editing, pendingConfirm, viewing, panelId]);
-
-  // 手动确认：保存选中正文到词库（支持编辑正文，润色后可对比原稿；标签统一用自动学习标签）
-  const confirmLearn = useCallback(async () => {
-    const item = pendingConfirm;
-    if (!item) return;
-    setPendingConfirm(null);
-    try {
-      // 当前展示的是原稿则保存原稿；否则保存润色/编辑后的正文
-      const text = (item.showOriginal ? item.original : item.text).trim();
-      // 点过「AI 润色」则已是润色后的正文，保存时跳过后台 AI 完善
-      // 自动学习内容统一使用配置的自动学习标签（autoLearnTag）
-      const learned = await apiLearn(text, settings.autoLearnTag, polishConfirmUsed, item.summary);
-      setPolishConfirmUsed(false);
-      markRecent(learned.id);
-      notifyDataChanged();
-      showToast();
-    } catch {
-      /* 静默失败 */
-    }
-  }, [pendingConfirm, settings.autoLearnTag, showToast, polishConfirmUsed]);
-
-  // 手动确认：放弃保存
-  const cancelLearn = useCallback(() => {
-    setPendingConfirm(null);
-    setPolishConfirmLoading(false);
-    setPolishConfirmUsed(false);
-  }, []);
-
-  // 手动确认卡片：AI 润色确认中的正文，完成后直接把润色结果填充回卡片预览
-  const polishLearnText = useCallback(async () => {
-    if (!pendingConfirm || polishConfirmLoading) return;
-    setPolishConfirmLoading(true);
-    setPolishConfirmError(null);
-    try {
-      const res = await apiPolish(pendingConfirm.text, { withSummary: true });
-      // 润色完填充为润色稿，并切回润色稿视图（保留原稿用于对比），保存时连同 AI 摘要一并入库
-      setPendingConfirm((prev) => (prev ? { ...prev, text: res.polished, showOriginal: false, summary: res.summary ?? prev.summary } : prev));
-      // 已在本卡片内完成 AI 润色，保存时不再重复触发后台 AI 完善
-      setPolishConfirmUsed(true);
-    } catch (e: unknown) {
-      // 润色失败：卡片内给出错误提示，用户可再次点击重试
-      setPolishConfirmError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setPolishConfirmLoading(false);
-    }
-  }, [pendingConfirm, polishConfirmLoading]);
-
-  // 自动学习 toast 的「撤销」：删除刚自动学习入库的那条（移入回收站，可恢复）
-  const undoLearn = useCallback(async () => {
-    const id = toast.undoId;
-    setToast({ visible: false });
-    if (!id) return;
-    try {
-      await apiDelete(id);
-      notifyDataChanged();
-    } catch {
-      /* 静默失败 */
-    }
-  }, [toast.undoId]);
+  }, [open, editing, viewing, panelId]);
 
   // 查看详情「AI 优化」：对正文执行润色，成功后展示结果（可编辑/对比原稿/复制/插入/保存）
   const startViewPolish = useCallback(async () => {
@@ -1165,173 +1057,13 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
             fontSize: 11,
             fontFamily: MONO,
             whiteSpace: "nowrap",
-            // 有撤销按钮时需可点击；纯提示时穿透不挡点击
-            pointerEvents: toast.undoId ? "auto" : "none",
+            // 纯提示：穿透不挡点击
+            pointerEvents: "none",
             opacity: 0.94,
             zIndex: 1001,
           }}
         >
           &#10003; {toast.text || T("pl.learnedToast")}
-          {toast.undoId && (
-            <button
-              type="button"
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={undoLearn}
-              style={{
-                cursor: "pointer",
-                padding: "1px 8px",
-                color: "inherit",
-                background: "rgba(0,0,0,0.14)",
-                border: "none",
-                borderRadius: 4,
-                fontSize: 11,
-                fontFamily: MONO,
-                lineHeight: "16px",
-              }}
-            >
-              {T("pl.undo")}
-            </button>
-          )}
-        </span>
-      )}
-
-      {/* 手动确认卡片：学习到提示词后在聊天框弹出保存/取消；支持编辑正文/标签，润色后对比原稿 */}
-      {pendingConfirm !== null && (
-        <span
-          role="dialog"
-          aria-label={T("pl.confirmSave")}
-          style={{
-            position: "absolute",
-            bottom: "calc(100% + 6px)",
-            right: 0,
-            zIndex: 1002,
-            display: "flex",
-            flexDirection: "column",
-            gap: 8,
-            width: 300,
-            boxSizing: "border-box",
-            padding: "10px 12px",
-            color: TONE.text,
-            background: TONE.panel,
-            border: `1px solid ${TONE.borderStrong}`,
-            borderRadius: 10,
-            fontFamily: MONO,
-          }}
-        >
-          <div style={{ fontSize: 12, fontWeight: 600 }}>{T("pl.learnFound")}</div>
-
-          {/* 原稿 / 润色稿对比切换：仅 AI 润色后出现 */}
-          {pendingConfirm.original !== pendingConfirm.text && (
-            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-              {([
-                { value: false, label: T("pl.polished") },
-                { value: true, label: T("pl.original") },
-              ] as const).map((opt) => (
-                <button
-                  key={String(opt.value)}
-                  type="button"
-                  onClick={() => setPendingConfirm((prev) => (prev ? { ...prev, showOriginal: opt.value } : prev))}
-                  style={{
-                    cursor: "pointer",
-                    padding: "2px 10px",
-                    fontSize: 11,
-                    fontFamily: MONO,
-                    color: pendingConfirm.showOriginal === opt.value ? TONE.accent : TONE.muted,
-                    background: pendingConfirm.showOriginal === opt.value ? TONE.accentSoft : "transparent",
-                    border: `1px solid ${pendingConfirm.showOriginal === opt.value ? TONE.accent : TONE.border}`,
-                    borderRadius: 999,
-                  }}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* 正文编辑区：对比原稿时只读展示原稿，避免误改；内容较长时自动撑高便于查看 */}
-          <textarea
-            value={pendingConfirm.showOriginal ? pendingConfirm.original : pendingConfirm.text}
-            readOnly={pendingConfirm.showOriginal}
-            onChange={(e) => setPendingConfirm((prev) => (prev ? { ...prev, text: e.target.value } : prev))}
-            style={{
-              maxHeight: 300,
-              minHeight: 96,
-              resize: "vertical",
-              boxSizing: "border-box",
-              padding: "6px 8px",
-              fontSize: 11,
-              lineHeight: 1.5,
-              color: TONE.text,
-              background: pendingConfirm.showOriginal ? TONE.panel : rowBackground(),
-              border: `1px solid ${TONE.border}`,
-              borderRadius: 6,
-              fontFamily: MONO,
-              outline: "none",
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-              opacity: pendingConfirm.showOriginal ? 0.75 : 1,
-            }}
-          />
-
-          {/* AI 摘要：确认卡内润色后展示用途摘要（保存时一并入库） */}
-          {pendingConfirm.summary && !pendingConfirm.showOriginal && (
-            <div style={{
-              display: "flex",
-              alignItems: "flex-start",
-              gap: 5,
-              background: TONE.accentSoft,
-              border: `1px solid ${TONE.border}`,
-              borderRadius: 6,
-              padding: "4px 8px",
-            }}>
-              <span style={{ flexShrink: 0, fontSize: 10.5, fontWeight: 600, color: TONE.accent, lineHeight: 1.5 }}>
-                {T("pl.summaryLabel")}
-              </span>
-              <span style={{ fontSize: 11, lineHeight: 1.5, color: TONE.text, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                {pendingConfirm.summary}
-              </span>
-            </div>
-          )}
-
-          {polishConfirmError && (
-            <div style={{ color: TONE.red, fontSize: 11, lineHeight: 1.5, wordBreak: "break-word" }}>
-              {T("pl.polishFail")}
-            </div>
-          )}
-
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className={plBtn("ghost", "sm")}
-              onClick={polishLearnText}
-              disabled={polishConfirmLoading}
-              data-tip={polishConfirmLoading ? T("pl.polishLoadingTitle") : T("pl.polishBtnTitle")}
-            >
-              {polishConfirmLoading ? T("pl.polishing") : T("pl.polish")}
-            </Button>
-            <div style={{ display: "flex", gap: 8 }}>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className={plBtn("ghost", "sm")}
-                onClick={cancelLearn}
-              >
-                {T("pl.cancel")}
-              </Button>
-              <Button
-                type="button"
-                variant="primary"
-                size="sm"
-                className={plBtn("primary", "sm")}
-                onClick={confirmLearn}
-              >
-                {T("pl.save")}
-              </Button>
-            </div>
-          </div>
         </span>
       )}
 

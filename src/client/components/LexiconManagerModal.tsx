@@ -1,5 +1,5 @@
 /**
- * 词库管理弹窗 — 词库助手右键菜单「词库管理」入口。
+ * 数据管理弹窗 — 词库助手右键菜单「数据管理」入口。
  *
  * 左右分栏（与导入导出 / 人格管理一致的布局）：
  * - 左侧列表：词库提示词列表，顶部固定标题与「新建」按钮；
@@ -42,6 +42,8 @@ import { ConfirmDialog } from "./ConfirmDialog.js";
 import { DialogCloseButton } from "./DialogCloseButton.js";
 import { BookIcon } from "./BookIcon.js";
 import { insertVariableAt } from "./TemplateVariables.js";
+import { TagManagePanel } from "./TagManagePanel.js";
+import { RecycleManagePanel } from "./RecycleManagePanel.js";
 
 const MONO =
   'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif)';
@@ -98,10 +100,18 @@ export function LexiconManagerModal(props: {
   const [draft, setDraft] = useState<Draft>({ title: "", body: "", tag: "" });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<Msg | null>(null);
+  // 操作反馈出现后 2.6 秒自动清除（与人格/技能管理一致）
+  useEffect(() => {
+    if (!msg) return;
+    const timer = setTimeout(() => setMsg(null), 2600);
+    return () => clearTimeout(timer);
+  }, [msg]);
   const [deleteTarget, setDeleteTarget] = useState<Prompt | null>(null);
   // 多选删除：勾选集合（按 id）+ 批量删除二次确认开关
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
+  // 数据子面板覆盖：点击左上「标签 / 回收站」后在右侧覆盖对应子面板；null 表示展示详情
+  const [dataSub, setDataSub] = useState<"tags" | "trash" | null>(null);
   // 编辑表单正文输入框引用：供「插入变量 {{}}」定位光标
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   // 头部「全选」复选框引用：部分选中时显示半选状态
@@ -147,10 +157,11 @@ export function LexiconManagerModal(props: {
   const fmtTime = (ts: number): string =>
     ts ? new Date(ts).toLocaleString() : "-";
 
-  /** 点击列表项：已选中则取消预览，否则切换到该条目的预览。 */
+  /** 点击列表项：已选中则取消预览，否则切换到该条目的预览（并关闭已打开的标签/回收站覆盖）。 */
   const selectItem = (id: string): void => {
     setSelectedId((prev) => (prev === id ? null : id));
     setEditing(null);
+    setDataSub(null);
   };
 
   /** 按搜索关键词过滤：匹配标题 / 正文 / 标签（不区分大小写）。 */
@@ -576,35 +587,17 @@ export function LexiconManagerModal(props: {
           >
             {T("pl.lexicon.edit")}
           </Button>
-          <button
+          <Button
             type="button"
-            title={T("pl.delete")}
+            variant="ghost"
+            size="sm"
+            className={plBtn("ghost", "sm")}
             onClick={() => setDeleteTarget(p)}
-            style={{
-              flexShrink: 0,
-              border: "none",
-              outline: "none",
-              background: "transparent",
-              color: TONE.red,
-              cursor: "pointer",
-              fontSize: 12,
-              fontFamily: MONO,
-              padding: "3px 8px",
-              borderRadius: 6,
-              transition: "background-color .18s, color .18s",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor =
-                "var(--dsw-alias-interactive-bg-hover)";
-              e.currentTarget.style.color = TONE.text;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = "transparent";
-              e.currentTarget.style.color = TONE.red;
-            }}
+            style={{ color: TONE.red }}
+            data-tip={T("pl.delete")}
           >
             {T("pl.delete")}
-          </button>
+          </Button>
         </div>
         {/* 标签：无标签时显示「无标签」占位 */}
         {p.tags && p.tags.length > 0 ? (
@@ -1330,8 +1323,8 @@ export function LexiconManagerModal(props: {
         className={PL_DIALOG}
         style={{
           position: "relative",
-          width: 860,
-          height: 760,
+          width: 800,
+          height: 800,
           maxWidth: "calc(100vw - 40px)",
           maxHeight: "calc(100vh - 40px)",
         }}
@@ -1453,7 +1446,8 @@ export function LexiconManagerModal(props: {
                 background: TONE.row,
               }}
             >
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              {/* 第一行：标题 + 右侧独立「新建」按钮 */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span
                   style={{
                     width: 3,
@@ -1477,7 +1471,27 @@ export function LexiconManagerModal(props: {
                 >
                   {T("pl.lexicon.listTitle")}
                 </span>
-                {/* 列表 / 分类 视图切换 */}
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  className={plBtn("primary", "sm")}
+                  onClick={startCreate}
+                  disabled={busy || !!editing}
+                >
+                  {T("pl.lexicon.new")}
+                </Button>
+              </div>
+              {/* 第二行：左侧「列表 / 分类」切换，右侧「标签 / 回收站」 */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  marginTop: 9,
+                }}
+              >
+                {/* 列表 / 分类 视图切换（左） */}
                 <div
                   style={{
                     display: "flex",
@@ -1529,16 +1543,36 @@ export function LexiconManagerModal(props: {
                     {T("pl.lexicon.groupView")}
                   </button>
                 </div>
-                <Button
-                  type="button"
-                  variant="primary"
-                  size="sm"
-                  className={plBtn("primary", "sm")}
-                  onClick={startCreate}
-                  disabled={busy || !!editing}
+                {/* 右侧：标签 / 回收站，点击后在右侧覆盖对应子面板 */}
+                <div
+                  style={{
+                    flex: 1,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "flex-end",
+                    gap: 6,
+                    minWidth: 0,
+                  }}
                 >
-                  {T("pl.lexicon.new")}
-                </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className={plBtn("ghost", "sm")}
+                    onClick={() => setDataSub("tags")}
+                  >
+                    {T("pl.lexicon.viewTags")}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className={plBtn("ghost", "sm")}
+                    onClick={() => setDataSub("trash")}
+                  >
+                    {T("pl.lexicon.viewTrash")}
+                  </Button>
+                </div>
               </div>
               {/* 搜索过滤 */}
               <div style={{ position: "relative", marginTop: 9 }}>
@@ -1864,9 +1898,10 @@ export function LexiconManagerModal(props: {
             </div>
           </div>
 
-          {/* 右栏：预览 / 编辑（独立滚动） */}
+          {/* 右栏：词库详情预览 / 编辑（相对定位，供子面板覆盖） */}
           <div
             style={{
+              position: "relative",
               flex: "1.15 1 0",
               minWidth: 0,
               height: "100%",
@@ -1875,27 +1910,113 @@ export function LexiconManagerModal(props: {
               background: TONE.row,
               border: `1px solid ${TONE.border}`,
               borderRadius: 10,
-              overflowY: "auto",
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
             }}
           >
-            {editing ? (
-              renderEditor()
-            ) : selected ? (
-              renderPreview(selected)
-            ) : (
+            {/* 详情 / 编辑内容（原有可滚动容器，保持既有表现） */}
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                boxSizing: "border-box",
+                overflowY: "auto",
+              }}
+            >
+              {editing ? (
+                renderEditor()
+              ) : selected ? (
+                renderPreview(selected)
+              ) : (
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    height: "100%",
+                    boxSizing: "border-box",
+                    fontSize: 12.5,
+                    color: TONE.quiet,
+                    padding: 20,
+                    textAlign: "center",
+                  }}
+                >
+                  {T("pl.lexicon.previewEmpty")}
+                </div>
+              )}
+            </div>
+            {/* 数据子面板覆盖：点击左上「标签 / 回收站」后在右侧覆盖；点「详情」或 X 关闭 */}
+            {dataSub && (
               <div
                 style={{
+                  position: "absolute",
+                  inset: 0,
+                  zIndex: 5,
                   display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  height: "100%",
-                  fontSize: 12.5,
-                  color: TONE.quiet,
-                  padding: 20,
-                  textAlign: "center",
+                  flexDirection: "column",
+                  background: TONE.panel,
+                  border: `1px solid ${TONE.borderStrong}`,
+                  borderRadius: 10,
+                  padding: "0 10px 10px",
+                  boxSizing: "border-box",
                 }}
               >
-                {T("pl.lexicon.previewEmpty")}
+                {/* 覆盖面板头部：标题在右侧保留（与左上「标签/回收站」按钮各自独立），仅 X 关闭 */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    flexShrink: 0,
+                    padding: "8px 0 9px",
+                    borderBottom: `1px solid ${TONE.border}`,
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 3,
+                      height: 13,
+                      borderRadius: 2,
+                      background: TONE.accent,
+                      flexShrink: 0,
+                    }}
+                  />
+                  <span
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: TONE.text,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {dataSub === "tags" ? T("pl.moduleTags") : T("pl.moduleTrash")}
+                  </span>
+                  <DialogCloseButton
+                    onClick={() => setDataSub(null)}
+                    label={T("pl.close")}
+                  />
+                </div>
+                {/* 覆盖面板内容：子面板自含滚动 */}
+                <div
+                  style={{
+                    flex: 1,
+                    minHeight: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                    overflow: "hidden",
+                  }}
+                >
+                  {dataSub === "tags" ? (
+                    <TagManagePanel t={t} />
+                  ) : (
+                    <RecycleManagePanel t={t} />
+                  )}
+                </div>
               </div>
             )}
           </div>

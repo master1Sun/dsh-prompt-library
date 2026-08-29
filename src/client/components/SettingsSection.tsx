@@ -17,15 +17,12 @@ import type { PluginSettings } from "../../types.js";
 import { DEFAULT_SETTINGS } from "../../types.js";
 import {
   applyUpdate,
-  getAiSelectables,
   getAssistantStatus,
   getSettings,
-  getStats,
   getUpdate,
   getUpdateProgress,
   restartService as apiRestartService,
   updateSettings as apiUpdateSettings,
-  type ClientAiSelectable,
   type UpdateInfo,
   type UpdateProgress,
 } from "../utils/api.js";
@@ -271,6 +268,7 @@ function TextRow({
   desc,
   onChange,
   disabled,
+  type = "text",
 }: {
   label: string;
   value: string;
@@ -278,6 +276,8 @@ function TextRow({
   desc?: string;
   onChange: (v: string) => void;
   disabled?: boolean;
+  /** 输入框类型：敏感字段（如 API Key）用 password。 */
+  type?: "text" | "password";
 }): ReactNode {
   const dim = disabled ? 0.45 : 1;
   return (
@@ -293,7 +293,7 @@ function TextRow({
       >
         <span style={{ fontSize: 13 }}>{label}</span>
         <input
-          type="text"
+          type={type}
           value={value}
           placeholder={placeholder}
           disabled={disabled}
@@ -394,9 +394,8 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
   const T = usePLT(t);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState<PluginSettings>(DEFAULT_SETTINGS);
-  const [selectables, setSelectables] = useState<ClientAiSelectable[]>([]);
   // 分类模块手风琴折叠状态（默认折叠，与「词库管理」保持一致）
-  const [openLearn, setOpenLearn] = useState(false);
+  const [openDeepseek, setOpenDeepseek] = useState(false);
   const [openPanel, setOpenPanel] = useState(false);
   const [openDisplay, setOpenDisplay] = useState(false);
   const [openUpdate, setOpenUpdate] = useState(false);
@@ -409,8 +408,8 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
   const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
   const [needsRestart, setNeedsRestart] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // 自动学习统计：已学习条数 + 近 7 天 AI 完善次数（设置面板展示用）
-  const [learnStats, setLearnStats] = useState<{ autoLearnedCount: number; aiRefinedIn7: number } | null>(null);
+  // 记录已保存的 DeepSeek API Key：保存成功后若发生变化，再通知小助手刷新余额
+  const lastDeepseekKeyRef = useRef<string>("");
   // 词库助手开关是否已解锁：等级 >= 3（成就中档）后解锁，可自由开启/关闭；低于 3 级强制常驻
   const [assistantUnlocked, setAssistantUnlocked] = useState(false);
 
@@ -419,22 +418,6 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
       .then((s) => setDraft(s))
       .catch(() => { /* 使用默认值 */ })
       .finally(() => setLoading(false));
-    // 加载系统 AI provider/模型列表，用于 AI Provider/模型下拉选择
-    getAiSelectables()
-      .then(setSelectables)
-      .catch(() => setSelectables([]));
-  }, []);
-
-  // 拉取自动学习统计：展示已学习条数/近 7 天 AI 完善次数
-  useEffect(() => {
-    getStats()
-      .then((data) =>
-        setLearnStats({
-          autoLearnedCount: data.stats.autoLearnedCount,
-          aiRefinedIn7: data.stats.aiRefinedIn7,
-        }),
-      )
-      .catch(() => setLearnStats(null));
   }, []);
 
   // 拉取游戏化快照，判断词库助手开关是否解锁：等级 >= 3 后可自由开启/关闭
@@ -451,6 +434,12 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
     saveTimerRef.current = setTimeout(() => {
       apiUpdateSettings(next).then(() => {
         window.dispatchEvent(new CustomEvent("pl:settings-changed", { detail: next }));
+        // 保存成功后若 DeepSeek API Key 发生变化（含清空），通知小助手立即刷新余额，
+        // 避免残留旧 Key 查询到的余额角标
+        if (next.deepseekApiKey !== lastDeepseekKeyRef.current) {
+          lastDeepseekKeyRef.current = next.deepseekApiKey;
+          window.dispatchEvent(new CustomEvent("pl:deepseek-balance-refresh", { detail: next.deepseekApiKey }));
+        }
       }).catch(() => {});
     }, 300);
   }, []);
@@ -569,28 +558,6 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
     );
   }
 
-  // 组装 AI Provider 下拉选项：系统列表 + “留空自动发现” + 若已保存值不在列表则保留
-  const providerOptions: { value: string; label: string }[] = [{ value: "", label: T("pl.set.autoDiscover") }];
-  for (const s of selectables) {
-    if (s.provider && !providerOptions.some((o) => o.value === s.provider)) {
-      providerOptions.push({ value: s.provider, label: s.name || s.provider });
-    }
-  }
-  if (draft.aiProvider && !providerOptions.some((o) => o.value === draft.aiProvider)) {
-    providerOptions.push({ value: draft.aiProvider, label: T("pl.set.notFound", { value: draft.aiProvider }) });
-  }
-  // 组装 AI 模型下拉选项：当前已选 provider 的模型列表 + “留空自动发现” + 已保存值不在列表则保留
-  const activeProvider = selectables.find((s) => s.provider === draft.aiProvider);
-  const modelOptions: { value: string; label: string }[] = [{ value: "", label: T("pl.set.autoDiscover") }];
-  for (const m of activeProvider?.models ?? []) {
-    if (m.id && !modelOptions.some((o) => o.value === m.id)) {
-      modelOptions.push({ value: m.id, label: m.name || m.id });
-    }
-  }
-  if (draft.aiModel && !modelOptions.some((o) => o.value === draft.aiModel)) {
-    modelOptions.push({ value: draft.aiModel, label: T("pl.set.notFound", { value: draft.aiModel }) });
-  }
-
   return (
     <div
       style={{
@@ -608,106 +575,24 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           {T("pl.set.setSectionDesc")}
         </span>
       </div>
-      {/* 分类模块一：自动学习 */}
+      {/* 分类模块一：DeepSeek 余额 */}
       <ModuleCard
-        title={T("pl.setModuleLearn")}
-        desc={T("pl.setModuleLearnDesc")}
-        open={openLearn}
-        onToggle={() => setOpenLearn((v) => !v)}
+        title={T("pl.setModuleDeepseek")}
+        desc={T("pl.setModuleDeepseekDesc")}
+        open={openDeepseek}
+        onToggle={() => setOpenDeepseek((v) => !v)}
       >
-        <ToggleRow
-          label={T("pl.set.autoLearn")}
-          desc={T("pl.set.autoLearnDesc")}
-          checked={draft.autoLearnEnabled}
-          onChange={(v) => updateAndSave({ autoLearnEnabled: v })}
-        />
-
-        {/* 自动学习子项：保持缩进呈现父子层级；父开关关闭时只置灰，不改动真实保存值 */}
-        <div
-          style={{
-            marginLeft: 22,
-            display: "flex",
-            flexDirection: "column",
+        {/* DeepSeek API Key：为 DeepSeek 余额实时推送提供鉴权（可选，密码输入框） */}
+        <TextRow
+          label={T("pl.set.deepseekApiKey")}
+          value={draft.deepseekApiKey ?? ""}
+          type="password"
+          placeholder="sk-..."
+          desc={T("pl.set.deepseekApiKeyDesc")}
+          onChange={(v) => {
+            updateAndSave({ deepseekApiKey: v });
           }}
-        >
-          {/* 手动确认开关 */}
-          <ToggleRow
-            label={T("pl.set.manualConfirm")}
-            desc={T("pl.set.manualConfirmDesc")}
-            checked={draft.autoLearnManualConfirm}
-            disabled={!draft.autoLearnEnabled}
-            onChange={(v) => updateAndSave({ autoLearnManualConfirm: v })}
-          />
-
-          {/* 自动学习标签 + 最小长度 */}
-          <TextRow
-            label={T("pl.set.autoLearnTag")}
-            value={draft.autoLearnTag}
-            placeholder="auto-learned"
-            disabled={!draft.autoLearnEnabled}
-            onChange={(v) => updateAndSave({ autoLearnTag: v })}
-          />
-          <NumberRow
-            label={T("pl.set.minLength")}
-            value={draft.autoLearnMinLength}
-            min={20}
-            max={500}
-            step={10}
-            disabled={!draft.autoLearnEnabled}
-            onChange={(v) => updateAndSave({ autoLearnMinLength: v })}
-          />
-
-          {/* AI 智能完善（自动学习的二级父开关） */}
-          <ToggleRow
-            label={T("pl.set.aiEnrich")}
-            desc={T("pl.set.aiEnrichDesc")}
-            checked={draft.aiEnrichEnabled}
-            disabled={!draft.autoLearnEnabled}
-            onChange={(v) => updateAndSave({ aiEnrichEnabled: v })}
-          />
-
-          {/* AI 智能完善子项（Provider / Model）：AI 关闭或自动学习关闭都会置灰 */}
-          <div
-            style={{
-              marginLeft: 22,
-              display: "flex",
-              flexDirection: "column",
-            }}
-          >
-            <SelectRow
-              label={T("pl.set.aiProvider")}
-              value={draft.aiProvider}
-              options={providerOptions}
-              desc={T("pl.set.aiProviderDesc")}
-              disabled={!draft.autoLearnEnabled || !draft.aiEnrichEnabled}
-              onChange={(v) => updateAndSave({ aiProvider: v })}
-            />
-            <SelectRow
-              label={T("pl.set.aiModel")}
-              value={draft.aiModel}
-              options={modelOptions}
-              desc={T("pl.set.aiModelDesc")}
-              disabled={!draft.autoLearnEnabled || !draft.aiEnrichEnabled}
-              onChange={(v) => updateAndSave({ aiModel: v })}
-            />
-          </div>
-
-          {/* 自动学习统计：已学习条数 + 近 7 天 AI 完善次数 */}
-          {learnStats && (
-            <div style={{
-              marginTop: 4,
-              padding: "6px 10px",
-              fontSize: 11,
-              lineHeight: 1.5,
-              color: TONE.quiet,
-              background: TONE.row,
-              border: `1px solid ${TONE.border}`,
-              borderRadius: 6,
-            }}>
-              {T("pl.set.learnStats", { count: learnStats.autoLearnedCount, n: learnStats.aiRefinedIn7 })}
-            </div>
-          )}
-        </div>
+        />
       </ModuleCard>
 
       {/* 分类模块二：面板显示 */}
@@ -745,8 +630,8 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
         <NumberRow
           label={T("pl.set.personTipInterval")}
           value={draft.personTipInterval}
-          min={5}
-          max={60}
+          min={10}
+          max={120}
           step={1}
           defaultValue={DEFAULT_SETTINGS.personTipInterval}
           onChange={(v) => updateAndSave({ personTipInterval: v })}
@@ -754,7 +639,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
         <NumberRow
           label={T("pl.set.personTipDuration")}
           value={draft.personTipDuration}
-          min={10}
+          min={5}
           max={30}
           step={1}
           defaultValue={DEFAULT_SETTINGS.personTipDuration}

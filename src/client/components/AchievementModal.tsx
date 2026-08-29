@@ -1602,8 +1602,8 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
       <div
         className={PL_DIALOG}
         style={{
-          width: 860,
-          height: 760,
+          width: 800,
+          height: 800,
           maxWidth: "calc(100vw - 40px)",
           maxHeight: "calc(100vh - 40px)",
         }}

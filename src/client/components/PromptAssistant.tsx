@@ -23,12 +23,15 @@ import {
   genIntro,
   getActivity,
   getAssistantStatus,
+  getDeepSeekBalance,
   type ActivityPhase,
   type ActivitySnapshot,
   type AssistantStatus,
+  type DeepSeekBalance,
 } from "../utils/api.js";
 import { type PLTranslate, usePLT } from "../utils/i18n.js";
 import { useThemeSync } from "../utils/theme.js";
+import { getCalendarToday } from "../utils/lunar.js";
 import { AnnouncementModal } from "./AnnouncementModal.js";
 import { AchievementModal } from "./AchievementModal.js";
 import { PersonaManagerModal } from "./PersonaManagerModal.js";
@@ -36,7 +39,6 @@ import { PromptInjectPanel } from "./PromptInjectPanel.js";
 import { WhaleStage } from "./WhaleStage.js";
 import { DashboardModal } from "./DashboardModal.js";
 import { ImportExportModal } from "./ImportExportModal.js";
-import { TagDataModal } from "./TagDataModal.js";
 import { LexiconManagerModal } from "./LexiconManagerModal.js";
 import {
   HOVER_SEQUENCE,
@@ -61,6 +63,17 @@ const TONE = {
   accent: "var(--dsw-alias-brand-primary, #2563eb)",
   red: "var(--dsw-alias-state-error-primary, #dc2626)",
 } as const;
+
+/** AI 活动阶段 → 状态指示灯颜色（右上角圆点）。 */
+const PHASE_COLOR: Record<ActivityPhase, string> = {
+  idle: "rgba(148, 163, 184, .55)",
+  waiting: "#f59e0b",
+  thinking: "var(--dsw-alias-brand-primary, #2563eb)",
+  tool: "#8b5cf6",
+  review: "#8b5cf6",
+  done: "#22c55e",
+  failed: "var(--dsw-alias-state-error-primary, #dc2626)",
+};
 
 /** 右键菜单项图标：统一 15x15 描边风格，底色/颜色由调用方传入。 */
 function CtxIcon({
@@ -96,6 +109,8 @@ function CtxIcon({
 
 /** 助手尺寸。 */
 const PERSON_SIZE = 72;
+// DeepSeek 余额轮询刷新间隔（5 分钟）：仅在检测到使用 DeepSeek 时展示角标并刷新
+const DEEPSEEK_REFRESH_MS = 5 * 60 * 1000;
 /** 屏幕四周最小边距（含顶部落差给宿主 header）。 */
 const FLOAT_MARGIN = 8;
 /** 词库助手位置在 localStorage 中的存储键。 */
@@ -370,6 +385,58 @@ export function PromptAssistant(props: Props): ReactNode {
     phase: "idle",
     sessionActive: false,
   });
+  // DeepSeek 余额：轮询 host；检测到在用 DeepSeek 时显示常驻小数字角标（本轮未接真实查询，余额为占位）
+  const [deepseek, setDeepseek] = useState<DeepSeekBalance | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const tick = () => {
+      getDeepSeekBalance()
+        .then((d) => {
+          if (!cancelled) setDeepseek(d);
+        })
+        .catch(() => {
+          /* 轮询失败忽略，保持上次状态 */
+        });
+    };
+    tick();
+    const iv = window.setInterval(tick, DEEPSEEK_REFRESH_MS);
+    // 设置在配置/修改 DeepSeek API Key 后会派发该事件：立即刷新余额，无需等待轮询周期
+    const onRefresh = () => tick();
+    window.addEventListener("pl:deepseek-balance-refresh", onRefresh);
+    return () => {
+      cancelled = true;
+      window.clearInterval(iv);
+      window.removeEventListener("pl:deepseek-balance-refresh", onRefresh);
+    };
+  }, []);
+
+  // 实时时钟：驱动底部时间/农历/节气信息条（每秒刷新）
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const iv = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(iv);
+  }, []);
+
+  // 底部信息条内容：时间 + 星期 + 日期 + 农历/节气（按当前界面语言；中文才含农历与节气）
+  const info = useMemo(() => {
+    const lang: "zh" | "en" = (
+      document.documentElement.lang ||
+      navigator.language ||
+      "zh"
+    )
+      .toLowerCase()
+      .startsWith("en")
+      ? "en"
+      : "zh";
+    const cale = getCalendarToday(now, lang);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const time = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+    const date =
+      lang === "zh"
+        ? `${now.getMonth() + 1}月${now.getDate()}日`
+        : `${now.getFullYear()}/${pad(now.getMonth() + 1)}/${pad(now.getDate())}`;
+    return { cale, time, date };
+  }, [now]);
   useEffect(() => {
     let cancelled = false;
     // 按当前系统语言请求，host 端返回匹配主题+阶段的文案
@@ -747,13 +814,11 @@ export function PromptAssistant(props: Props): ReactNode {
   const [injectOpen, setInjectOpen] = useState(false);
   // 看板弹窗：右键菜单「看板」入口打开（统计可视化）
   const [dashboardOpen, setDashboardOpen] = useState(false);
-  // 数据管理弹窗：右键菜单「数据管理」→ 三个子项分别打开
+  // 导入导出弹窗：右键菜单与「数据管理」平级的独立入口
   const [importExportOpen, setImportExportOpen] = useState(false);
-  const [tagDataOpen, setTagDataOpen] = useState(false);
-  // 词库管理弹窗：右键菜单「词库管理」入口打开（新建的词库管理页面）
+
+  // 词库管理弹窗：右键菜单「数据管理」入口打开
   const [lexiconOpen, setLexiconOpen] = useState(false);
-  // 右键菜单「数据管理」子菜单是否展开
-  const [dataMenuOpen, setDataMenuOpen] = useState(false);
   // 右键迷你菜单：记录弹出位置（clientX/Y）；点击外部或菜单项后关闭
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   // 右键菜单 DOM 引用，用于测量真实高度后补偿位置，避免底部溢出
@@ -778,7 +843,6 @@ export function PromptAssistant(props: Props): ReactNode {
   const ctxMenuEnabled = true;
 
   // 右键菜单弹出后，测量真实宽高并把菜单完整限制在视口内（防止内容变长后底部溢出）。
-  // 依赖 ctxMenu 打开与 dataMenuOpen 子菜单展开，两者变化都重新结算位置。
   useLayoutEffect(() => {
     if (!ctxMenu || !ctxMenuEnabled) return;
     const el = ctxMenuRef.current;
@@ -795,7 +859,7 @@ export function PromptAssistant(props: Props): ReactNode {
         ? Math.max(M, ctxMenu.y - mh)
         : ctxMenu.y;
     setCtxPos({ left, top });
-  }, [ctxMenu, dataMenuOpen]);
+  }, [ctxMenu]);
 
   // 拖动助手：仅移动助手独立坐标；松手时若未明显移动视为「点击 → 通知父级」
   const personDragRef = useRef<{
@@ -917,6 +981,10 @@ export function PromptAssistant(props: Props): ReactNode {
     // 尖角锚点：上/下方 → 用水平偏移让尖角指助手中心；左/右方 → 用垂直偏移
     const tailX = cx - left - 5; // 尖角在气泡水平方向上的偏移（above/below）
     const tailY = cy - top - 5; // 尖角在气泡垂直方向上的偏移（left/right）
+
+    // 系统消息会话气泡与鼠标移入简介气泡整体上移 3px（toast 成就/互动气泡不偏移）
+    if (!toast) top -= 10;
+
     return { left, top, dir, tailX, tailY };
   }, [
     bubble,
@@ -1292,6 +1360,37 @@ export function PromptAssistant(props: Props): ReactNode {
                       })}
                     </div>
                   )}
+                  {/* 气泡常驻时间信息：当前时间 + 星期日期 + 农历/节气（中文），随气泡展示 */}
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 4,
+                      fontSize: 9,
+                      color: TONE.quiet,
+                      marginTop: 5,
+                      paddingTop: 5,
+                      borderTop: `1px solid ${TONE.border}`,
+                      opacity: 0.85,
+                    }}
+                  >
+                    {(() => {
+                      const segs: { key: string; text: string; accent?: boolean }[] = [
+                        { key: "t", text: info.time, accent: true },
+                        { key: "w", text: info.cale.weekday },
+                        { key: "d", text: info.date },
+                      ];
+                      if (info.cale.lunar) segs.push({ key: "l", text: info.cale.lunar });
+                      if (info.cale.term) segs.push({ key: "g", text: info.cale.term, accent: true });
+                      return segs.map((s) => (
+                        <span key={s.key} style={{ color: s.accent ? TONE.accent : undefined }}>
+                          {s.text}
+                        </span>
+                      ));
+                    })()}
+                  </div>
                 </>
               )}
               {/* 气泡小尾巴：始终指向助手中心（上→朝下、下→朝上、左→朝右、右→朝左）。
@@ -1395,9 +1494,42 @@ export function PromptAssistant(props: Props): ReactNode {
                 animation: "pl-person-shadow 2.6s ease-in-out infinite",
               }}
             />
+            {/* DeepSeek 余额角标：仅当有余额数据时显示，与等级徽章共用左下角位置且背景同步、互斥显示（显示余额时隐藏等级）。 */}
+            {deepseek && !!deepseek.balance && (
+              <div
+                title={
+                  deepseek.balance
+                    ? `${T("pl.deepseek.balance")} ${deepseek.balance.currency} ${deepseek.balance.total}`
+                    : T("pl.deepseek.balancePlaceholder")
+                }
+                style={{
+                  position: "absolute",
+                  // 高于气泡(zIndex:2147483646)，确保余额角标不被气泡框遮挡
+                  zIndex: 2147483647,
+                  right: -4,
+                  bottom: -2,
+                  minWidth: 22,
+                  height: 16,
+                  padding: "0 4px",
+                  borderRadius: 8,
+                  background: TONE.accent,
+                  // 夜间品牌色偏浅（浅蓝）文字用深色；白天品牌色偏深（深蓝）文字用白色，与等级徽章同步
+                  color: dark ? "#10141c" : "#fff",
+                  fontSize: 9,
+                  fontWeight: 600,
+                  lineHeight: "16px",
+                  textAlign: "center",
+                  boxShadow: "0 1px 4px rgba(2, 6, 23, .25)",
+                  whiteSpace: "nowrap",
+                  pointerEvents: "none",
+                }}
+              >
+                ¥ {deepseek.balance ? String(deepseek.balance.total) : "--"}
+              </div>
+            )}
             {/* 等级徽章：显示当前 Lv 与称号；悬停 title 提示升级进度（满级不显示进度）。
-              受「显示等级助手」设置控制，关闭后不显示等级。 */}
-            {status && levelEnabled && (
+              受「显示等级助手」设置控制，关闭后不显示等级；有余额数据时改由余额角标展示（互斥）。 */}
+            {status && levelEnabled && !deepseek?.balance && (
               <div
                 title={
                   status.level.next > status.level.current
@@ -1426,6 +1558,22 @@ export function PromptAssistant(props: Props): ReactNode {
                 Lv.{status.level.level}
               </div>
             )}
+            {/* AI 状态指示灯：右上角小圆点，颜色随当前活动阶段变化；悬停 title 显示阶段文案 */}
+            <div
+              title={activity.text || T(PHASE_KEY[activity.phase])}
+              style={{
+                position: "absolute",
+                top: 1,
+                right: 1,
+                width: 9,
+                height: 9,
+                borderRadius: "50%",
+                background: activity.sessionActive ? PHASE_COLOR[activity.phase] : PHASE_COLOR.idle,
+                boxShadow: "0 0 6px rgba(2, 6, 23, .3)",
+                zIndex: 2147483647,
+                pointerEvents: "none",
+              }}
+            />
           </div>
         </div>,
         document.body,
@@ -1475,7 +1623,7 @@ export function PromptAssistant(props: Props): ReactNode {
                 </svg>
                 {T("pl.floating.title")}
               </div>
-              {/* 打开词库管理：仅当「显示词库管理」开关开启时显示 */}
+              {/* 数据管理（词库管理改名）：提示词库管理；仅当「显示词库管理」开关开启时显示 */}
               {(settings?.rightPanelEnabled ??
                 DEFAULT_SETTINGS.rightPanelEnabled) && (
                 <div
@@ -1494,83 +1642,27 @@ export function PromptAssistant(props: Props): ReactNode {
                     <rect x="2.5" y="8.9" width="4.6" height="4.6" rx="1.1" />
                     <rect x="8.9" y="8.9" width="4.6" height="4.6" rx="1.1" />
                   </CtxIcon>
-                  {T("pl.ctx.openPanel")}
+                  {T("pl.ctx.dataManagement")}
                 </div>
               )}
-              {/* 数据管理入口：导入导出 / 标签 / 回收站；仅当「数据管理」开关开启时显示 */}
+              {/* 导入导出（数据管理平级）：数据备份与恢复；仅当「数据管理」开关开启时显示 */}
               {(settings?.dataManagementEnabled ??
                 DEFAULT_SETTINGS.dataManagementEnabled) && (
-                <>
-                  <div
-                    className="pl-ctx-item"
-                    onClick={() => setDataMenuOpen((v) => !v)}
-                    aria-expanded={dataMenuOpen}
+                <div
+                  className="pl-ctx-item"
+                  onClick={() => {
+                    setCtxMenu(null);
+                    setImportExportOpen(true);
+                  }}
+                >
+                  <CtxIcon
+                    bg="rgba(37, 99, 235, .12)"
+                    color="var(--dsw-alias-brand-primary, #2563eb)"
                   >
-                    <CtxIcon bg="rgba(16, 185, 129, .12)" color="#10b981">
-                      <path d="M8 3.5v9M4.8 5.7l3.2-3.2 3.2 3.2" />
-                      <path d="M12.5 11l2.2 1.4a1 1 0 0 0 1-.1L15.8 12" />
-                      <path d="M13 14H5.2a.8.8 0 0 1-.8-.8V13" />
-                    </CtxIcon>
-                    {T("pl.ctx.dataManagement")}
-                    <svg
-                      width="12"
-                      height="12"
-                      viewBox="0 0 16 16"
-                      style={{
-                        flexShrink: 0,
-                        color: TONE.muted,
-                        transform: dataMenuOpen
-                          ? "rotate(180deg)"
-                          : "rotate(0deg)",
-                        transition: "transform .2s ease",
-                      }}
-                      aria-hidden="true"
-                    >
-                      <path
-                        d="M4 6l4 4 4-4"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.6"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </div>
-                  {dataMenuOpen && (
-                    <>
-                      <div
-                        className="pl-ctx-sub"
-                        onClick={() => {
-                          setCtxMenu(null);
-                          setDataMenuOpen(false);
-                          setImportExportOpen(true);
-                        }}
-                      >
-                        <CtxIcon
-                          bg="rgba(37, 99, 235, .12)"
-                          color="var(--dsw-alias-brand-primary, #2563eb)"
-                        >
-                          <path d="M8 12V4M8 4L5 7M8 4l3 3M8 12l-3-3M8 12l3-3" />
-                        </CtxIcon>
-                        {T("pl.moduleImportExport")}
-                      </div>
-                      <div
-                        className="pl-ctx-sub"
-                        onClick={() => {
-                          setCtxMenu(null);
-                          setDataMenuOpen(false);
-                          setTagDataOpen(true);
-                        }}
-                      >
-                        <CtxIcon bg="rgba(139, 92, 246, .12)" color="#8b5cf6">
-                          <path d="M3 4.5A1.5 1.5 0 0 1 4.5 3h3l5 5-4.5 4.5-5-5v-3Z" />
-                          <circle cx="6.4" cy="6.4" r=".4" strokeWidth="2" />
-                        </CtxIcon>
-                        {T("pl.moduleTagData")}
-                      </div>
-                    </>
-                  )}
-                </>
+                    <path d="M8 12V4M8 4L5 7M8 4l3 3M8 12l-3-3M8 12l3-3" />
+                  </CtxIcon>
+                  {T("pl.moduleImportExport")}
+                </div>
               )}
               {/* 人格管理入口：多人格 CRUD + 按会话切换；仅当「人格管理」开关开启时显示 */}
               {(settings?.personaEnabled ??
@@ -1679,14 +1771,13 @@ export function PromptAssistant(props: Props): ReactNode {
         onClose={() => setDashboardOpen(false)}
         t={T}
       />
-      {/* 数据管理：右键菜单「数据管理」→ 导入导出 / 标签数据 两个独立弹窗 */}
+      {/* 导入导出：右键菜单与「数据管理」平级的独立弹窗 */}
       <ImportExportModal
         open={importExportOpen}
         onClose={() => setImportExportOpen(false)}
         t={T}
       />
-      <TagDataModal open={tagDataOpen} onClose={() => setTagDataOpen(false)} t={T} />
-      {/* 词库管理弹窗：右键菜单「词库管理」打开（左侧列表 / 右侧预览编辑，顶部新建） */}
+      {/* 词库管理弹窗：右键菜单「数据管理」打开（左侧列表 / 右侧详情·标签·回收站） */}
       <LexiconManagerModal
         open={lexiconOpen}
         onClose={() => setLexiconOpen(false)}

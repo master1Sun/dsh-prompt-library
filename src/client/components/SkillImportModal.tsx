@@ -42,7 +42,6 @@ import {
   pickExportDirectory,
 } from "../utils/workspace-picker.js";
 import { insertVariableAt } from "./TemplateVariables.js";
-import { ImportResultPanel, type ImportResultRow } from "./ImportResultPanel.js";
 import { DirectoryPickerModal } from "./DirectoryPickerModal.js";
 import { DialogCloseButton } from "./DialogCloseButton.js";
 import { BookIcon } from "./BookIcon.js";
@@ -285,8 +284,10 @@ export function SkillImportModal(props: {
   }>;
   /** 导入成功回调（用于管理面板刷新数据）。 */
   onImported?: (result: SkillImportResult) => void;
+  /** 导入/导出成功后的汇总文案回调（由一级弹窗在左下角气泡展示，展示后关闭本弹窗）。 */
+  onSaved?: (summary: string) => void;
 }): ReactNode {
-  const { open, onClose, t, mode = "import", initialEntries, onImported } = props;
+  const { open, onClose, t, mode = "import", initialEntries, onImported, onSaved } = props;
   const T = usePLT(t);
   const [entries, setEntries] = useState<EditableEntry[]>([]);
   const [validation, setValidation] = useState<ValidateResult | null>(null);
@@ -302,8 +303,13 @@ export function SkillImportModal(props: {
     errors: { title: string; reason: string }[];
   } | null>(null);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
-  // 导入/导出完成后的逐条结果（展示成功/失败/跳过，用户点击「完成」后关闭）
-  const [result, setResult] = useState<{ title: string; summary: string; rows: ImportResultRow[] } | null>(null);
+  // 导出模式 AI 补充进度：当前已完成条数 / 总条数（用于进度条）
+  const [aiDone, setAiDone] = useState(0);
+  const [aiTotal, setAiTotal] = useState(0);
+  // 手动取消 AI 补充标记：置 true 后循环停止，剩余条目跳过
+  const aiCancelRef = useRef(false);
+  // 中断当前进行中的 AI 请求：取消时立即 abort 正在执行的 describeSkill
+  const aiAbortRef = useRef<AbortController | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   // 导出模式：自定义 JSON 数据文件输入
   const jsonRef = useRef<HTMLInputElement | null>(null);
@@ -336,7 +342,6 @@ export function SkillImportModal(props: {
     setSelectedKey(null);
     setAiState("idle");
     setAiResult(null);
-    setResult(null);
     setExportScope("global");
     setProjectCwd(null);
     setProjectCwdLoading(false);
@@ -641,10 +646,9 @@ export function SkillImportModal(props: {
     setAiResult(null);
   }, []);
 
-  /** 切换导出范围：重置结果面板/校验/AI 状态，避免上次导出遗留的「完成」面板阻塞重新导出。 */
+  /** 切换导出范围：重置校验/AI 状态，避免上次导出遗留的校验状态阻塞重新导出。 */
   const changeScope = useCallback((scope: SkillExportScope) => {
     setExportScope(scope);
-    setResult(null);
     setValidation(null);
     setFixLog([]);
     setFillLog([]);
@@ -848,16 +852,27 @@ export function SkillImportModal(props: {
     setMsg(null);
     setAiState("running");
     setAiResult(null);
+    setAiDone(0);
     const checked = entries.filter((e) => e.checked);
+    aiCancelRef.current = false;
+    // 每次补充启动一个 AbortController，供取消时立即中断当前请求
+    aiAbortRef.current?.abort();
+    aiAbortRef.current = new AbortController();
+    setAiTotal(checked.length);
     const updates = new Map<string, { name: string; summary: string }>();
     const errors: { key: string; title: string; reason: string }[] = [];
     for (const entry of checked) {
+      // 用户已取消：不再处理剩余条目，直接跳出
+      if (aiCancelRef.current) break;
       try {
-        const desc = await describeSkill({
-          title: entry.title,
-          body: entry.body,
-          summary: entry.summary.trim() || undefined,
-        });
+        const desc = await describeSkill(
+          {
+            title: entry.title,
+            body: entry.body,
+            summary: entry.summary.trim() || undefined,
+          },
+          aiAbortRef.current.signal,
+        );
         if (desc && desc.desc && desc.desc.name && desc.desc.description) {
           // 技能名/摘要为空时由 AI 补全；已有内容则保留（尊重手动填写）
           updates.set(entry.key, {
@@ -868,11 +883,15 @@ export function SkillImportModal(props: {
           errors.push({ key: entry.key, title: entry.title, reason: skillFailReason(desc?.fail, T) });
         }
       } catch (err) {
+        // 用户已取消：当前请求被 abort，不再将其记为失败，直接跳出
+        if (aiCancelRef.current) break;
         errors.push({
           key: entry.key,
           title: entry.title,
           reason: err instanceof Error ? err.message : String(err),
         });
+      } finally {
+        setAiDone((n) => n + 1);
       }
     }
     // 应用 AI 结果：补全技能名/摘要，并标记失败条目（行内红色高亮 + 原因）
@@ -909,7 +928,37 @@ export function SkillImportModal(props: {
     setValidation(validateEntries(next, mode === "export"));
   }, [entries, validation, T, validateEntries, mode]);
 
-  /** 保存勾选条目：导入模式入库、导出模式写盘（仅在校验通过后可点）。 */
+  /** 执行导入入库。 */
+  const runImport = useCallback(() => {
+    setSaving(true);
+    const checked = entries.filter((e) => e.checked);
+    const payload: SkillEntry[] = checked.map((e) => ({
+      name: e.name,
+      title: e.title,
+      body: e.body,
+      summary: e.summary,
+    }));
+    importSkillEntries(payload).then(
+      (res) => {
+        setSaving(false);
+        notifyDataChanged();
+        onImported?.(res);
+        // 导入成功后由一级弹窗在左下角气泡展示汇总，并关闭本弹窗
+        const errNote = res.errors.length
+          ? T("pl.skillModal.savedErrors", { n: res.errors.length })
+          : "";
+        onSaved?.(
+          `${T("pl.skillModal.saved", { imported: res.imported, updated: res.updated })}${errNote}`,
+        );
+      },
+      (err: unknown) => {
+        setSaving(false);
+        setMsg({ text: err instanceof Error ? err.message : String(err), error: true });
+      },
+    );
+  }, [entries, onImported, onSaved, T]);
+
+  /** 保存勾选条目：导入模式直接入库、导出模式直接写盘（仅在校验通过后可点）。 */
   const handleSave = useCallback(() => {
     if (!validation?.ok || saving) return;
     const checked = entries.filter((e) => e.checked);
@@ -917,8 +966,8 @@ export function SkillImportModal(props: {
       setMsg({ text: T("pl.skillModal.emptyChecked"), error: true });
       return;
     }
-    setSaving(true);
     if (mode === "export") {
+      setSaving(true);
       // 项目技能：优先用输入框（可手动输入或用「浏览」选择）中的路径，其次自动解析到的当前项目路径
       let rootPath: string | undefined;
       if (exportScope === "project") {
@@ -942,31 +991,16 @@ export function SkillImportModal(props: {
       exportSkillEntries(payload, exportScope, rootPath).then(
           (res) => {
             setSaving(false);
-            // 导出成功后展示逐条结果，由用户点击「完成」关闭弹窗
-            const rows: ImportResultRow[] = [
-              ...res.items.map((i) => ({
-                title: i.title,
-                label: T("pl.resultExported"),
-                kind: "ok" as const,
-              })),
-              ...res.errors.map((e) => ({
-                title: e.title,
-                label: T("pl.resultFail"),
-                kind: "error" as const,
-                reason: e.reason,
-              })),
-            ];
+            // 导出成功后由一级弹窗在左下角气泡展示汇总，并关闭本弹窗
             const errNote = res.errors.length
               ? T("pl.skillModal.savedExportErrors", { n: res.errors.length })
               : "";
             const rootNote = res.root
               ? T("pl.skillModal.exportRoot", { root: res.root })
               : "";
-            setResult({
-              title: T("pl.resultExportTitle"),
-              summary: `${T("pl.skillModal.savedExport", { exported: res.exported })} · ${rootNote}${errNote}`,
-              rows,
-            });
+            onSaved?.(
+              `${T("pl.skillModal.savedExport", { exported: res.exported })} · ${rootNote}${errNote}`,
+            );
           },
           (err: unknown) => {
             setSaving(false);
@@ -975,56 +1009,9 @@ export function SkillImportModal(props: {
         );
       return;
     }
-    const payload: SkillEntry[] = checked.map((e) => ({
-      name: e.name,
-      title: e.title,
-      body: e.body,
-      summary: e.summary,
-    }));
-    importSkillEntries(payload).then(
-      (res) => {
-        setSaving(false);
-        notifyDataChanged();
-        onImported?.(res);
-        // 导入成功后展示逐条结果，由用户点击「完成」关闭弹窗
-        const rows: ImportResultRow[] = [
-          ...res.items.map((i) => ({
-            title: i.title,
-            label:
-              i.status === "updated"
-                ? T("pl.resultUpdated")
-                : i.status === "skipped"
-                  ? T("pl.resultSkipped")
-                  : T("pl.resultImported"),
-            kind:
-              i.status === "updated"
-                ? ("updated" as const)
-                : i.status === "skipped"
-                  ? ("skipped" as const)
-                  : ("ok" as const),
-          })),
-          ...res.errors.map((e) => ({
-            title: e.name,
-            label: T("pl.resultFail"),
-            kind: "error" as const,
-            reason: e.reason,
-          })),
-        ];
-        const errNote = res.errors.length
-          ? T("pl.skillModal.savedErrors", { n: res.errors.length })
-          : "";
-        setResult({
-          title: T("pl.resultTitle"),
-          summary: `${T("pl.skillModal.saved", { imported: res.imported, updated: res.updated })}${errNote}`,
-          rows,
-        });
-      },
-      (err: unknown) => {
-        setSaving(false);
-        setMsg({ text: err instanceof Error ? err.message : String(err), error: true });
-      },
-    );
-  }, [validation, saving, entries, mode, exportScope, projectCwd, projectPathInput, onImported, T]);
+    // 导入模式：直接执行入库
+    runImport();
+  }, [validation, saving, entries, mode, exportScope, projectCwd, projectPathInput, T, onSaved, runImport]);
 
   const checkedCount = entries.filter((e) => e.checked).length;
   const allChecked = entries.length > 0 && checkedCount === entries.length;
@@ -1032,8 +1019,7 @@ export function SkillImportModal(props: {
   const selected = entries.find((e) => e.key === selectedKey) ?? null;
   // 是否存在需要浮动提示的反馈内容（校验结果 / 修复记录 / 操作信息 / 导出 AI 补充）
   const hasFeedback =
-    !result &&
-    (msg != null || validation != null || fixLog.length > 0 || (mode === "export" && aiState !== "idle"));
+    msg != null || validation != null || fixLog.length > 0 || (mode === "export" && aiState !== "idle");
 
   // 反馈内容变化时浮出气泡；气泡常开则启动自动消失定时
   // 依赖反馈内容本身（而非仅 hasFeedback 布尔值）：手动关闭气泡后 validation 等仍非空，
@@ -1042,7 +1028,7 @@ export function SkillImportModal(props: {
   // 否则会触发 React #310「rendered fewer hooks than expected」崩溃。
   useEffect(() => {
     setToastOpen(hasFeedback);
-  }, [hasFeedback, msg, validation, fixLog, fillLog, aiState, aiResult, result]);
+  }, [hasFeedback, msg, validation, fixLog, fillLog, aiState, aiResult]);
 
   useEffect(() => {
     if (!toastOpen) return;
@@ -1077,7 +1063,7 @@ export function SkillImportModal(props: {
         display: "flex",
         flexDirection: "column",
         background: TONE.panel,
-        borderRadius: 12,
+        borderRadius: 24,
         padding: "18px 7px 18px 10px",
         boxSizing: "border-box",
       }}
@@ -1439,21 +1425,33 @@ export function SkillImportModal(props: {
                       display: "flex",
                       alignItems: "center",
                       gap: 7,
-                      padding: "7px 9px",
+                      padding: "8px 10px",
                       background:
                         selectedKey === entry.key
                           ? "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 16%, transparent)"
-                          : "transparent",
+                          : TONE.row,
                       border: `1px solid ${
                         selectedKey === entry.key
                           ? "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 45%, transparent)"
-                          : "transparent"
+                          : TONE.border
                       }`,
                       borderRadius: 8,
                       cursor: "pointer",
                       opacity: entry.checked ? 1 : 0.55,
                       transition:
                         "border-color .24s cubic-bezier(.22,1,.36,1), background-color .24s cubic-bezier(.22,1,.36,1), opacity .18s",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (selectedKey !== entry.key) {
+                        e.currentTarget.style.borderColor = TONE.borderStrong;
+                        e.currentTarget.style.backgroundColor = "var(--dsw-alias-interactive-bg-hover)";
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (selectedKey !== entry.key) {
+                        e.currentTarget.style.borderColor = TONE.border;
+                        e.currentTarget.style.backgroundColor = TONE.row;
+                      }
                     }}
                   >
                     <input
@@ -1700,8 +1698,7 @@ export function SkillImportModal(props: {
         </div>
 
         {/* 底部操作：AI 补充（仅导出模式，放最左边）+ 校验 + 保存（仅校验通过后可用） */}
-        {!result && (
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center", flexShrink: 0, marginTop: 10, position: "relative" }}>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center", flexShrink: 0, marginTop: 10, position: "relative" }}>
 
             {/* 浮动反馈层：校验/修复/操作信息（如聊天气泡，嵌于底部按钮条上方悬浮，一段时间后自动消失） */}
             {toastOpen && hasFeedback && (
@@ -1868,7 +1865,68 @@ export function SkillImportModal(props: {
                 }}
               >
                 {aiState === "running" ? (
-                  <div>{T("pl.skillModal.aiValidating")}</div>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8,
+                      alignItems: "stretch",
+                    }}
+                  >
+                    {/* 进度提示行：文案 + 取消按钮 */}
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                      }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        {T("pl.skillModal.aiEnhancing", {
+                          done: aiDone,
+                          total: aiTotal,
+                        })}
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className={plBtn("ghost", "sm")}
+                        onClick={() => {
+                          // 立即中断当前请求 + 标记跳过剩余条目
+                          aiCancelRef.current = true;
+                          aiAbortRef.current?.abort();
+                        }}
+                      >
+                        {T("pl.cancel")}
+                      </Button>
+                    </div>
+                    {/* 进度条 */}
+                    <div
+                      style={{
+                        height: 6,
+                        borderRadius: 3,
+                        background: TONE.row,
+                        border: `1px solid ${TONE.border}`,
+                        overflow: "hidden",
+                        flexShrink: 0,
+                      }}
+                    >
+                      <div
+                        style={{
+                          height: "100%",
+                          width: `${
+                            aiTotal > 0
+                              ? Math.min(100, Math.round((aiDone / aiTotal) * 100))
+                              : 0
+                          }%`,
+                          borderRadius: 3,
+                          background: TONE.accent,
+                          transition: "width .3s ease",
+                        }}
+                      />
+                    </div>
+                  </div>
                 ) : aiResult && aiResult.errors.length > 0 ? (
                   <>
                     <div>
@@ -1940,21 +1998,9 @@ export function SkillImportModal(props: {
                   ? T("pl.skillModal.saveExport")
                   : T("pl.skillModal.save")}
             </Button>
-          </div>
-        )}
+        </div>
 
-        {/* 导入/导出结果面板：逐条展示成功/失败/跳过 */}
-        {result && (
-          <ImportResultPanel
-            title={result.title}
-            summary={result.summary}
-            rows={result.rows}
-            onDone={onClose}
-            doneLabel={T("pl.resultDone")}
-          />
-        )}
-
-      {/* 选择本地 md 文件用的隐藏文件输入 */}
+        {/* 选择本地 md 文件用的隐藏文件输入 */}
       <input
         ref={fileRef}
         type="file"

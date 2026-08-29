@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WebRoute } from "@deepseek-ai/dsh-host-webserver";
 import type { ApiResponse, PluginSettings, Prompt, PromptInput, PromptPatch } from "../types.js";
-import { commentOnStats, generateDraft, generateIntro, generateSkillDescriptor, listAiSelectables, polishPromptBody, polishPromptBodyWithSummary, todayLocalDate } from "./ai.js";
+import { clearDeepSeekBalanceCache, commentOnStats, generateDraft, generateIntro, generateSkillDescriptor, isDeepSeekProviderInUse, listAiSelectables, polishPromptBody, polishPromptBodyWithSummary, queryDeepSeekBalance, todayLocalDate } from "./ai.js";
 import {
   exportAsSessionPrompts,
   exportPromptsAsSkills,
@@ -29,6 +29,7 @@ import {
   listSkillsFromDir,
   parseSkillRaw,
   setHarnessSkillToggle,
+  deleteHarnessSkill,
 } from "./skills.js";
 import {
   autoLearn,
@@ -603,6 +604,25 @@ export function makePromptRoutes(): WebRoute[] {
         return json(res, 200, { ok: true, data: { id, enabled: typeof enabled === "boolean" ? enabled : true } });
       }
 
+      // POST /skills/harness/delete — 删除某个 harness 技能（删除其技能根目录下的整个目录）。
+      if (method === "POST" && tail === "/skills/harness/delete") {
+        const body = await readJsonBody(req);
+        const id =
+          typeof body === "object" &&
+          body !== null &&
+          typeof (body as { id?: unknown }).id === "string"
+            ? (body as { id: string }).id.trim()
+            : "";
+        if (!id) return json(res, 400, { ok: false, error: "invalid body: {id: string}" });
+        try {
+          const deleted = await deleteHarnessSkill(id);
+          if (!deleted) return json(res, 404, { ok: false, error: "skill not found" });
+          return json(res, 200, { ok: true, data: { id } });
+        } catch (e) {
+          return json(res, 400, { ok: false, error: e instanceof Error ? e.message : String(e) });
+        }
+      }
+
       // POST /trash/restore — 从回收站恢复一批提示词
       if (method === "POST" && tail === "/trash/restore") {
         const body = await readJsonBody(req);
@@ -763,7 +783,13 @@ export function makePromptRoutes(): WebRoute[] {
         if (typeof raw !== "object" || raw === null) {
           return json(res, 400, { ok: false, error: "invalid body" });
         }
+        // 修改 DeepSeek API Key 时清空 host 侧余额缓存，让小助手下一次查询立即返回真实余额
+        const prev = await getSettings();
         const settings = await updateSettings(raw as Partial<PluginSettings>);
+        const patch = raw as Partial<PluginSettings>;
+        if (typeof patch.deepseekApiKey === "string" && patch.deepseekApiKey !== prev.deepseekApiKey) {
+          clearDeepSeekBalanceCache();
+        }
         return json(res, 200, { ok: true, data: settings });
       }
 
@@ -809,6 +835,18 @@ export function makePromptRoutes(): WebRoute[] {
         ]);
         const data = buildAssistantStatus(stats, streak, lang.toLowerCase().startsWith("en") ? "en" : "zh", points);
         return json(res, 200, { ok: true, data });
+      }
+
+      // GET /deepseek/balance — 判断当前是否在使用 DeepSeek API，并在配置了 DeepSeek API Key 时
+      // 实时查询官方账户余额。未配置 Key 或查询失败时 balance 为 null（角标显示占位）。
+      if (method === "GET" && tail === "/deepseek/balance") {
+        const settings = await getSettings();
+        const isDeepSeek = isDeepSeekProviderInUse(settings);
+        let balance = null;
+        if (settings.deepseekApiKey) {
+          balance = await queryDeepSeekBalance(settings.deepseekApiKey);
+        }
+        return json(res, 200, { ok: true, data: { isDeepSeek, balance } });
       }
 
       // GET /announcement — 公告通告（词库助手右键菜单「公告」弹窗读取；本地多语言，支持 lang 查询参数）

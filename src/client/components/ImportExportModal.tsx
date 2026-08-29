@@ -1,5 +1,5 @@
 /**
- * 导入导出弹窗 — 词库助手「数据管理」→「导入导出」入口。
+ * 导入导出弹窗 — 词库助手右键菜单「导入导出」入口。
  *
  * 集中放置与提示词数据导入导出相关的操作：
  * - 导出：勾选要导出的提示词，选择格式（JSON / CSV / Markdown / 文本）下载，或导出为 Skill
@@ -19,6 +19,7 @@ import {
 } from "react";
 import type { Prompt } from "../../types.js";
 import {
+  deletePrompt as apiDeletePrompt,
   listPrompts as apiListPrompts,
   saveExportFile,
 } from "../utils/api.js";
@@ -32,6 +33,7 @@ import {
 } from "../utils/dialog-style.js";
 import { getTone, useThemeSync } from "../utils/theme.js";
 import { type PLT, type PLTranslate, usePLT } from "../utils/i18n.js";
+import { ConfirmDialog } from "./ConfirmDialog.js";
 import { DialogCloseButton } from "./DialogCloseButton.js";
 import { BookIcon } from "./BookIcon.js";
 import { SkillImportModal } from "./SkillImportModal.js";
@@ -204,6 +206,8 @@ export function ImportExportModal(props: {
   const [viewing, setViewing] = useState<Prompt | null>(null);
   // 当前高亮的列表项 ID（预览中的项；再次点击可取消高亮）
   const [activeId, setActiveId] = useState<string | null>(null);
+  // 预览窗口待删除确认的提示词（右上角「删除」触发）
+  const [deleteTarget, setDeleteTarget] = useState<Prompt | null>(null);
 
   const [msg, setMsg] = useState<{
     text: string;
@@ -212,6 +216,9 @@ export function ImportExportModal(props: {
   const msgTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 导出成功提示框（导出的 promptId）——点击「确定」关闭
   const [exportDoneMsg, setExportDoneMsg] = useState<string | null>(null);
+  // 保存成功结果通知气泡（导入数据 / 导入技能 / 导出技能保存成功后，在一级弹窗左下角弹出）
+  const [resultToast, setResultToast] = useState<string | null>(null);
+  const resultToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const showMsg = useCallback(
     (text: string, kind: "success" | "info" | "error" = "success") => {
@@ -222,9 +229,24 @@ export function ImportExportModal(props: {
     [],
   );
 
+  /** 展示保存成功结果气泡（一级弹窗左下角，4s 后自动消失；悬停暂停 / 手动关闭）。 */
+  const showResultToast = useCallback((text: string) => {
+    setResultToast(text);
+    if (resultToastTimerRef.current) clearTimeout(resultToastTimerRef.current);
+    resultToastTimerRef.current = setTimeout(() => setResultToast(null), 4000);
+  }, []);
+  const pauseResultToast = useCallback(() => {
+    if (resultToastTimerRef.current) clearTimeout(resultToastTimerRef.current);
+  }, []);
+  const resumeResultToast = useCallback(() => {
+    if (resultToastTimerRef.current) clearTimeout(resultToastTimerRef.current);
+    resultToastTimerRef.current = setTimeout(() => setResultToast(null), 4000);
+  }, []);
+
   useEffect(
     () => () => {
       if (msgTimerRef.current) clearTimeout(msgTimerRef.current);
+      if (resultToastTimerRef.current) clearTimeout(resultToastTimerRef.current);
     },
     [],
   );
@@ -394,6 +416,31 @@ export function ImportExportModal(props: {
     [activeId, openView],
   );
 
+  /** 确认删除预览中的提示词：成功后刷新列表、清空预览与勾选，并同步全局数据。 */
+  const confirmDelete = useCallback(() => {
+    if (!deleteTarget) return;
+    const id = deleteTarget.id;
+    apiDeletePrompt(id).then(
+      () => {
+        setDeleteTarget(null);
+        setActiveId(null);
+        setViewing(null);
+        setExportSelected((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+        showMsg(T("pl.deleted"), "success");
+        notifyDataChanged();
+        apiListPrompts().then((list) => setPromptList(list));
+      },
+      (e: unknown) => {
+        setDeleteTarget(null);
+        showMsg(e instanceof Error ? e.message : String(e), "error");
+      },
+    );
+  }, [deleteTarget, showMsg, T]);
+
   if (!open) return null;
 
   return createPortal(
@@ -417,8 +464,8 @@ export function ImportExportModal(props: {
         className={PL_DIALOG}
         style={{
           position: "relative",
-          width: 860,
-          height: 760,
+          width: 800,
+          height: 800,
           maxWidth: "calc(100vw - 40px)",
           maxHeight: "calc(100vh - 40px)",
         }}
@@ -1103,7 +1150,7 @@ export function ImportExportModal(props: {
                   boxSizing: "border-box",
                 }}
               >
-                {/* 标题（无编辑/删除/AI 优化等管理操作按钮） */}
+                {/* 标题 + 右上角删除按钮（删除需二次确认） */}
                 <div
                   style={{
                     display: "flex",
@@ -1135,6 +1182,17 @@ export function ImportExportModal(props: {
                   >
                     {viewing.title}
                   </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className={plBtn("ghost", "sm")}
+                    onClick={() => setDeleteTarget(viewing)}
+                    style={{ color: TONE.red }}
+                    data-tip={T("pl.delete")}
+                  >
+                    {T("pl.delete")}
+                  </Button>
                 </div>
                 {/* 标签：无标签时显示「无标签」占位 */}
                 {viewing.tags && viewing.tags.length > 0 ? (
@@ -1372,6 +1430,10 @@ export function ImportExportModal(props: {
             notifyDataChanged();
             apiListPrompts().then((list) => setPromptList(list));
           }}
+          onSaved={(summary) => {
+            setSkillImportOpen(false);
+            showResultToast(summary);
+          }}
         />
 
         {/* 通用格式导入弹窗 */}
@@ -1384,6 +1446,10 @@ export function ImportExportModal(props: {
             notifyDataChanged();
             apiListPrompts().then((list) => setPromptList(list));
           }}
+          onSaved={(summary) => {
+            setImportEditOpen(false);
+            showResultToast(summary);
+          }}
         />
 
         {/* 技能导出弹窗 */}
@@ -1393,6 +1459,25 @@ export function ImportExportModal(props: {
           t={t}
           mode="export"
           initialEntries={skillExportInitial}
+          onSaved={(summary) => {
+            setSkillExportOpen(false);
+            showResultToast(summary);
+          }}
+        />
+
+        {/* 预览条目删除二次确认（danger：确认按钮红色，仅通过按钮关闭） */}
+        <ConfirmDialog
+          open={!!deleteTarget}
+          danger
+          message={
+            deleteTarget
+              ? T("pl.confirmDelete", { title: deleteTarget.title })
+              : ""
+          }
+          confirmLabel={T("pl.delete")}
+          cancelLabel={T("pl.cancel")}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={confirmDelete}
         />
 
         {/* 导出成功提示框：点击「确定」关闭；覆盖在弹窗上方，半透明遮罩区分层级 */}
@@ -1442,6 +1527,57 @@ export function ImportExportModal(props: {
                 </Button>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* 保存成功结果通知气泡：位于一级弹窗左下角，自动消失（悬停暂停 / 手动关闭） */}
+        {resultToast && (
+          <div
+            role="status"
+            onMouseEnter={pauseResultToast}
+            onMouseLeave={resumeResultToast}
+            style={{
+              position: "absolute",
+              bottom: 14,
+              left: 16,
+              zIndex: 300,
+              maxWidth: 360,
+              boxSizing: "border-box",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "9px 12px",
+              borderRadius: 12,
+              fontSize: 12,
+              lineHeight: 1.5,
+              color: TONE.text,
+              background: "color-mix(in srgb, var(--dsw-alias-bg-layer-1, #171f2b) 82%, transparent)",
+              WebkitBackdropFilter: "blur(12px)",
+              backdropFilter: "blur(12px)",
+              border: `1px solid ${TONE.borderStrong}`,
+              boxShadow: "0 8px 24px rgba(0, 0, 0, .22)",
+            }}
+          >
+            <span style={{ flexShrink: 0, width: 6, height: 6, borderRadius: "50%", background: TONE.mint }} />
+            <span style={{ flex: 1, minWidth: 0 }}>{resultToast}</span>
+            <button
+              type="button"
+              onClick={() => setResultToast(null)}
+              data-tip={T("pl.close")}
+              style={{
+                border: "none",
+                outline: "none",
+                background: "transparent",
+                color: TONE.quiet,
+                cursor: "pointer",
+                fontSize: 14,
+                lineHeight: 1,
+                fontFamily: MONO,
+                padding: "0 2px",
+              }}
+            >
+              ×
+            </button>
           </div>
         )}
       </div>

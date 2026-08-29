@@ -22,7 +22,6 @@ import { type PLTranslate, usePLT } from "../utils/i18n.js";
 import { importPrompts as apiImport, listTags as apiListTags } from "../utils/api.js";
 import { notifyDataChanged } from "../utils/data-sync.js";
 import { insertVariableAt } from "./TemplateVariables.js";
-import { ImportResultPanel, type ImportResultRow } from "./ImportResultPanel.js";
 import { DialogCloseButton } from "./DialogCloseButton.js";
 import { BookIcon } from "./BookIcon.js";
 import type { TransferPrompt } from "../utils/data-formats.js";
@@ -169,10 +168,12 @@ export function ImportEditModal(props: {
   t?: PLTranslate;
   /** 从所选文件解析出的初始条目。 */
   initialEntries?: TransferPrompt[];
-  /** 导入成功后回调（展示导入结果）。 */
+  /** 导入成功后回调（刷新数据）。 */
   onImported?: (result: { imported: number; updated: number; skipped: number }) => void;
+  /** 导入成功后的汇总文案回调（由一级弹窗在左下角气泡展示，展示后关闭本弹窗）。 */
+  onSaved?: (summary: string) => void;
 }): ReactNode {
-  const { open, onClose, t, initialEntries, onImported } = props;
+  const { open, onClose, t, initialEntries, onImported, onSaved } = props;
   const T = usePLT(t);
   const [entries, setEntries] = useState<EditableEntry[]>([]);
   const [validation, setValidation] = useState<ValidateResult | null>(null);
@@ -188,8 +189,6 @@ export function ImportEditModal(props: {
   const toastTimer = useRef<number | null>(null);
   // 下拉可选标签（既有标签名列表），打开时拉取
   const [tagOptions, setTagOptions] = useState<string[]>([]);
-  // 导入完成后的逐条结果（展示成功/失败/跳过，用户点击「完成」后关闭）
-  const [result, setResult] = useState<{ summary: string; rows: ImportResultRow[] } | null>(null);
 
   // 打开时拉取既有标签，用于下拉选择；同时合并本次导入解析出的标签，
   // 保证文件里的标签即使不在既有标签库中也能在下拉中回显
@@ -232,7 +231,6 @@ export function ImportEditModal(props: {
     setMsg(null);
     setSelectedKey(null);
     setSaving(false);
-    setResult(null);
   }, [open]);
 
   /** 更新某条目字段；编辑会使之前的校验与修复记录失效。 */
@@ -377,43 +375,28 @@ export function ImportEditModal(props: {
         setSaving(false);
         notifyDataChanged();
         onImported?.(res);
-        // 导入成功后展示逐条结果，由用户点击「完成」关闭弹窗
-        setResult({
-          summary: T("pl.imported", {
+        // 导入成功后由一级弹窗在左下角气泡展示汇总，并关闭本弹窗
+        onSaved?.(
+          T("pl.imported", {
             imported: res.imported,
             updated: res.updated,
             skipped: res.skipped,
           }),
-          rows: (res.items ?? []).map((item) => ({
-            title: item.title || T("pl.importEdit.untitledPrompt"),
-            label:
-              item.status === "imported"
-                ? T("pl.resultImported")
-                : item.status === "updated"
-                  ? T("pl.resultUpdated")
-                  : T("pl.resultSkipped"),
-            kind:
-              item.status === "imported"
-                ? "ok"
-                : item.status === "updated"
-                  ? "updated"
-                  : "skipped",
-          })),
-        });
+        );
       },
       (err: unknown) => {
         setSaving(false);
         setMsg({ text: err instanceof Error ? err.message : String(err), kind: "error" });
       },
     );
-  }, [validation, saving, entries, onImported, T]);
+  }, [validation, saving, entries, onImported, onSaved, T]);
 
   const checkedCount = entries.filter((e) => e.checked).length;
   const allChecked = entries.length > 0 && checkedCount === entries.length;
   // 右栏编辑窗口当前选中的条目（被删除或不存在时为 null）
   const selected = entries.find((e) => e.key === selectedKey) ?? null;
   // 是否存在需要浮动提示的反馈内容（校验结果 / 修复记录 / 操作信息）
-  const hasFeedback = !result && (msg != null || validation != null || fixLog.length > 0);
+  const hasFeedback = msg != null || validation != null || fixLog.length > 0;
 
   // 反馈内容变化时浮出气泡；气泡常开则启动自动消失定时
   // 依赖反馈内容本身（而非仅 hasFeedback 布尔值）：手动关闭气泡后 validation 等仍非空，
@@ -422,7 +405,7 @@ export function ImportEditModal(props: {
   // 否则会触发 React #310「rendered fewer hooks than expected」崩溃。
   useEffect(() => {
     setToastOpen(hasFeedback);
-  }, [hasFeedback, msg, validation, fixLog, result]);
+  }, [hasFeedback, msg, validation, fixLog]);
 
   useEffect(() => {
     if (!toastOpen) return;
@@ -457,7 +440,7 @@ export function ImportEditModal(props: {
         display: "flex",
         flexDirection: "column",
         background: TONE.panel,
-        borderRadius: 12,
+        borderRadius: 24,
         padding: "18px 7px 18px 10px",
         boxSizing: "border-box",
       }}
@@ -581,11 +564,11 @@ export function ImportEditModal(props: {
                       display: "flex",
                       alignItems: "center",
                       gap: 8,
-                      padding: "7px 9px",
+                      padding: "8px 10px",
                       background:
                         selectedKey === entry.key
                           ? "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 16%, transparent)"
-                          : "transparent",
+                          : TONE.row,
                       border: `1px solid ${
                         selectedKey === entry.key
                           ? "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 45%, transparent)"
@@ -596,6 +579,18 @@ export function ImportEditModal(props: {
                       opacity: entry.checked ? 1 : 0.55,
                       transition:
                         "border-color .24s cubic-bezier(.22,1,.36,1), background-color .24s cubic-bezier(.22,1,.36,1), opacity .18s",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (selectedKey !== entry.key) {
+                        e.currentTarget.style.borderColor = TONE.borderStrong;
+                        e.currentTarget.style.backgroundColor = "var(--dsw-alias-interactive-bg-hover)";
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (selectedKey !== entry.key) {
+                        e.currentTarget.style.borderColor = TONE.border;
+                        e.currentTarget.style.backgroundColor = TONE.row;
+                      }
                     }}
                   >
                     <input
@@ -808,62 +803,49 @@ export function ImportEditModal(props: {
         </div>
 
         {/* 操作反馈：预留固定行高，避免显示/隐藏时改变布局引起窗口抖动；按类型区分颜色 */}
-        {!result && (
-          <div
-            style={{
-              flexShrink: 0,
-              height: 18,
-              marginTop: 2,
-              display: "flex",
-              alignItems: "center",
-              gap: 5,
-              fontSize: 12,
-              lineHeight: 1.5,
-              color: msg
-                ? msg.kind === "error"
-                  ? TONE.red
-                  : msg.kind === "info"
-                  ? TONE.accent
-                  : TONE.success
-                : "transparent",
-              overflow: "hidden",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {msg && (
-              <span
-                style={{
-                  flexShrink: 0,
-                  width: 6,
-                  height: 6,
-                  borderRadius: "50%",
-                  background: msg.kind === "error" ? TONE.red : msg.kind === "info" ? TONE.accent : TONE.success,
-                }}
-              />
-            )}
-            {msg?.text ?? ""}
-          </div>
-        )}
-        {/* 导入结果面板：逐条展示成功/失败/跳过 */}
-        {result && (
-          <ImportResultPanel
-            title={T("pl.resultTitle")}
-            summary={result.summary}
-            rows={result.rows}
-            onDone={onClose}
-            doneLabel={T("pl.resultDone")}
-          />
-        )}
+        <div
+          style={{
+            flexShrink: 0,
+            height: 18,
+            marginTop: 2,
+            display: "flex",
+            alignItems: "center",
+            gap: 5,
+            fontSize: 12,
+            lineHeight: 1.5,
+            color: msg
+              ? msg.kind === "error"
+                ? TONE.red
+                : msg.kind === "info"
+                ? TONE.accent
+                : TONE.success
+              : "transparent",
+            overflow: "hidden",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {msg && (
+            <span
+              style={{
+                flexShrink: 0,
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                background: msg.kind === "error" ? TONE.red : msg.kind === "info" ? TONE.accent : TONE.success,
+              }}
+            />
+          )}
+          {msg?.text ?? ""}
+        </div>
 
-        {/* 底部操作：校验 + 导入（仅校验通过后可用，展示结果后仅剩「完成」） */}
-        {!result && (
-          <div
-            style={{
-              display: "flex",
-              gap: 8,
-              justifyContent: "flex-end",
-              alignItems: "center",
-              flexShrink: 0,
+        {/* 底部操作：校验 + 导入（仅校验通过后可用） */}
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            justifyContent: "flex-end",
+            alignItems: "center",
+            flexShrink: 0,
               position: "relative",
             }}
           >
@@ -1011,7 +993,6 @@ export function ImportEditModal(props: {
               {saving ? T("pl.importEdit.importing") : T("pl.importEdit.import")}
             </Button>
           </div>
-        )}
     </div>
   );
 }

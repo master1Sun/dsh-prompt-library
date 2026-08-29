@@ -40,7 +40,8 @@ import { getTone, useThemeSync } from "../utils/theme.js";
 import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../utils/dialog-style.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
 import { DialogCloseButton } from "./DialogCloseButton.js";
-import { HarnessSkillModal } from "./HarnessSkillModal.js";
+import { ImportConfirmModal } from "./ImportConfirmModal.js";
+import { HarnessSkillPanel } from "./HarnessSkillPanel.js";
 import { type PLT } from "../utils/i18n.js";
 
 const MONO =
@@ -142,8 +143,10 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
   const [detailId, setDetailId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // 导入导出等操作反馈（error=false 时为成功/普通提示，error=true 时红色警示）
+  // 导出等操作反馈（error=false 时为成功/普通提示，error=true 时红色警示）
   const [msg, setMsg] = useState<{ text: string; kind?: "success" | "info" | "error" } | null>(null);
+  // 导入前待确认内容（标题 + 正文），非 null 时弹出确认框；用户确认后才真正入库
+  const [pendingImport, setPendingImport] = useState<{ title: string; text: string } | null>(null);
   // 操作反馈自动消失定时器引用（提示出现后自动清除，避免残留）
   const msgTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
@@ -158,7 +161,7 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // 导入文件选择（MD 单文件）
   const importFileRef = useRef<HTMLInputElement | null>(null);
-  // Harness 技能开关弹窗是否显示
+  // Harness 技能开关弹窗是否打开（独立模态弹窗）
   const [harnessOpen, setHarnessOpen] = useState(false);
   // 会话解析诊断：展示当前会话最终命中哪一层人格/技能（排查「设了没生效」用）
   const [diag, setDiag] = useState<Awaited<ReturnType<typeof diagSession>> | null>(null);
@@ -322,6 +325,11 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
   // 注意：必须位于全部 hooks 之后，避免 open 切换时 hooks 数量变化触发 React 报错。
   if (!open) return null;
 
+  // 技能开关弹窗打开时，只渲染该模态弹窗，隐藏其后的技能管理弹窗（不叠模态）。
+  if (harnessOpen) {
+    return <HarnessSkillPanel open t={t} onClose={() => setHarnessOpen(false)} />;
+  }
+
   // 刷新技能列表：剔除已被删除技能的绑定引用
   const refresh = () =>
     listSessionPrompts()
@@ -437,7 +445,11 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
     setBusy(true);
     setError(null);
     apiDeleteSessionPrompt(deleteId)
-      .then(() => refresh())
+      .then(() => {
+        refresh();
+        // 删除技能后同步刷新右侧绑定树（依赖 scopes/bindings），清除已删除技能在路径与会话下的残留
+        void refreshScopes();
+      })
       .catch(() => setError(t("pl.inject.opFailed")))
       .finally(() => {
         setBusy(false);
@@ -486,6 +498,15 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
       return;
     }
     const title = file.name.replace(/\.[^/.]+$/, "").trim() || "untitled";
+    // 先弹出确认框让用户核对标题与正文，确认后才真正入库
+    setPendingImport({ title, text });
+  };
+
+  // 用户确认导入后真正入库（录入确认框核对的内容）
+  const confirmImport = async () => {
+    if (!pendingImport) return;
+    const { title, text } = pendingImport;
+    setPendingImport(null);
     setBusy(true);
     setError(null);
     try {
@@ -1196,8 +1217,8 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
           <div
             className={PL_DIALOG}
             style={{
-              width: 860,
-              height: 760,
+              width: 800,
+              height: 800,
               maxWidth: "calc(100vw - 40px)",
               maxHeight: "calc(100vh - 40px)",
             }}
@@ -1320,7 +1341,7 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
                   <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 10 }}>
                     <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5 }}>{t("pl.exportHint")}</div>
                     <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-                      <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} title={t("pl.harnessSkill.btnTitle")} onClick={() => setHarnessOpen(true)}>
+                      <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} title={t("pl.harnessSkill.btnTitle")} onClick={() => setHarnessOpen((v) => !v)}>
                         {t("pl.harnessSkill.btn")}
                       </Button>
                       <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={busy} onClick={handleExport}>
@@ -1382,7 +1403,7 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
                 </div>
               </div>
 
-              {/* 右栏：工作区 / 项目绑定（独立滚动） */}
+              {/* 右栏：项目绑定工作区（技能开关改在独立弹窗中打开） */}
               <div
                 style={{
                   flex: "1.15 1 0",
@@ -1568,6 +1589,19 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
               onConfirm={confirmClearAll}
             />
 
+            {/* 导入前确认弹窗：展示待导入技能的标题与正文预览，确认后才真正入库 */}
+            <ImportConfirmModal
+              open={pendingImport != null}
+              title={t("pl.inject.importConfirmTitle")}
+              headline={t("pl.inject.importConfirmHeadline", { name: pendingImport?.title ?? "" })}
+              contentTitle={pendingImport?.title}
+              content={pendingImport?.text}
+              confirmLabel={t("pl.import")}
+              cancelLabel={t("pl.personas.cancel")}
+              onCancel={() => setPendingImport(null)}
+              onConfirm={() => void confirmImport()}
+            />
+
             {/* 导入 MD 文件选择（隐藏） */}
             <input
               ref={importFileRef}
@@ -1642,8 +1676,6 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
             );
           })()
         : null}
-      {/* Harness 技能软控制开关弹窗（列表 ~/.dsh/skills 系统技能 + 项目技能） */}
-      <HarnessSkillModal open={harnessOpen} onClose={() => setHarnessOpen(false)} t={t} />
     </>
   );
 }

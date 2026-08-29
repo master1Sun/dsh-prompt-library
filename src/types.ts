@@ -164,14 +164,12 @@ export interface ScopeNode {
 
 /** 插件设置。 */
 export interface PluginSettings {
-  /** 是否开启自动学习。 */
-  autoLearnEnabled: boolean;
+  /** 手动确认学习：检测到可学习内容时在聊天框弹出保存/取消，确认后才入库。 */
+  autoLearnManualConfirm: boolean;
   /** 自动学习提示词标签。 */
   autoLearnTag: string;
   /** 自动学习最小长度。 */
   autoLearnMinLength: number;
-  /** 是否开启自动学习手动确认（聊天框弹出保存/取消，AI 智能完善开启时忽略）。 */
-  autoLearnManualConfirm: boolean;
   /** 面板宽度（px）。 */
   panelWidth: number;
   /** 面板高度（px）。 */
@@ -202,6 +200,8 @@ export interface PluginSettings {
   aiProvider: string;
   /** AI 调用使用的模型 id（留空则自动发现）。 */
   aiModel: string;
+  /** DeepSeek API Key（可选）：填写后用于向 DeepSeek 官方余额接口查询账户余额并实时推送；留空则不查询。 */
+  deepseekApiKey: string;
   /** 助手提示间隔（秒）：未悬停时自动冒气泡的频率。 */
   personTipInterval: number;
   /** 助手提示显示时长（秒）：自动冒气泡持续展示的时间。 */
@@ -245,12 +245,12 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   personTipDuration: 20, // 自动冒气泡的持续显示时长（秒）
   aiProvider: "", // AI 智能完善使用的 provider（留空自动发现）
   aiModel: "", // AI 智能完善使用的模型 id（留空自动发现）
+  deepseekApiKey: "", // DeepSeek API Key（可选）：用于查询并实时推送账户余额
   backupRetention: 15, // 自动备份保留的备份文件份数（超出自动清理最旧的）
   backupSchedule: "weekly", // 自动备份周期：daily / weekly / monthly
   backupFormat: "db", // 自动备份文件格式：db（数据库副本）/ json（JSON 导出）
   assistantCharacter: "whale", // 词库助手助手形象：鲸鱼款·静态（默认）
-  autoLearnEnabled: true, // 是否开启自动学习
-  autoLearnManualConfirm: true, // 自动学习是否需手动确认（捕获到提示词后弹保存/取消）
+  autoLearnManualConfirm: true, // 手动确认学习（检测到可学习内容时弹保存/取消，确认后才入库）
   assistantEnabled: true, // 词库助手显隐（主开关，关闭后右侧面板也无法启用）
   rightPanelEnabled: true, // 是否启用右侧侧边栏展开/折叠（需先开启词库助手）
   showComposerButton: true, // 是否在聊天框工具栏显示词库按钮

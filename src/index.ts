@@ -23,6 +23,7 @@ import {
   welcomePromptOnce,
 } from "./host/store.js";
 import {
+  getCurrentSessionScope,
   getSessionActivePromptIds,
   getSessionPromptsByIds,
   resolveSessionPromptBindingIds,
@@ -389,71 +390,95 @@ export function apply(ctx: Context) {
   // 首次使用（技能库为空）时播种三条默认技能（编程 / 文员 / 律师），只播种一次。
   seedDefaultSessionPromptsIfEmpty();
 
-  // 把「身份人格 + 会话上下文」注入当前聊天。为让人格/技能不被其他插件冲掉，拆成两个 section：
-  // - SOUL 人格：占用宿主 deployment:persona 身份槽位（order 0，模型最先读到）。宿主把所有
-  //   section 按 order 升序拼接，order 0 的人格槽位最权威；其他插件/agent preset 也靠注册同名
-  //   deployment:persona 来抢占。当前插件原以 order 50 的普通段落注入会排在宿主默认人格之后、
-  //   被模型当作次要内容而「冲掉」。改为占槽位后即 shadow 宿主默认人格，成为最权威身份，不再被覆盖。
-  // - 其余约束（HARNESS 会话上下文 / 会话级技能注入 / 禁用技能指令 / 短欢迎）：order 放到靠后
-  //   的大值（300，位于工具指引 100-199 之后），让「必须遵守」的约束成为模型最后读到、响应最强的段落。
-  // systemPrompt 服务可用时按会话 scope 判断注入哪些内容（均在每次组装时动态计算）。
-  ctx.inject(["systemPrompt"], (promptCtx: Context) => {
-    // 宿主会把 systemPrompt 服务挂到注入的 ctx 上，但宿主类型未声明，这里作结构化类型转换
-    const sp = (promptCtx as unknown as {
-      systemPrompt: {
-        section: (s: PromptSection) => () => void;
-      };
-    }).systemPrompt;
-    // 从组装上下文取出会话 id 与工作目录。
-    // 注意：宿主的 assembleContextFor 里 scope 是 agent 对象（{ agent, scope: agent }），
-    // 并非 session id 字符串；真正的会话 id 在 agent.session.id，必须从这里取。
-    const parseContext = (context: unknown): { sessionId: string; cwd: string } => {
-      const agent = (context as { agent?: { session?: { header?: { cwd?: unknown }; id?: unknown } } } | undefined)?.agent;
-      // 工作目录 = 会话选中的工作区路径（agent.session.header.cwd），是多人格「按工作区/项目」绑定的解析键。
-      // 组装 assign 不到 cwd 时回退为空，走全局默认人格。
-      const cwd = typeof agent?.session?.header?.cwd === "string" ? agent.session.header.cwd : "";
-      const sessionId = typeof agent?.session?.id === "string" ? agent.session.id : "";
-      recordActiveSessionCwd(sessionId, cwd);
-      return { sessionId, cwd };
-    };
-    // SOUL 人格：宿主身份槽位（order 0），shadow 宿主默认人格 → 人格不会被其他插件冲掉。
-    // 人格解析：会话 id 绑定优先、工作目录路径绑定回退；正文为空时该 section 渲染为空被 drop。
-    const personaDispose = sp.section({
-      name: "deployment:persona",
-      order: 0,
-      text: (context) => {
-        const { sessionId, cwd } = parseContext(context);
-        const personaId = resolvePersonaForSession(sessionId || null, cwd || null);
-        return soulSystemSync(personaId);
-      },
-    });
-    // 其余会话约束：order 800（远落在工具指引 100-199 之后），尽量贴近 prompt 末尾，
-    // 利用近因效应增强模型遵守，不被前面的 section / 内置技能冲掉。
-    // - HARNESS：恒注入当前会话（内部上下文，不要向用户回显）；
-    // - 技能注入：当前会话「临时注入」优先，其次按工作目录命中「工作区/项目持久绑定」；
-    // - 禁用技能指令：把用户禁用的 ~/.dsh/skills / 项目技能清单注入为软控制；
-    // - 欢迎：只对第一个新会话注入一次简短问候（手册不再打印，用户可用 /prompts -h 查看）。
-    const contextDispose = sp.section({
-      name: "prompt-library-context",
-      order: 800,
-      text: (context) => {
-        const { sessionId, cwd } = parseContext(context);
-        const parts: string[] = [];
-        parts.push(harnessSystemSync());
-        const injected = buildSessionPromptInjection(sessionId, cwd);
-        if (injected) parts.push(injected);
-        // harness 技能软控制：把用户禁用的 ~/.dsh/skills / 项目技能清单注入为指令
-        const disabledSkills = disabledHarnessSkillsInstruction(cwd || null);
-        if (disabledSkills) parts.push(disabledSkills);
-        const welcome = welcomePromptOnce(sessionId);
-        if (welcome) parts.push(welcome);
-        return parts.filter((p) => p.trim()).join("\n\n");
-      },
-    });
-    return () => {
-      personaDispose();
-      contextDispose();
-    };
+  // 把「身份人格 + 会话上下文」注入当前聊天。为让人格/技能不被其他插件冲掉，拆成两个 section。
+  //
+  // 重要：宿主（@deepseek-ai/dsh-system-prompt）已把全局槽位「deployment:persona」(order 0)
+  // 写死在 systemPrompt 服务里。section 的作用域由**调用它的上下文**决定（dsh-scope 的 scopeOf）：
+  //  - 若像旧代码那样在「插件全局上下文」里注册同名 section → 与宿主全局槽位重名抛错，注入整段失效；
+  //  - 正确做法是在「agent/created」时，用该 agent 的 scoped context（agent.ctx）经 inject 注册，
+  //    此时 section 落入该会话的 scoped layer，同名即 shadow 宿主默认人格，成为该会话最权威身份，
+  //    且随 agent 销毁自动回收。
+  const PERSONA_SECTION_NAME = "deployment:persona";
+  // 解析组装上下文 → 会话 id 与工作目录（供按会话 / 按工作区-项目绑定人格与技能）。
+  // 真正会话 id 在 agent.session.id，工作目录在 agent.session.header.cwd；缺失时回退到最近活跃会话。
+  const resolveAssemblySession = (context: unknown): { sessionId: string; cwd: string } => {
+    const agent = (context as { agent?: { session?: { header?: { cwd?: unknown }; id?: unknown } } } | undefined)?.agent;
+    const cwd = typeof agent?.session?.header?.cwd === "string" ? agent.session.header.cwd : "";
+    const agentSessionId = typeof agent?.session?.id === "string" ? agent.session.id : "";
+    // 会话绑定 / 诊断的键以最近活跃会话记录为准（与本插件绑定 UI、诊断卡同一口径），少量场景兜底。
+    const sessionId = agentSessionId || (getCurrentSessionScope() ?? "");
+    recordActiveSessionCwd(sessionId, cwd);
+    return { sessionId, cwd };
+  };
+  // 人格 section 正文：会话 id 绑定优先、工作目录路径绑定回退；无命中时走全局默认人格。
+  const personaSectionText = (context: unknown): string => {
+    const { sessionId, cwd } = resolveAssemblySession(context);
+    const personaId = resolvePersonaForSession(sessionId || null, cwd || null);
+    const soul = soulSystemSync(personaId);
+    // 【排查用】宿主装配 systemPrompt 时是否回调本 section，以及返回内容长什么样
+    console.error(
+      `[prompt-library:section] persona(${PERSONA_SECTION_NAME}) sessionId=${sessionId || "∅"} cwd=${cwd || "∅"} personaId=${String(personaId ?? "∅")} bodyLen=${soul.length} head=${JSON.stringify(soul.slice(0, 24))}`,
+    );
+    return soul;
+  };
+  // 其余会话约束 section（order 800，位于工具指引 100-199 之后，贴近 prompt 末尾以增强遵守）：
+  // - HARNESS：恒注入当前会话（内部上下文，不要向用户回显）；
+  // - 技能注入：当前会话「临时注入」优先，其次按工作目录命中「工作区/项目持久绑定」；
+  // - 禁用技能指令：把用户禁用的 ~/.dsh/skills / 项目技能清单注入为软控制；
+  // - 欢迎：只对第一个新会话注入一次简短问候（手册不再打印，用户可用 /prompts -h 查看）。
+  const contextSectionText = (context: unknown): string => {
+    const { sessionId, cwd } = resolveAssemblySession(context);
+    const parts: string[] = [];
+    parts.push(harnessSystemSync());
+    const injected = buildSessionPromptInjection(sessionId, cwd);
+    if (injected) parts.push(injected);
+    const disabledSkills = disabledHarnessSkillsInstruction(cwd || null);
+    if (disabledSkills) parts.push(disabledSkills);
+    const welcome = welcomePromptOnce(sessionId);
+    if (welcome) parts.push(welcome);
+    const out = parts.filter((p) => p.trim()).join("\n\n");
+    // 【排查用】宿主装配 systemPrompt 时是否回调本 section，以及返回内容里是否含技能注入
+    console.error(
+      `[prompt-library:section] ctx(prompt-library-context) sessionId=${sessionId || "∅"} cwd=${cwd || "∅"} parts=${parts.length} outLen=${out.length} hasInjected=${Boolean(injected)}`,
+    );
+    return out;
+  };
+  // 每个 agent 就绪：经其 scoped context 注册两个 section（同一 agent 只触发一次，随 agent 销毁自动回收）。
+  // cordis ctx.on 事件名是强类型联合，`agent/created` 不在类型表里，故按最小事件总线形状转换（运行时同一份 ctx）。
+  const agentBus = ctx as unknown as {
+    on(event: "agent/created", listener: (payload: { agent?: { ctx?: unknown } }) => void): unknown;
+  };
+  agentBus.on("agent/created", (payload) => {
+    const scoped = payload.agent?.ctx as unknown as Context | undefined;
+    if (!scoped) return;
+    try {
+      scoped.inject(["systemPrompt"], (promptCtx: Context) => {
+        const sp = (promptCtx as unknown as {
+          systemPrompt: { section: (s: PromptSection) => () => void };
+        }).systemPrompt;
+        const disposePersona = sp.section({
+          name: PERSONA_SECTION_NAME,
+          order: 0,
+          text: personaSectionText,
+        });
+        const disposeContext = sp.section({
+          name: "prompt-library-context",
+          order: 800,
+          text: contextSectionText,
+        });
+        // 【排查用】section 是否在该 agent 的 scoped layer 注册成功
+        console.error(
+          `[prompt-library:sp-inject] scoped sections registered  persona=${typeof disposePersona}  ctx=${typeof disposeContext}`,
+        );
+        return () => {
+          disposePersona();
+          disposeContext();
+        };
+      });
+    } catch (error) {
+      // 个别 agent preset 可能预先占用了同名 scoped 槽位；此处兜底，避免阻断 agent 启动
+      console.error("[prompt-library:sp-inject] scoped section registration failed", error);
+    }
   });
 
   // 注入 LLM 服务：可用时把 harness 的 AI 能力提供给自学习模块；

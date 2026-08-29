@@ -23,6 +23,7 @@ import type {
   UserMessageNode,
 } from "@deepseek-ai/dsh-client-runtime/client";
 import type { PLTranslate } from "../utils/i18n.js";
+import { diagSession, type ScopeDiag } from "../utils/api.js";
 
 /** `conversation.view` 的宿主标准运行时套件（会话轨迹亦依赖同一套注入）。 */
 interface MonitorProps {
@@ -377,6 +378,34 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
   }, [latestRequest]);
   const systemPrompt = latestRequest?.prompt?.system ?? "";
 
+  // 实时注入解析：轮询后端诊断端点（与注入同一会话口径），直接展示当前会话实际命中的
+  // 人格与技能。trajectory 快照在未发新消息前可能是旧的，本块保证「系统提示区块」始终
+  // 反映插件真实注入内容，不依赖可能过期的请求快照。
+  const [injectDiag, setInjectDiag] = useState<ScopeDiag | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      diagSession()
+        .then((d) => {
+          if (alive) setInjectDiag(d);
+        })
+        .catch(() => { /* 后端未就绪时静默，下次轮询再试 */ });
+    load();
+    const id = window.setInterval(load, 4000);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, []);
+
+  // 人格来源标签（单会话 / 工作区 / 默认）
+  const personaSourceLabel = (src: ScopeDiag["personaSource"]): string =>
+    src === "session"
+      ? (T?.("pl.monitor.srcSession") ?? "单会话")
+      : src === "path"
+        ? (T?.("pl.monitor.srcPath") ?? "工作区")
+        : (T?.("pl.monitor.srcDefault") ?? "默认");
+
   const usage = useProjection<TokenUsage>("tokenUsage");
   const pressure = useProjection<ContextPressure>("contextPressure");
   const breakdown = useProjection<ContextBreakdown>("contextBreakdown");
@@ -581,10 +610,13 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
         .${S}-chip.tool{border-color:color-mix(in srgb,#a78bfa 45%,transparent);color:#a78bfa}
         .${S}-sections{display:flex;flex-direction:column;gap:4px}
         .${S}-sectionRow{display:flex;align-items:baseline;gap:8px;padding:6px 10px;background:var(--dsw-alias-bg-base);border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
-        .${S}-sectionTitle{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+        .${S}-sectionTitle{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;display:flex;align-items:baseline;gap:4px}
+        .${S}-chevron{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1}
         .${S}-sectionSize{flex:none;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;font-size:11px}
         .${S}-role.context{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover)}
         .${S}-role.context.recall{color:#fff;background:#6366f1}
+        .${S}-role.persona{color:#a78bfa;background:color-mix(in srgb,#a78bfa 18%,transparent)}
+        .${S}-role.skill{color:#60a5fa;background:color-mix(in srgb,#60a5fa 16%,transparent)}
         .${S}-contextBody{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
         .${S}-contextHead{display:flex;align-items:center;gap:6px;font-weight:500;color:var(--dsw-alias-label-primary)} 
         .${S}-formBadge{font-style:normal;font-size:10.5px;line-height:16px;padding:0 6px;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-tertiary);font-weight:500}
@@ -816,11 +848,42 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
       )}
 
       {/* 注入信息 */}
-      {(contextInjections.length > 0 || injectedTools.length > 0 || systemPrompt) && (
+      {(contextInjections.length > 0 ||
+        injectedTools.length > 0 ||
+        systemPrompt ||
+        (injectDiag && (injectDiag.personaName || injectDiag.promptTitles.length > 0))) && (
         <div className={`${S}-card`}>
           <h4 className={`${S}-cardTitle`}>
             {T?.("pl.monitor.sectionInjection") ?? "会话注入"}
           </h4>
+
+          {/* 实时注入解析：当前会话命中的 人格 + 技能（独立于 trajectory 快照） */}
+          {injectDiag && (injectDiag.personaName || injectDiag.promptTitles.length > 0) && (
+            <div className={`${S}-block`}>
+              <div className={`${S}-blockTitle`}>
+                {T?.("pl.monitor.injectLive") ?? "实时注入解析"}
+              </div>
+              <div className={`${S}-list`}>
+                <div className={`${S}-row`}>
+                  <span className={`${S}-role persona`}>{T?.("pl.monitor.persona") ?? "人格"}</span>
+                  <span className={`${S}-contextBody`}>
+                    <span className={`${S}-contextHead`}>
+                      {injectDiag.personaName || (T?.("pl.monitor.none") ?? "无")}
+                      <em className={`${S}-formBadge`}>{personaSourceLabel(injectDiag.personaSource)}</em>
+                    </span>
+                  </span>
+                </div>
+                {injectDiag.promptTitles.length > 0 && (
+                  <div className={`${S}-row`}>
+                    <span className={`${S}-role skill`}>{T?.("pl.monitor.skills") ?? "技能"}</span>
+                    <span className={`${S}-contextBody`}>
+                      <span className={`${S}-contextHead`}>{injectDiag.promptTitles.join("、")}</span>
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* 注入的工具 */}
           {injectedTools.length > 0 && (
@@ -886,8 +949,21 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
                 <span className={`${S}-hint`}>{formatToken(breakdown?.systemTokens ?? 0)}{T?.("pl.monitor.tokenAbbr") ?? " tokens"}</span>
               </div>
               <div className={`${S}-sections`}>
-                <div className={`${S}-sectionRow`}>
-                  <span className={`${S}-sectionTitle`}>{T?.("pl.monitor.system") ?? "系统提示"}</span>
+                <div
+                  className={`${S}-sectionRow clickable`}
+                  onClick={() =>
+                    setDetail({
+                      title: T?.("pl.monitor.system") ?? "系统提示",
+                      subtitle: `${sysSummary.lines}${T?.("pl.monitor.lineAbbr") ?? " 行"} · ${formatToken(sysSummary.chars)}${T?.("pl.monitor.charAbbr") ?? " 字符"}`,
+                      lang: "text",
+                      content: systemPrompt,
+                    })
+                  }
+                >
+                  <span className={`${S}-sectionTitle`}>
+                    <span className={`${S}-chevron`} aria-hidden="true">›</span>
+                    {T?.("pl.monitor.system") ?? "系统提示"}
+                  </span>
                   <span className={`${S}-sectionSize`}>
                     {sysSummary.lines}{T?.("pl.monitor.lineAbbr") ?? " 行"} · {formatToken(sysSummary.chars)}{T?.("pl.monitor.charAbbr") ?? " 字符"}
                   </span>

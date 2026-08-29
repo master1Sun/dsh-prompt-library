@@ -15,6 +15,7 @@ import type { PluginSettings, Prompt } from "../types.js";
 import { listTags, readGlobalLocale, updatePrompt } from "./store.js";
 import { parseRefineResult, type AiRefineResult } from "./refine.js";
 import { appendFileSync, mkdirSync } from "node:fs";
+import { get as httpsGet } from "node:https";
 import { dirname, join } from "node:path";
 import { buildSoulBoundary, readSoulDoc } from "./character.js";
 import { logDir } from "./paths.js";
@@ -261,6 +262,87 @@ export function logAiInjected(injected: boolean): void {
 /** 当前是否有可用的 harness LLM 服务。 */
 export function isAiAvailable(): boolean {
   return llm !== undefined;
+}
+
+/**
+ * 判断当前是否在使用 DeepSeek API：优先看手动配置的 aiProvider；
+ * 否则遍历 harness 已注册的 provider，存在 DeepSeek 提供商即视为使用。
+ * 供「DeepSeek 余额」推送能力决定是否显示相关角标。
+ */
+export function isDeepSeekProviderInUse(settings: PluginSettings): boolean {
+  if (settings.aiProvider && /deepseek/i.test(settings.aiProvider)) return true;
+  if (llm) {
+    return llm
+      .listProviders()
+      .some((p) => /deepseek/i.test(`${p.id} ${p.name ?? ""}`));
+  }
+  return false;
+}
+
+// ── DeepSeek 余额查询 ──────────────────────────────────────────────
+
+/** DeepSeek 余额信息（来自官方 /user/balance 接口）。 */
+export interface DeepSeekCredit {
+  currency: string;
+  total: number;
+}
+
+/** DeepSeek 官方余额查询接口地址。 */
+const DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance";
+/** host 侧余额缓存时长：避免客户端每 5 分钟轮询 + 多端并发导致高频请求官方接口。 */
+const BALANCE_CACHE_TTL_MS = 3 * 60 * 1000;
+let balanceCache: { key: string; ts: number; value: DeepSeekCredit | null } | undefined;
+
+/** 清空 host 侧余额缓存：用户在设置中修改 DeepSeek API Key 后调用，使下次查询立即返回真实余额。 */
+export function clearDeepSeekBalanceCache() {
+  balanceCache = undefined;
+}
+
+/**
+ * 查询 DeepSeek 账户余额：调用官方 GET /user/balance（Bearer 鉴权）。
+ * 未配置 Key、网络失败、解析失败均返回 null（静默降级，不阻塞主流程）；多币种时优先取首个。
+ */
+export async function queryDeepSeekBalance(apiKey: string): Promise<DeepSeekCredit | null> {
+  if (!apiKey) return null;
+  if (balanceCache && balanceCache.key === apiKey && Date.now() - balanceCache.ts < BALANCE_CACHE_TTL_MS) {
+    return balanceCache.value;
+  }
+  let credit: DeepSeekCredit | null = null;
+  try {
+    const body = (await new Promise<{ balance_infos?: unknown } | null>((resolve) => {
+      const req = httpsGet(
+        DEEPSEEK_BALANCE_URL,
+        { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" } },
+        (res) => {
+          const code = res.statusCode ?? 0;
+          const chunks: Buffer[] = [];
+          res.on("data", (c) => chunks.push(c as Buffer));
+          res.on("end", () => {
+            if (code < 200 || code >= 300) return resolve(null);
+            try {
+              resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")) as { balance_infos?: unknown } | null);
+            } catch {
+              resolve(null);
+            }
+          });
+          res.on("error", () => resolve(null));
+        },
+      );
+      req.on("error", () => resolve(null));
+    })) ?? null;
+    const infos = body?.balance_infos;
+    if (Array.isArray(infos) && infos.length > 0) {
+      const first = (infos as { currency?: string; total_balance?: unknown }[])[0]!;
+      const total = Number(first?.total_balance);
+      if (Number.isFinite(total)) {
+        credit = { currency: String(first?.currency ?? "CNY"), total };
+      }
+    }
+  } catch {
+    /* 网络/解析失败静默降级为 null */
+  }
+  balanceCache = { key: apiKey, ts: Date.now(), value: credit };
+  return credit;
 }
 
 /** 设置界面用：单个提供方可选择的模型。 */

@@ -8,8 +8,8 @@
  *
  * 逐个处理，任何单条失败都不中断其余条目，返回成功/失败汇总。
  */
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { load } from "js-yaml";
 import {
   createPrompt,
@@ -514,6 +514,25 @@ export function setHarnessSkillToggle(id: string, enabled: boolean): void {
   if (enabled) delete map[id];
   else map[id] = false;
   writeSkillToggles(map);
+}
+
+/**
+ * 删除某个 harness 技能（删除其位于技能根目录下的 <name>/SKILL.md 整个目录）。
+ * 安全约束：仅允许删除其直接父目录名恰为 `skills`（即 ~/.dsh/skills 或 <项目>/.dsh/skills
+ * 下的单层技能目录），防止误删任意路径。删除成功后同步清理该技能的开关记录。
+ */
+export async function deleteHarnessSkill(id: string): Promise<boolean> {
+  const target = join(id);
+  const parent = dirname(target);
+  if (basename(parent) !== "skills") throw new Error("invalid skill path");
+  const exists = await dirExists(target).catch(() => false);
+  if (!exists) return false;
+  await rm(target, { recursive: true, force: true });
+  // 同步清理开关记录（避免残留禁用项指向已删除技能）
+  const map = readSkillToggles();
+  delete map[id];
+  writeSkillToggles(map);
+  return true;
 }
 
 /** 路径归一化（用于归属前缀匹配：正斜杠 + 小写）。 */

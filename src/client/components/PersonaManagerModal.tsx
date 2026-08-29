@@ -19,18 +19,21 @@ import {
   clearAllPersonaBindings as apiClearAllPersonaBindings,
   createPersona as apiCreatePersona,
   deletePersona as apiDeletePersona,
+  diagSession,
   generateDraft,
   listPersonas,
   listSessionScopeTree,
   setPersonaBinding as apiSetPersonaBinding,
   setSessionPersonaBinding as apiSetSessionPersonaBinding,
   updatePersona as apiUpdatePersona,
+  type ScopeDiag,
 } from "../utils/api.js";
 import { plBtn } from "../utils/button-style.js";
 import { getTone, useThemeSync } from "../utils/theme.js";
 import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../utils/dialog-style.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
 import { DialogCloseButton } from "./DialogCloseButton.js";
+import { ImportConfirmModal } from "./ImportConfirmModal.js";
 import { type PLT } from "../utils/i18n.js";
 
 const MONO =
@@ -138,6 +141,39 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
       setScopesLoaded(true);
     });
 
+  // 在树中按路径查找工作区/项目节点
+  const findScopeNode = (nodes: ScopeNode[], path: string): ScopeNode | undefined => {
+    for (const n of nodes) {
+      if (n.path === path) return n;
+      const hit = findScopeNode(n.children, path);
+      if (hit) return hit;
+    }
+    return undefined;
+  };
+
+  // 在树中按会话 id 查找会话节点
+  const findSessionNode = (nodes: ScopeNode[], sessionId: string): SessionNode | undefined => {
+    for (const n of nodes) {
+      const hitSession = n.sessions?.find((s) => s.id === sessionId);
+      if (hitSession) return hitSession;
+      const hit = findSessionNode(n.children, sessionId);
+      if (hit) return hit;
+    }
+    return undefined;
+  };
+
+  // 拉取最近活跃会话的解析诊断（未选中节点时展示）；silent=false 时显示加载态
+  const loadDiag = (silent = false) => {
+    if (!silent) setDiagLoading(true);
+    setDiag(null);
+    void diagSession()
+      .then((d) => setDiag(d))
+      .catch(() => setDiag(null))
+      .finally(() => {
+        if (!silent) setDiagLoading(false);
+      });
+  };
+
   // 挂载/打开的翻译函数引用：effect 只依赖 `open`，避免父级重渲染产生的新 `t` 引用触发重复拉取抖动
   const tRef = useRef(t);
   tRef.current = t;
@@ -155,6 +191,11 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
   const [clearAllOpen, setClearAllOpen] = useState(false);
   // 详情查看的目标 id（点击内容打开详情弹窗）
   const [detailId, setDetailId] = useState<string | null>(null);
+  // 右栏树被点击选中的会话/工作区节点：非空时诊断区改为展示该节点的绑定人格
+  const [selectedNode, setSelectedNode] = useState<{ kind: "session" | "scope"; key: string; label: string } | null>(null);
+  // 当前会话解析诊断（未选中节点时，展示最近活跃会话命中的人格来源）
+  const [diag, setDiag] = useState<ScopeDiag | null>(null);
+  const [diagLoading, setDiagLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // 导入导出等操作反馈（error=false 时为成功/普通提示，error=true 时红色警示）
@@ -173,6 +214,8 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // 导入文件选择（MD 单文件）
   const importFileRef = useRef<HTMLInputElement | null>(null);
+  // 待确认导入的人格（读取文件后先预览，确认后才真正入库）
+  const [pendingImport, setPendingImport] = useState<{ title: string; text: string } | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -185,6 +228,7 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
     setDeleteId(null);
     setDetailId(null);
     setCreateName("");
+    setPendingImport(null);
     listPersonas()
       .then((list) => {
         if (!alive) return;
@@ -204,12 +248,13 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
     };
   }, [open]);
 
-  // 打开弹窗时加载工作区/项目树（绑定区渲染依赖）
+  // 打开弹窗时加载工作区/项目树（绑定区渲染依赖）并拉取当前会话解析诊断
   useEffect(() => {
     if (!open) return;
     refreshScopes().catch(() => {
       /* 拉取失败：界面显示空态即可 */
     });
+    loadDiag();
   }, [open]);
 
   if (!open) return null;
@@ -364,7 +409,7 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
     setMsg({ text: t("pl.personas.exportDone", { count: exportList.length }) });
   };
 
-  // 从 Markdown 单文件导入一个文案：正文取整个文件内容，标题取文件名（去扩展名）
+  // 从 Markdown 单文件导入一个文案：先解析标题与正文并弹出预览确认，确认后才真正入库
   const handleImport = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -375,11 +420,18 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
       return;
     }
     const title = file.name.replace(/\.[^/.]+$/, "").trim() || "untitled";
+    setPendingImport({ title, text });
+  };
+
+  // 用户确认导入后真正创建人格
+  const confirmImport = async () => {
+    if (!pendingImport) return;
+    setPendingImport(null);
     setBusy(true);
     setError(null);
     try {
-      const created = await apiCreatePersona(title);
-      await apiUpdatePersona(created.id, { content: text, enabled: true });
+      const created = await apiCreatePersona(pendingImport.title);
+      await apiUpdatePersona(created.id, { content: pendingImport.text, enabled: true });
       await refresh();
       setMsg({ text: t("pl.personas.importDone", { count: 1 }) });
     } catch {
@@ -403,6 +455,7 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
       .then(({ personaId: bound }) => {
         // 就地回写该路径节点的绑定，避免整树刷新导致节点重挂载、下拉失焦闪烁
         setScopes((prev) => prev.map((node) => rewriteScopePersona(node, nodePath, bound)));
+        loadDiag(true);
       })
       .catch(() => setError(t("pl.personas.opFailed")))
       .finally(() => setBusy(false));
@@ -418,6 +471,7 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
         setScopes((prev) =>
           prev.map((node) => rewriteSessionPersona(node, sessionId, bound)),
         );
+        loadDiag(true);
       })
       .catch(() => setError(t("pl.personas.opFailed")))
       .finally(() => setBusy(false));
@@ -523,6 +577,13 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
         <span style={{ flexShrink: 0, width: 18 }} />
         {renderKindBadge("session")}
         <span
+          onClick={() =>
+            setSelectedNode((prev) =>
+              prev?.kind === "session" && prev.key === session.id
+                ? null
+                : { kind: "session", key: session.id, label: session.title },
+            )
+          }
           style={{
             flex: 1,
             fontSize: 12.5,
@@ -530,6 +591,12 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
+            cursor: "pointer",
+            textDecoration:
+              selectedNode?.kind === "session" && selectedNode.key === session.id
+                ? "underline"
+                : undefined,
+            textUnderlineOffset: 3,
           }}
           title={session.cwd || session.id}
         >
@@ -588,6 +655,13 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
           )}
           {renderKindBadge(node.kind)}
           <span
+            onClick={() =>
+              setSelectedNode((prev) =>
+                prev?.kind === "scope" && prev.key === node.path
+                  ? null
+                  : { kind: "scope", key: node.path, label: displayTitle },
+              )
+            }
             style={{
               flex: 1,
               fontSize: 12.5,
@@ -595,6 +669,12 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
               whiteSpace: "nowrap",
               overflow: "hidden",
               textOverflow: "ellipsis",
+              cursor: "pointer",
+              textDecoration:
+                selectedNode?.kind === "scope" && selectedNode.key === node.path
+                  ? "underline"
+                  : undefined,
+              textUnderlineOffset: 3,
             }}
             title={node.path}
           >
@@ -849,8 +929,8 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
       <div
         className={PL_DIALOG}
         style={{
-          width: 860,
-          height: 760,
+          width: 800,
+          height: 800,
           maxWidth: "calc(100vw - 40px)",
           maxHeight: "calc(100vh - 40px)",
         }}
@@ -1077,6 +1157,126 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
               <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.6, marginTop: 4 }}>
                 {t("pl.personas.scopes.hint")}
               </div>
+              {/* 绑定详情：选中节点时展示该节点的绑定人格；否则展示最近活跃会话命中的人格来源 */}
+              {(() => {
+                // 选中节点的绑定人格信息（实时按当前绑定状态读取）
+                let selPersonaId = "";
+                let selPersonaName = "";
+                let selSource: string | null = null;
+                let selPath = "";
+                if (selectedNode?.kind === "scope") {
+                  const node = findScopeNode(scopes, selectedNode.key);
+                  selPersonaId = node?.bound ?? "";
+                  selPath = selectedNode.key;
+                  if (selPersonaId) selSource = t("pl.diag.workspace");
+                } else if (selectedNode?.kind === "session") {
+                  const session = findSessionNode(scopes, selectedNode.key);
+                  selPersonaId = session?.boundPersonaId ?? "";
+                  selPath = session?.cwd || session?.id || "";
+                  if (selPersonaId) selSource = t("pl.diag.session");
+                }
+                const boundPersona = personas.find((p) => p.id === selPersonaId);
+                selPersonaName = selPersonaId
+                  ? boundPersona
+                    ? boundPersona.isDefault
+                      ? boundPersona.name
+                      : (names[boundPersona.id] ?? boundPersona.name)
+                    : selPersonaId
+                  : "";
+
+                if (selectedNode && selectedNode.kind !== null) {
+                  return (
+                    <div
+                      style={{
+                        margin: "8px 0 0",
+                        background: TONE.accentSoft,
+                        border: `1px dashed ${TONE.accent}`,
+                        borderRadius: 9,
+                        padding: "8px 10px",
+                        fontSize: 11,
+                        lineHeight: 1.6,
+                        color: TONE.text,
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, height: 20, marginBottom: 4 }}>
+                        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {t("pl.diag.selected", { name: selectedNode.label })}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedNode(null)}
+                          style={{
+                            flexShrink: 0,
+                            border: `1px solid ${TONE.border}`,
+                            background: TONE.panel,
+                            color: TONE.text,
+                            borderRadius: 999,
+                            padding: "1px 8px",
+                            fontSize: 10.5,
+                            lineHeight: "16px",
+                            cursor: "pointer",
+                          }}
+                        >
+                          {t("pl.diag.back")}
+                        </button>
+                      </div>
+                      <div style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
+                        <span style={{ color: TONE.quiet }}>人格 · </span>
+                        <span style={{ color: TONE.text }}>
+                          {selPersonaId
+                            ? `${selPersonaName}${selSource ? `（${selSource}）` : ""}`
+                            : `—（${t("pl.personas.scopes.defaultOption")}）`}
+                        </span>
+                      </div>
+                      <div style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", color: TONE.quiet }}>
+                        {t("pl.diag.path")}：{selPath || "—"}
+                      </div>
+                    </div>
+                  );
+                }
+                if (diagLoading) {
+                  return (
+                    <div style={{ fontSize: 11, color: TONE.quiet, padding: "8px 0" }}>
+                      {t("pl.achievements.loading")}…
+                    </div>
+                  );
+                }
+                if (diag) {
+                  return (
+                    <div
+                      style={{
+                        margin: "8px 0 0",
+                        background: TONE.accentSoft,
+                        border: `1px dashed ${TONE.accent}`,
+                        borderRadius: 9,
+                        padding: "8px 10px",
+                        fontSize: 11,
+                        lineHeight: 1.6,
+                        color: TONE.text,
+                      }}
+                    >
+                      <div style={{ height: 20, lineHeight: "20px", fontWeight: 600, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", marginBottom: 4 }}>
+                        {t("pl.diag.title")}
+                      </div>
+                      <div style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
+                        <span style={{ color: TONE.quiet }}>人格 · </span>
+                        <span style={{ color: TONE.text }}>
+                          {diag.personaName || "—"}
+                          {diag.personaSource === "session"
+                            ? `（${t("pl.diag.session")}）`
+                            : diag.personaSource === "path"
+                              ? `（${t("pl.diag.workspace")}）`
+                              : `（${t("pl.diag.default")}）`}
+                        </span>
+                      </div>
+                      <div style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", color: TONE.quiet }}>
+                        {t("pl.diag.cwd")}：{diag.cwd || "—"}
+                      </div>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
             </div>
             <div style={{ display: "flex", flexDirection: "column", padding: "10px 10px 10px" }}>
               {!scopesLoaded ? (
@@ -1120,6 +1320,19 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
           cancelLabel={t("pl.personas.cancel")}
           onCancel={() => setClearAllOpen(false)}
           onConfirm={confirmClearAll}
+        />
+
+        {/* 导入前确认弹窗：展示待导入人格的名称与正文预览 */}
+        <ImportConfirmModal
+          open={pendingImport != null}
+          title={t("pl.personas.importConfirmTitle")}
+          headline={t("pl.personas.importConfirmHeadline", { name: pendingImport?.title ?? "" })}
+          contentTitle={pendingImport?.title}
+          content={pendingImport?.text}
+          confirmLabel={t("pl.import")}
+          cancelLabel={t("pl.personas.cancel")}
+          onCancel={() => setPendingImport(null)}
+          onConfirm={() => void confirmImport()}
         />
 
         {/* 导入 MD 文件选择（隐藏） */}

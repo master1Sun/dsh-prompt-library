@@ -26,12 +26,18 @@ interface ApiResponse<T> {
   error?: string;
 }
 
-async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function send<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal,
+): Promise<T> {
   const init: RequestInit = { method, headers: {} };
   if (body !== undefined) {
     init.headers = { "content-type": "application/json" };
     init.body = JSON.stringify(body);
   }
+  if (signal) init.signal = signal;
   const res = await fetch(path, init);
   let payload: ApiResponse<T>;
   try {
@@ -261,13 +267,16 @@ export interface SkillDescribeResult {
 }
 
 /** 用 AI 依据提示词内容生成技能名与描述（不改写正文，保留 {{变量名}}）。 */
-export function describeSkill(payload: {
-  title: string;
-  body: string;
-  summary?: string;
-  tags?: string[];
-}): Promise<SkillDescribeResult> {
-  return send<SkillDescribeResult>("POST", "/api/prompt-library/skills/ai-describe", payload);
+export function describeSkill(
+  payload: {
+    title: string;
+    body: string;
+    summary?: string;
+    tags?: string[];
+  },
+  signal?: AbortSignal,
+): Promise<SkillDescribeResult> {
+  return send<SkillDescribeResult>("POST", "/api/prompt-library/skills/ai-describe", payload, signal);
 }
 
 // ── 回收站管理 ────────────────────────────────────────────────────────────
@@ -573,6 +582,11 @@ export function setHarnessSkillToggle(id: string, enabled: boolean): Promise<{ i
   return send<{ id: string; enabled: boolean }>("POST", "/api/prompt-library/skills/harness/toggle", { id, enabled });
 }
 
+/** 删除某 harness 技能（删除其技能根目录下的整个目录）。 */
+export function deleteHarnessSkill(id: string): Promise<{ id: string }> {
+  return send<{ id: string }>("POST", "/api/prompt-library/skills/harness/delete", { id });
+}
+
 /** 设置某会话绑定的自定义人格（传 'default'/空串 → 回落默认/上层），返回实际生效的人格 id。 */
 export function setSessionPersonaBinding(sessionId: string, personaId: string): Promise<{ personaId: string }> {
   return send<{ personaId: string }>("PUT", `${SESSION_PROMPTS_BASE}/session/persona`, { sessionId, personaId });
@@ -621,6 +635,32 @@ export interface ActivitySnapshot {
 export function getActivity(lang?: string): Promise<ActivitySnapshot> {
   const q = lang ? `?lang=${encodeURIComponent(lang)}` : "";
   return send<ActivitySnapshot>("GET", `/api/prompt-library/activity${q}`);
+}
+
+// ── DeepSeek 余额判断 ─────────────────────────────────────────────
+
+/** DeepSeek 余额信息（未接入真实查询前由 host 返回 null 占位）。 */
+export interface DeepSeekCredit {
+  /** 结算币种，如 CNY。 */
+  currency: string;
+  /** 账户总余额。 */
+  total: number;
+}
+
+/** DeepSeek 余额快照：isDeepSeek 表示当前是否在使用 DeepSeek API。 */
+export interface DeepSeekBalance {
+  isDeepSeek: boolean;
+  /** 余额数据，未接入真实查询前为 null；后续接入后为 DeepSeekCredit。 */
+  balance: DeepSeekCredit | null;
+}
+
+/**
+ * 读取当前是否使用 DeepSeek API 及余额。
+ * 本轮仅做「判断 + 常驻角标界面」，未接真实查询，balance 恒为 null；
+ * 待用户配置 DeepSeek API Key 后 host 返回真实余额。
+ */
+export function getDeepSeekBalance(): Promise<DeepSeekBalance> {
+  return send<DeepSeekBalance>("GET", "/api/prompt-library/deepseek/balance");
 }
 
 // ── 词库助手游戏化状态（等级 / 成就 / 彩蛋）────────────────────────────

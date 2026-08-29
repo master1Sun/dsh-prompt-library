@@ -30,7 +30,6 @@ const dstLib = join(dstRoot, "lib");
 try {
   await stat(srcLib);
 } catch {
-  console.error(`sync-to-profile: 未找到 ${srcLib}，请先运行 \`npm run build\``);
   process.exit(1);
 }
 
@@ -38,8 +37,6 @@ try {
 try {
   await stat(dstRoot);
 } catch {
-  console.error(`sync-to-profile: 目标插件目录不存在：${dstRoot}`);
-  console.error(`请确认 profile "${profileName}" 已安装 ${pkgName}（如 \`dsh web\` 启动过）`);
   process.exit(1);
 }
 
@@ -62,8 +59,8 @@ await cp(join(root, "cordis.patch.yml"), join(dstRoot, "cordis.patch.yml"), { fo
 copied++;
 
 const localPkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
-console.log(`sync-to-profile: 已同步 ${copied} 个文件`);
-console.log(`  lib/ → ${dstLib}`);
-console.log(`  package.json + cordis.patch.yml → ${dstRoot}`);
-console.log(`  版本：${pkgName}@${localPkg.version}`);
-console.log(`完成！请重启 \`dsh web\` 使新版本生效。`);
+// console.log(`sync-to-profile: 已同步 ${copied} 个文件`);
+// console.log(`  lib/ → ${dstLib}`);
+// console.log(`  package.json + cordis.patch.yml → ${dstRoot}`);
+// console.log(`  版本：${pkgName}@${localPkg.version}`);
+// console.log(`完成！请重启 \`dsh web\` 使新版本生效。`);

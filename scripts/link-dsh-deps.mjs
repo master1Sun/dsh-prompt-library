@@ -18,8 +18,6 @@ let entries = [];
 try {
   entries = await readdir(src);
 } catch {
-  console.error(`link-dsh-deps: source not found: ${src}`);
-  console.error("Boot a profile first (e.g. `dsh web`) so DSH installs its deps, then re-run.");
   process.exit(1);
 }
 
@@ -37,4 +35,4 @@ for (const name of entries) {
 }
 
 // react types: link from the profile if present, otherwise leave to npm install.
-console.log(`link-dsh-deps: linked ${linked} @deepseek-ai/* packages from ${src}`);
+// console.log(`link-dsh-deps: linked ${linked} @deepseek-ai/* packages from ${src}`);

@@ -1313,8 +1313,6 @@ export function makePromptRoutes(): WebRoute[] {
 
       return json(res, 404, { ok: false, error: `no route ${method} ${tail}` });
     } catch (err) {
-      // 错误详情（含本地路径/堆栈）仅记录日志，不原样返回给客户端，避免信息泄露
-      console.error("[prompt-library] 请求处理失败:", err instanceof Error ? err.stack || err.message : err);
       return json(res, 500, { ok: false, error: "internal error" });
     }
   };

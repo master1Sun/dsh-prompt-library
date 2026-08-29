@@ -415,10 +415,6 @@ export function apply(ctx: Context) {
     const { sessionId, cwd } = resolveAssemblySession(context);
     const personaId = resolvePersonaForSession(sessionId || null, cwd || null);
     const soul = soulSystemSync(personaId);
-    // 【排查用】宿主装配 systemPrompt 时是否回调本 section，以及返回内容长什么样
-    console.error(
-      `[prompt-library:section] persona(${PERSONA_SECTION_NAME}) sessionId=${sessionId || "∅"} cwd=${cwd || "∅"} personaId=${String(personaId ?? "∅")} bodyLen=${soul.length} head=${JSON.stringify(soul.slice(0, 24))}`,
-    );
     return soul;
   };
   // 其余会话约束 section（order 800，位于工具指引 100-199 之后，贴近 prompt 末尾以增强遵守）：
@@ -437,10 +433,6 @@ export function apply(ctx: Context) {
     const welcome = welcomePromptOnce(sessionId);
     if (welcome) parts.push(welcome);
     const out = parts.filter((p) => p.trim()).join("\n\n");
-    // 【排查用】宿主装配 systemPrompt 时是否回调本 section，以及返回内容里是否含技能注入
-    console.error(
-      `[prompt-library:section] ctx(prompt-library-context) sessionId=${sessionId || "∅"} cwd=${cwd || "∅"} parts=${parts.length} outLen=${out.length} hasInjected=${Boolean(injected)}`,
-    );
     return out;
   };
   // 每个 agent 就绪：经其 scoped context 注册两个 section（同一 agent 只触发一次，随 agent 销毁自动回收）。
@@ -466,18 +458,12 @@ export function apply(ctx: Context) {
           order: 800,
           text: contextSectionText,
         });
-        // 【排查用】section 是否在该 agent 的 scoped layer 注册成功
-        console.error(
-          `[prompt-library:sp-inject] scoped sections registered  persona=${typeof disposePersona}  ctx=${typeof disposeContext}`,
-        );
         return () => {
           disposePersona();
           disposeContext();
         };
       });
     } catch (error) {
-      // 个别 agent preset 可能预先占用了同名 scoped 槽位；此处兜底，避免阻断 agent 启动
-      console.error("[prompt-library:sp-inject] scoped section registration failed", error);
     }
   });
 

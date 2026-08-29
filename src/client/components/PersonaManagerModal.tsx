@@ -16,6 +16,7 @@ import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import type { PersonaView, ScopeNode, SessionNode } from "../../types.js";
 import { UNMATCHED_SCOPE_PATH } from "../../types.js";
 import {
+  clearAllPersonaBindings as apiClearAllPersonaBindings,
   createPersona as apiCreatePersona,
   deletePersona as apiDeletePersona,
   generateDraft,
@@ -150,6 +151,8 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
   const [editContent, setEditContent] = useState("");
   // 删除二次确认的目标 id
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  // 一键清空全部绑定二次确认
+  const [clearAllOpen, setClearAllOpen] = useState(false);
   // 详情查看的目标 id（点击内容打开详情弹窗）
   const [detailId, setDetailId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -332,6 +335,21 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
       });
   };
 
+  // 一键清空全部绑定：确认后清空所有作用域/会话绑定，并将右侧绑定树刷新回默认
+  const confirmClearAll = () => {
+    setBusy(true);
+    setError(null);
+    apiClearAllPersonaBindings()
+      .then(() => {
+        void refreshScopes().catch(() => setError(t("pl.personas.opFailed")));
+      })
+      .catch(() => setError(t("pl.inject.opFailed")))
+      .finally(() => {
+        setBusy(false);
+        setClearAllOpen(false);
+      });
+  };
+
   // 导出勾选的人格为 Markdown：每张导出成一个 md 文件，文件名取标题
   const handleExport = () => {
     const exportList = personas.filter((p) => selected.has(p.id));
@@ -382,7 +400,10 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
     setBusy(true);
     setError(null);
     apiSetPersonaBinding(nodePath, value || "default")
-      .then(() => refreshScopes())
+      .then(({ personaId: bound }) => {
+        // 就地回写该路径节点的绑定，避免整树刷新导致节点重挂载、下拉失焦闪烁
+        setScopes((prev) => prev.map((node) => rewriteScopePersona(node, nodePath, bound)));
+      })
       .catch(() => setError(t("pl.personas.opFailed")))
       .finally(() => setBusy(false));
   };
@@ -401,6 +422,12 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
       .catch(() => setError(t("pl.personas.opFailed")))
       .finally(() => setBusy(false));
   };
+
+  // 递归回写树里某工作区/项目路径节点的绑定人格
+  const rewriteScopePersona = (node: ScopeNode, targetPath: string, personaId: string): ScopeNode =>
+    node.path === targetPath
+      ? { ...node, bound: personaId }
+      : { ...node, children: node.children.map((child) => rewriteScopePersona(child, targetPath, personaId)) };
 
   // 递归回写树里某会话节点的绑定人格
   const rewriteSessionPersona = (node: ScopeNode, sessionId: string, personaId: string): ScopeNode => {
@@ -1040,6 +1067,9 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
                 <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: TONE.text }}>
                   {t("pl.personas.scopes.title")}
                 </span>
+                <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} style={{ color: "var(--dsw-alias-error,#F5585C)" }} title={t("pl.personas.clearAllTitle")} disabled={busy} onClick={() => setClearAllOpen(true)}>
+                  {t("pl.inject.clearAll")}
+                </Button>
                 <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} title={t("pl.refresh")} onClick={() => void refreshScopes().catch(() => setError(t("pl.personas.opFailed")))}>
                   {t("pl.refresh")}
                 </Button>
@@ -1079,6 +1109,17 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
           cancelLabel={t("pl.personas.cancel")}
           onCancel={() => setDeleteId(null)}
           onConfirm={confirmDelete}
+        />
+
+        {/* 一键清空全部绑定二次确认 */}
+        <ConfirmDialog
+          open={clearAllOpen}
+          danger
+          message={t("pl.personas.clearAllConfirm")}
+          confirmLabel={t("pl.inject.clearAll")}
+          cancelLabel={t("pl.personas.cancel")}
+          onCancel={() => setClearAllOpen(false)}
+          onConfirm={confirmClearAll}
         />
 
         {/* 导入 MD 文件选择（隐藏） */}

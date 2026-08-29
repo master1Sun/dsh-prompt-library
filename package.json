@@ -1,6 +1,6 @@
 {
   "name": "@sunjuntao/dsh-prompt-library",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "DSH 提示词库插件：提供词库管理（增删改查、分类标签、导入导出、AI 智能优化、选择文本一键剪藏）、侧边栏与词库助手气泡提醒等能力。 DSH Prompt Library plugin: prompt management (CRUD, tags/categories, import/export, AI polish, one-click clip of selected text), sidebar and assistant bubble reminders.",
   "type": "module",
   "main": "./lib/index.js",

@@ -17,6 +17,10 @@ import { randomUUID } from "node:crypto";
 import type { SessionPrompt } from "../types.js";
 import { clampTitle } from "../types.js";
 import {
+  clearAllScopePersonaBindings as dbClearAllScopePersonaBindings,
+  clearAllScopePromptBindings as dbClearAllScopePromptBindings,
+  clearAllSessionPersonaBindings as dbClearAllSessionPersonaBindings,
+  clearAllSessionPromptBindings as dbClearAllSessionPromptBindings,
   clearScopePromptBinding as dbClearScopePromptBinding,
   clearSessionScopeBinding as dbClearSessionScopeBinding,
   createSessionPromptRecord,
@@ -314,6 +318,18 @@ function listSessionScopeBindingsFromStore(): Array<{
 /** 清除某会话 id 的全部绑定（人格回落默认、技能不注入）。 */
 export function clearSessionBinding(sessionId: string): void {
   dbClearSessionScopeBinding(sessionId);
+}
+
+/** 一键清空技能绑定（技能独立模块）：所有路径（工作区/项目）的技能绑定 + 所有会话的临时技能绑定，人格绑定不受影响。 */
+export function clearAllSkillBindings(): void {
+  dbClearAllScopePromptBindings();
+  dbClearAllSessionPromptBindings();
+}
+
+/** 一键清空人格绑定（人格独立模块）：所有路径（工作区/项目）的人格绑定 + 所有会话的临时人格绑定，技能绑定不受影响。 */
+export function clearAllPersonaBindings(): void {
+  dbClearAllScopePersonaBindings();
+  dbClearAllSessionPersonaBindings();
 }
 
 /**

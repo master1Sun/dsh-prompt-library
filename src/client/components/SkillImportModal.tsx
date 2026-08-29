@@ -1651,7 +1651,7 @@ export function SkillImportModal(props: {
                     style={{
                       ...inputStyle,
                       flex: 1,
-                      minHeight: 420,
+                      minHeight: mode =="export"? 350 : 430,
                       resize: "none",
                       lineHeight: 1.6,
                       whiteSpace: "pre-wrap",

@@ -1,0 +1,78 @@
+dsh-prompt-library — User Manual
+================================
+
+[1. What This Plugin Is]
+A prompt management tool built into the chat interface. It saves, organizes, searches, and reuses the prompts you use often. Main parts:
+- Sidebar prompt library: fixed-width right panel (collapsible) to browse, search, and manage all prompts;
+- Chat-box prompt button: a one-click entry beside the input box to insert or copy a prompt; select text to AI-polish it;
+- Slash commands: type /prompts-prefixed commands to save, AI-polish, or let AI fill in a prompt.
+Everything runs locally (SQLite at ~/.dsh/prompt-library/db/prompts.db); nothing is uploaded to the cloud; export/import backups are fully under your control.
+
+[2. Core Commands]
+(Remember the space after /prompts; commands are case-insensitive with short aliases)
+- /prompts -add <body>: save the body; AI generates title and tags (alias -ad)
+- /prompts -tag <tag> <body>: save with a specific tag (alias -t)
+- /prompts -s <keyword>: search the library, matching title/body, case-insensitive
+- /prompts -enrich <body>: AI professional enrichment (alias -en), expand into a more professional/complete/structured version; result printed in chat for you to copy
+- /prompts -e: export all prompts (alias -exp; plain text, ready to copy)
+- /prompts -data: realtime stats + last-7-days history snapshot + AI comment (alias -d)
+- /prompts -AI <body>: AI-polish the body (alias -a); result printed in chat for you to copy
+- /prompts -v: output the full history of release notes in your interface language (alias -version)
+- /prompts -h: show this manual (-help/--help also work)
+- /prompts: type it alone to list all available command examples
+
+When saving:
+- Empty input is blocked with a hint and not saved;
+- A duplicate body is reused instead of duplicated;
+- After saving, every place using prompts (sidebar, chat-box panel, data management) refreshes automatically.
+
+[3. Library Assistant]
+- An ever-present little assistant beside the chat: draggable, auto-snaps to the screen edge, never blocks the chat;
+- Right-click menu reaches all library capabilities: Announcement, Achievements, Personas, Skills, Dashboard, Data management — each entry can be toggled in settings;
+- Bubble reminders: little tips pop up following your usage; hover to cycle through them; the bubble auto-retracts when idle;
+- Announcement: newspaper-style manual, release notes, and a daily AI roundup with history pages;
+- Achievements & level: collect tarot-style cards, earn XP to level up and win titles; different rarities get themed colors, tracking your library growth;
+- Dashboard: realtime stats for added/used/AI-refined, visualizing library state;
+- Data management: browse, group, search, tag filter, insert, edit, plus import/export, tags, recycle bin, and AI polish;
+- Persona & skill management: configure multi-personas and session-scoped skills, auto-injected when bound to a workspace/project;
+- Character selectable (whale static / dsh-pet animated); drag position and toggles persist in settings.
+
+[4. Chat-box Prompt Button]
+- One-click to open the Recently used / common prompts list and insert into the current session;
+- Type # to trigger library selection: keep typing to filter live, ↑↓ to select, Enter to insert, Space or Esc to finish (can be disabled in settings);
+- Select text in the toolbar and invoke AI polish (this entry does not process {{}} variables);
+- Selection add prompt (off by default, enable in settings): highlight text in the chat, an "Add prompt" button floats up; fill title/tags/body in a separate window to save, or copy the selection directly.
+
+[5. Variable Templates]
+- Use {{variableName}} placeholders, e.g.: Explain {{topic}} to {{audience}} in a {{tone}} tone.;
+- The fill dialog remembers the last value you filled per variable name, so it is filled in automatically next time.
+
+[6. AI Capabilities]
+- AI enrichment: automatically extracts title, tags, and summary after saving, and refines the body inside the library;
+- AI polish: refines selected text. The chat-box entry does not preserve {{}} variables; other entries keep them and can add new ones;
+- Auto-learn (off by default): after typing a longer body and pausing, it is saved to the library automatically; optional manual confirm before saving, optionally with AI enrichment.
+
+[7. Data & Stats]
+- Import / export: export a selected scope as a backup, or import to restore, in Settings → Data management;
+- Tag management: create, rename, delete; tags in use cannot be deleted (the usage count is shown);
+- Recycle bin: soft-deleted prompts are here; restore or permanently delete single items or in bulk;
+- Weekly auto-stats: every 7 days a snapshot of the last-7-days increments (added/used/AI-refined) is generated and shown at the end of /prompts -data; no double counting;
+- Delete confirmation: delete operations use a custom confirm dialog to avoid accidents.
+
+[8. Personality (Lab Feature)]
+- Personality content is stored in the database (prompts.db): the default persona lives in the meta table, custom personas in the personas table, combining identity, tone, and work guidelines;
+- Fill it in manually to form a stable assistant personality; a missing one is rebuilt with the default template automatically;
+- Enable "Apply personality to the whole chat" in settings to constrain new conversations (does not affect ongoing ones).
+
+[9. FAQ]
+Q: Why doesn't the panel update after saving?
+A: Make sure you restarted dsh web so the new version takes effect; panels refresh automatically after saving.
+
+Q: /prompts -AI does nothing?
+A: AI polishing depends on an available model; if you see "AI service is unavailable", check your model config.
+
+Q: Where is my data? Could it be lost?
+A: It lives in local SQLite (~/.dsh/prompt-library/db/prompts.db); back it up via Data management → Export regularly.
+
+Q: Why can't I delete a tag?
+A: The tag is in use by some prompts. Remove it from those prompts first, or clean up via data management; the protection blocks deleting in-use tags.

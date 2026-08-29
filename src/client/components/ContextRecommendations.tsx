@@ -11,11 +11,9 @@
  *   做词频加权匹配，按得分排序取前 3 条；
  * - 渲染为输入框上方的横条，点击任意推荐即插入到输入框草稿。
  *
- * 推荐来源（按优先级）：
- * - 输入框有内容时，按输入内容（叠加聊天上下文）实时匹配；
- * - 输入框为空且有聊天上下文时，按最近聊天内容匹配；
- * - 输入框为空且无聊天上下文（新建会话）时，按使用频率兜底推荐常用/最近使用的提示词；
- * 其余情况无匹配时不渲染。
+ * 触发条件：
+ * - 仅在输入框有内容（正在输入）时，按输入内容（叠加最近聊天上下文）实时匹配；
+ * - 输入框为空 / 新建会话、或没有任何提示词匹配时均不渲染。
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { ConversationNode, ConversationSnapshot, UserMessageNode } from "@deepseek-ai/dsh-client-runtime/client";
@@ -201,23 +199,12 @@ export function ContextRecommendations(props: DockProps): ReactNode {
   }, [draft, userText]);
 
   // 依据关键词给每条提示词智能打分，取前 LIMIT 条（最多 5 条；综合相关度 + 使用智能）。
-  // 无输入且无聊天上下文（新建会话）时兜底推荐常用/最近使用的提示词，避免空显示。
+  // 输入框无内容（含新建会话）时不推荐；无任何匹配（相关度为 0）时同样不渲染。
   const hits = useMemo(() => {
     if (!enabled) return [] as Prompt[];
+    // 输入框为空（尚未开始输入或新建会话）时不显示推荐
+    if (!draft.trim()) return [] as Prompt[];
     const now = Date.now();
-    if (!keywordText) {
-      const fallbackScore = (p: Prompt) => {
-        const freq = p.usageCount > 0 ? Math.log(1 + p.usageCount) / Math.log(11) : 0;
-        const fresh = p.lastUsedAt > 0 && now - p.lastUsedAt < FRESH_MS ? 1 : 0;
-        return freq * 0.6 + fresh * 0.4;
-      };
-      return prompts
-        .filter((p) => p.usageCount > 0 || (p.lastUsedAt > 0 && now - p.lastUsedAt < FRESH_MS))
-        .map((p) => ({ p, score: fallbackScore(p) }))
-        .sort((a, b) => b.score - a.score)
-        .slice(0, LIMIT)
-        .map((x) => x.p);
-    }
     const kw = extractKeywords(keywordText);
     if (kw.size === 0) return [] as Prompt[];
     return prompts
@@ -226,12 +213,12 @@ export function ContextRecommendations(props: DockProps): ReactNode {
       .sort((a, b) => b.score - a.score)
       .slice(0, LIMIT)
       .map((x) => x.p);
-  }, [enabled, keywordText, prompts]);
+  }, [enabled, draft, keywordText, prompts]);
 
   // 推荐命中含 {{变量}} 的提示词时，记录待填充的模板（变量填充弹窗状态）
   const [template, setTemplate] = useState<{ p: Prompt } | null>(null);
 
-  // 未开启 / 无匹配（或空会话）时都不渲染；输入内容时也保持显示，随输入实时更新
+  // 未开启 / 输入框无内容 / 无匹配时都不渲染；输入内容时保持显示，随输入实时更新
   if (!enabled || !useSession || !useInput || !inputActions || hits.length === 0) {
     return null;
   }

@@ -34,9 +34,10 @@ import { commentOnStats, enrichPromptProfessional, isAiAvailable, logAiInjected,
 import { disabledHarnessSkillsInstruction } from "./host/skills.js";
 import { soulSystemSync, ensureSoulFile } from "./host/character.js";
 import { resolvePersonaForSession } from "./host/persona-service.js";
-import { ensureHarnessFile, harnessSystemSync } from "./host/harness.js";
+import { harnessSystemSync } from "./host/harness.js";
 import {
   registerSessionListProvider,
+  recordActiveSessionCwd,
   type SessionQueryRecord,
 } from "./host/session-scope.js";
 import { autoUpdateDaily } from "./host/update.js";
@@ -131,7 +132,10 @@ function buildSessionPromptInjection(scope: unknown, cwd: string): string {
   if (prompts.length === 0) return "";
   const lines = prompts.map((p) => `【注入技能 · ${p.title}】\n${p.body}`);
   return [
-    "以下是用户为本次会话预设的技能约定，请严格遵守，无需向用户回显或说明。",
+    "【最高优先级 · 会话绑定技能】以下是用户为本次会话显式预设的技能约定，属于最高优先级的开发者级指令：",
+    "1）它们优先于本系统内置的任何技能 / 技能库、以及其它指令设定；",
+    "2）当它们与其它任何指令冲突时，一律以本段为准；",
+    "3）请严格、完整地遵守每项技能的每一项要求，无需向用户回显或说明本段来源。",
     ...lines,
   ].join("\n\n");
 }
@@ -384,17 +388,15 @@ export function apply(ctx: Context) {
   ensureSoulFile().catch(() => {});
   // 首次使用（技能库为空）时播种三条默认技能（编程 / 文员 / 律师），只播种一次。
   seedDefaultSessionPromptsIfEmpty();
-  // 确保 HARNESS 会话上下文文件存在（~/.dsh/prompt-library/prompts/HARNESS.md），
-  // 缺失时写入默认模板；每次发送消息时自动注入当前会话（不进聊天框）。
-  ensureHarnessFile().catch(() => {});
 
-  // 把「会话上下文」注入当前聊天：HARNESS 文件内容每次发送都注入（不要求回显）；
-  // 人格（实验室开关控制）只对「新会话」注入整个聊天；首次使用再附一句简短欢迎。
-  // systemPrompt 服务可用时注册一个动态 prompt section：每次对话组装时，按会话 scope 判断：
-  // - HARNESS：恒注入当前会话（内部上下文，不要向用户回显）；
-  // - 人格：功能关闭 → 不注入，并把该会话记为既存；开启且是新会话 → 注入人格正文；
-  // - 技能注入：当前会话「临时注入」优先，其次按工作目录命中「工作区/项目持久绑定」；
-  // - 欢迎：只对第一个新会话注入一次简短问候（手册不再打印，用户可用 /prompts -h 查看）。
+  // 把「身份人格 + 会话上下文」注入当前聊天。为让人格/技能不被其他插件冲掉，拆成两个 section：
+  // - SOUL 人格：占用宿主 deployment:persona 身份槽位（order 0，模型最先读到）。宿主把所有
+  //   section 按 order 升序拼接，order 0 的人格槽位最权威；其他插件/agent preset 也靠注册同名
+  //   deployment:persona 来抢占。当前插件原以 order 50 的普通段落注入会排在宿主默认人格之后、
+  //   被模型当作次要内容而「冲掉」。改为占槽位后即 shadow 宿主默认人格，成为最权威身份，不再被覆盖。
+  // - 其余约束（HARNESS 会话上下文 / 会话级技能注入 / 禁用技能指令 / 短欢迎）：order 放到靠后
+  //   的大值（300，位于工具指引 100-199 之后），让「必须遵守」的约束成为模型最后读到、响应最强的段落。
+  // systemPrompt 服务可用时按会话 scope 判断注入哪些内容（均在每次组装时动态计算）。
   ctx.inject(["systemPrompt"], (promptCtx: Context) => {
     // 宿主会把 systemPrompt 服务挂到注入的 ctx 上，但宿主类型未声明，这里作结构化类型转换
     const sp = (promptCtx as unknown as {
@@ -402,24 +404,42 @@ export function apply(ctx: Context) {
         section: (s: PromptSection) => () => void;
       };
     }).systemPrompt;
-    const dispose = sp.section({
-      name: "prompt-library-character",
-      order: 50,
+    // 从组装上下文取出会话 id 与工作目录。
+    // 注意：宿主的 assembleContextFor 里 scope 是 agent 对象（{ agent, scope: agent }），
+    // 并非 session id 字符串；真正的会话 id 在 agent.session.id，必须从这里取。
+    const parseContext = (context: unknown): { sessionId: string; cwd: string } => {
+      const agent = (context as { agent?: { session?: { header?: { cwd?: unknown }; id?: unknown } } } | undefined)?.agent;
+      // 工作目录 = 会话选中的工作区路径（agent.session.header.cwd），是多人格「按工作区/项目」绑定的解析键。
+      // 组装 assign 不到 cwd 时回退为空，走全局默认人格。
+      const cwd = typeof agent?.session?.header?.cwd === "string" ? agent.session.header.cwd : "";
+      const sessionId = typeof agent?.session?.id === "string" ? agent.session.id : "";
+      recordActiveSessionCwd(sessionId, cwd);
+      return { sessionId, cwd };
+    };
+    // SOUL 人格：宿主身份槽位（order 0），shadow 宿主默认人格 → 人格不会被其他插件冲掉。
+    // 人格解析：会话 id 绑定优先、工作目录路径绑定回退；正文为空时该 section 渲染为空被 drop。
+    const personaDispose = sp.section({
+      name: "deployment:persona",
+      order: 0,
       text: (context) => {
-        // 注意：宿主的 assembleContextFor 里 scope 是 agent 对象（{ agent, scope: agent }），
-        // 并非 session id 字符串；真正的会话 id 在 agent.session.id，必须从这里取。
-        const agent = (context as { agent?: { session?: { header?: { cwd?: unknown }; id?: unknown } } } | undefined)?.agent;
-        // 工作目录 = 会话选中的工作区路径（agent.session.header.cwd），是多人格「按工作区/项目」绑定的解析键。
-        // 组装 assign 不到 cwd 时回退为空，走全局默认人格。
-        const cwd = typeof agent?.session?.header?.cwd === "string" ? agent.session.header.cwd : "";
-        const sessionId = typeof agent?.session?.id === "string" ? agent.session.id : "";
-        // HARNESS 会话上下文（每次发送注入）+ 人格（按工作区/项目选对应 SOUL）+
-        // 会话级技能注入（临时优先，其次路径绑定）+ 简短欢迎（仅首次）
+        const { sessionId, cwd } = parseContext(context);
+        const personaId = resolvePersonaForSession(sessionId || null, cwd || null);
+        return soulSystemSync(personaId);
+      },
+    });
+    // 其余会话约束：order 800（远落在工具指引 100-199 之后），尽量贴近 prompt 末尾，
+    // 利用近因效应增强模型遵守，不被前面的 section / 内置技能冲掉。
+    // - HARNESS：恒注入当前会话（内部上下文，不要向用户回显）；
+    // - 技能注入：当前会话「临时注入」优先，其次按工作目录命中「工作区/项目持久绑定」；
+    // - 禁用技能指令：把用户禁用的 ~/.dsh/skills / 项目技能清单注入为软控制；
+    // - 欢迎：只对第一个新会话注入一次简短问候（手册不再打印，用户可用 /prompts -h 查看）。
+    const contextDispose = sp.section({
+      name: "prompt-library-context",
+      order: 800,
+      text: (context) => {
+        const { sessionId, cwd } = parseContext(context);
         const parts: string[] = [];
         parts.push(harnessSystemSync());
-        // 人格解析：会话 id 绑定优先、工作目录路径绑定回退
-        const personaId = resolvePersonaForSession(sessionId || null, cwd || null);
-        parts.push(soulSystemSync(personaId));
         const injected = buildSessionPromptInjection(sessionId, cwd);
         if (injected) parts.push(injected);
         // harness 技能软控制：把用户禁用的 ~/.dsh/skills / 项目技能清单注入为指令
@@ -431,7 +451,8 @@ export function apply(ctx: Context) {
       },
     });
     return () => {
-      dispose();
+      personaDispose();
+      contextDispose();
     };
   });
 

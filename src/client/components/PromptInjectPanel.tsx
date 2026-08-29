@@ -14,7 +14,7 @@
  * - 只能通过右上角关闭按钮关闭，禁止点击遮罩/外部区域关闭；
  * - 删除需二次确认。
  */
-import { useEffect, useRef, useState, type ChangeEvent, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import type { ScopeNode, SessionNode, SessionPrompt } from "../../types.js";
@@ -26,11 +26,14 @@ import {
   listSessionPromptBindings,
   listSessionPrompts,
   listSessionScopeTree,
+  listPersonas as apiListPersonas,
   setSessionPromptBinding,
   clearSessionPromptBinding,
   setSessionPromptBindingForSession,
   clearSessionBinding as apiClearSessionBinding,
+  clearAllBindings as apiClearAllBindings,
   updateSessionPrompt as apiUpdateSessionPrompt,
+  diagSession,
 } from "../utils/api.js";
 import { plBtn } from "../utils/button-style.js";
 import { getTone, useThemeSync } from "../utils/theme.js";
@@ -133,6 +136,8 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
   const [editBody, setEditBody] = useState("");
   // 删除二次确认的目标 id
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  /** 一键清空全部绑定的二次确认弹窗开关（右栏「清除所有绑定」按钮触发）。 */
+  const [clearAllOpen, setClearAllOpen] = useState(false);
   // 详情查看的目标 id（点击正文打开详情弹窗）
   const [detailId, setDetailId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -155,6 +160,53 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
   const importFileRef = useRef<HTMLInputElement | null>(null);
   // Harness 技能开关弹窗是否显示
   const [harnessOpen, setHarnessOpen] = useState(false);
+  // 会话解析诊断：展示当前会话最终命中哪一层人格/技能（排查「设了没生效」用）
+  const [diag, setDiag] = useState<Awaited<ReturnType<typeof diagSession>> | null>(null);
+  const [diagLoading, setDiagLoading] = useState(true);
+  const loadDiag = (silent = false): void => {
+    // silent 静默刷新：不切换 loading 占位，避免一键清除等操作时诊断区闪烁
+    if (!silent) setDiagLoading(true);
+    void diagSession()
+      .then(setDiag)
+      .catch(() => setDiag(null))
+      .finally(() => {
+        if (!silent) setDiagLoading(false);
+      });
+  };
+  useEffect(() => {
+    if (open) loadDiag();
+  }, [open]);
+
+  // 人格 id → 名称 映射（用于选中节点时人格显示名称而非 UUID）
+  const [personaNameMap, setPersonaNameMap] = useState<Map<string, string>>(new Map());
+  useEffect(() => {
+    if (!open) return;
+    void apiListPersonas()
+      .then((list) => setPersonaNameMap(new Map(list.map((p) => [p.id, p.name]))))
+      .catch(() => {});
+  }, [open]);
+
+  // 右栏树被点击选中的会话/工作区节点：非空时诊断区改为展示该节点的绑定技能/人格
+  const [selectedNode, setSelectedNode] = useState<{ kind: "session" | "scope"; key: string; label: string } | null>(null);
+  // 递归在树里按路径查找工作区/项目节点
+  const findScopeNode = (nodes: ScopeNode[], path: string): ScopeNode | undefined => {
+    for (const n of nodes) {
+      if (n.path === path) return n;
+      const hit = findScopeNode(n.children, path);
+      if (hit) return hit;
+    }
+    return undefined;
+  };
+  // 递归在树里按 id 查找会话节点
+  const findSessionNode = (nodes: ScopeNode[], sessionId: string): SessionNode | undefined => {
+    for (const n of nodes) {
+      const hit = n.sessions?.find((s) => s.id === sessionId);
+      if (hit) return hit;
+      const deep = findSessionNode(n.children, sessionId);
+      if (deep) return deep;
+    }
+    return undefined;
+  };
 
   // 工作区/项目树的展开/折叠状态持久化（技能管理右栏绑定树）：下次打开恢复到上次状态
   const SCOPE_EXPAND_KEY = "pl:skill-tree-expanded";
@@ -190,13 +242,14 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
     return all;
   };
 
-  // 重新拉取工作区/项目/会话树（打开及绑定变更后回写）；必须定义在提前返回之前，
+  // 重新拉取工作区/项目/会话树 + 全部路径技能绑定（打开及绑定变更后回写）；必须定义在提前返回之前，
   // 与下方加载 effect 一起保证所有 hooks 都在 `if (!open) return null;` 之前稳定调用。
   const refreshScopes = () =>
-    listSessionScopeTree().then((tree) => {
+    Promise.all([listSessionScopeTree(), listSessionPromptBindings()]).then(([tree, binds]) => {
       setScopes(tree);
       setExpanded(buildScopesExpanded(tree));
       setScopesLoaded(true);
+      setBindings(new Map(binds.map((b) => [b.path, b.promptIds])));
     });
 
   // 挂载/打开的翻译函数引用：effect 只依赖 `open`，避免父级重渲染产生的新 `t` 引用触发重复拉取抖动
@@ -390,6 +443,22 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
         setBusy(false);
         setDeleteId(null);
         if (editingId === deleteId) setEditingId(null);
+      });
+  };
+
+  // 一键清空全部绑定：确认后清空所有路径绑定与会话级绑定，并刷新右侧绑定树与诊断。
+  const confirmClearAll = () => {
+    setBusy(true);
+    setError(null);
+    apiClearAllBindings()
+      .then(() => {
+        void refreshScopes();
+        loadDiag(true);
+      })
+      .catch(() => setError(t("pl.inject.opFailed")))
+      .finally(() => {
+        setBusy(false);
+        setClearAllOpen(false);
       });
   };
 
@@ -908,15 +977,21 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
   const renderSessionNode = (session: SessionNode, depth: number): ReactNode => {
     const isEditing = editingSession === session.id;
     const boundCount = session.boundPromptIds.length;
+    const isSelected = selectedNode?.kind === "session" && selectedNode.key === session.id;
     return (
       <div key={session.id} style={{ marginLeft: depth * 18 }}>
         <div
+          onClick={() => setSelectedNode(isSelected ? null : { kind: "session", key: session.id, label: session.title })}
+          title={t("pl.diag.title")}
           style={{
             display: "flex",
             alignItems: "center",
             gap: 8,
-            padding: "5px 0",
+            padding: "5px 6px",
             minHeight: 28,
+            borderRadius: 7,
+            background: isSelected ? TONE.accentSoft : "transparent",
+            cursor: "pointer",
           }}
         >
           <span style={{ flexShrink: 0, width: 18 }} />
@@ -962,7 +1037,7 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
               {t("pl.inject.boundCount", { count: boundCount })}
             </span>
           )}
-          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={busy} onClick={() => openSessionConfig(session.id, session.boundPromptIds)}>
+          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={busy} onClick={(e: ReactMouseEvent) => { e.stopPropagation(); openSessionConfig(session.id, session.boundPromptIds); }}>
             {isEditing ? t("pl.inject.cancelConfig") : t("pl.inject.config")}
           </Button>
         </div>
@@ -979,21 +1054,27 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
     const hasSessions = (node.sessions?.length ?? 0) > 0;
     const isExpandable = hasChildren || hasSessions;
     const displayTitle = node.path === UNMATCHED_SCOPE_PATH ? t("pl.personas.scopes.others") : node.title;
+    const isSelected = selectedNode?.kind === "scope" && selectedNode.key === node.path;
     return (
       <div key={node.path} style={{ marginLeft: depth * 18 }}>
         <div
+          onClick={() => setSelectedNode(isSelected ? null : { kind: "scope", key: node.path, label: displayTitle })}
+          title={t("pl.diag.title")}
           style={{
             display: "flex",
             alignItems: "center",
             gap: 8,
-            padding: "5px 0",
+            padding: "5px 6px",
             minHeight: 28,
+            borderRadius: 7,
+            background: isSelected ? TONE.accentSoft : "transparent",
+            cursor: "pointer",
           }}
         >
           {isExpandable ? (
             <button
               type="button"
-              onClick={() => toggleExpand(node.path)}
+              onClick={(e) => { e.stopPropagation(); toggleExpand(node.path); }}
               title={displayTitle}
               style={{
                 flexShrink: 0,
@@ -1060,7 +1141,7 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
               {t("pl.inject.boundCount", { count: boundCount })}
             </span>
           )}
-          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={busy} onClick={() => openConfig(node.path)}>
+          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={busy} onClick={(e: ReactMouseEvent) => { e.stopPropagation(); openConfig(node.path); }}>
             {isEditing ? t("pl.inject.cancelConfig") : t("pl.inject.config")}
           </Button>
         </div>
@@ -1078,6 +1159,28 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
       </div>
     );
   };
+
+  // 选中节点的技能/人格信息（实时从当前绑定状态读取，绑定变更后自动刷新）
+  const selectedInfo = selectedNode
+    ? selectedNode.kind === "scope"
+      ? (() => {
+          const node = findScopeNode(scopes, selectedNode.key);
+          const promptIds = bindings.get(selectedNode.key) ?? [];
+          return {
+            personaId: node?.bound ?? "",
+            promptIds,
+            path: selectedNode.key,
+          };
+        })()
+      : (() => {
+          const session = findSessionNode(scopes, selectedNode.key);
+          return {
+            personaId: session?.boundPersonaId ?? "",
+            promptIds: session?.boundPromptIds ?? [],
+            path: session?.cwd || session?.id || "",
+          };
+        })()
+    : null;
 
   return (
     <>
@@ -1310,6 +1413,9 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
                       <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: TONE.text }}>
                         {t("pl.personas.scopes.title")}
                       </span>
+                      <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} style={{ color: "var(--dsw-alias-error,#F5585C)" }} title={t("pl.inject.clearAllTitle")} disabled={busy} onClick={() => setClearAllOpen(true)}>
+                        {t("pl.inject.clearAll")}
+                      </Button>
                       <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} title={t("pl.refresh")} onClick={() => void refreshScopes().catch(() => setError(t("pl.inject.opFailed")))}>
                         {t("pl.refresh")}
                       </Button>
@@ -1317,6 +1423,106 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
                     <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.6, marginTop: 4 }}>
                       {t("pl.inject.projectNote")}
                     </div>
+                    {/* 会话解析诊断：展示当前会话最终命中哪一层（单会话 / 工作区路径 / 默认），固定随顶部标题悬浮、不随列表滚动 */}
+                    {diagLoading && !selectedNode ? (
+                      <div style={{ fontSize: 11, color: TONE.quiet, padding: "8px 0" }}>{t("pl.achievements.loading")}…</div>
+                    ) : selectedNode && selectedInfo ? (
+                      <div
+                        style={{
+                          margin: "8px 0 0",
+                          background: TONE.accentSoft,
+                          border: `1px dashed ${TONE.accent}`,
+                          borderRadius: 9,
+                          padding: "8px 10px",
+                          fontSize: 11,
+                          lineHeight: 1.6,
+                          color: TONE.text,
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, height: 20, marginBottom: 4 }}>
+                          <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {t("pl.diag.selected", { name: selectedNode.label })}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedNode(null)}
+                            style={{
+                              flexShrink: 0,
+                              border: `1px solid ${TONE.border}`,
+                              background: TONE.panel,
+                              color: TONE.text,
+                              borderRadius: 999,
+                              padding: "1px 8px",
+                              fontSize: 10.5,
+                              lineHeight: "16px",
+                              cursor: "pointer",
+                            }}
+                          >
+                            {t("pl.diag.back")}
+                          </button>
+                        </div>
+                        <div style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
+                          <span style={{ color: TONE.quiet }}>人格 · </span>
+                          <span style={{ color: TONE.text }}>
+                            {selectedInfo.personaId ? (personaNameMap.get(selectedInfo.personaId) ?? selectedInfo.personaId) : `—（${t("pl.personas.scopes.defaultOption")}）`}
+                          </span>
+                        </div>
+                        <div style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
+                          <span style={{ color: TONE.quiet }}>技能 · </span>
+                          <span style={{ color: TONE.text }}>
+                            {selectedInfo.promptIds.length > 0
+                              ? selectedInfo.promptIds
+                                  .map((id) => prompts.find((p) => p.id === id)?.title)
+                                  .filter(Boolean)
+                                  .join("、") || `—`
+                              : `—（${t("pl.diag.noSkill")}）`}
+                          </span>
+                        </div>
+                        <div style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", color: TONE.quiet }}>
+                          {t("pl.diag.path")}：{selectedInfo.path || "—"}
+                        </div>
+                      </div>
+                    ) : diag ? (
+                    <div
+                      style={{
+                        margin: "8px 0 0",
+                        background: TONE.accentSoft,
+                        border: `1px dashed ${TONE.accent}`,
+                        borderRadius: 9,
+                        padding: "8px 10px",
+                        fontSize: 11,
+                        lineHeight: 1.6,
+                        color: TONE.text,
+                      }}
+                    >
+                      <div style={{ height: 20, lineHeight: "20px", fontWeight: 600, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", marginBottom: 4 }}>
+                        {t("pl.diag.title")}
+                      </div>
+                      <div style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
+                        <span style={{ color: TONE.quiet }}>人格 · </span>
+                        <span style={{ fontWeight: 600, color: TONE.accent }}>
+                          {diag.personaName || "—"}
+                        </span>
+                        <span style={{ color: TONE.quiet }}>
+                          {diag.personaSource === "session"
+                            ? `（${t("pl.diag.session")}）`
+                            : diag.personaSource === "path"
+                              ? `（${t("pl.diag.workspace")}）`
+                              : `（${t("pl.diag.default")}）`}
+                        </span>
+                      </div>
+                      <div style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
+                        <span style={{ color: TONE.quiet }}>技能 · </span>
+                        <span style={{ color: TONE.text }}>
+                          {diag.promptTitles.length > 0 ? diag.promptTitles.join("、") : `—（${t("pl.diag.noSkill")}）`}
+                          {diag.activeCount > 0 ? `（+${diag.activeCount} ${t("pl.diag.current")}）` : ""}
+                        </span>
+                      </div>
+                      <div style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", color: TONE.quiet }}>
+                        {t("pl.diag.cwd")}：{diag.cwd || "—"}
+                      </div>
+                    </div>
+                  ) : null}
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", padding: "10px 10px 10px" }}>
                 {!scopesLoaded ? (
@@ -1349,6 +1555,17 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
               cancelLabel={t("pl.personas.cancel")}
               onCancel={() => setDeleteId(null)}
               onConfirm={confirmDelete}
+            />
+
+            {/* 一键清空全部绑定的二次确认 */}
+            <ConfirmDialog
+              open={clearAllOpen}
+              danger
+              message={t("pl.inject.clearAllConfirm")}
+              confirmLabel={t("pl.inject.clearAll")}
+              cancelLabel={t("pl.personas.cancel")}
+              onCancel={() => setClearAllOpen(false)}
+              onConfirm={confirmClearAll}
             />
 
             {/* 导入 MD 文件选择（隐藏） */}

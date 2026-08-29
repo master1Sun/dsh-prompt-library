@@ -142,6 +142,10 @@ export function SelectionAddPrompt(props: Props): ReactNode {
   const [copied, setCopied] = useState(false);
   // 复制反馈期间锁定浮层：点击复制会清空选区，需保留浮层以展示「已复制」
   const copyingRef = useRef(false);
+  // 是否正在拖选/键盘选字：选择动作进行中不弹出浮层按钮，松开鼠标/按键后再弹出
+  const selectingRef = useRef(false);
+  // 浮层按钮容器引用：用于区分「点按浮层按钮」与「普通选择动作」，避免点按钮被误判为拖选
+  const floatingRef = useRef<HTMLDivElement>(null);
   // 弹窗表单
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -240,7 +244,9 @@ export function SelectionAddPrompt(props: Props): ReactNode {
           .includes(tplQuery.trim().toLowerCase())),
   );
 
-  // 监听聊天区选区：仅在功能开启时生效
+  // 监听聊天区选区：仅在功能开启时生效。
+  // 拖选/键盘选字过程中（鼠标按住或按住 Shift/方向键等）不弹出浮层按钮，
+  // 待选择动作结束（松开鼠标/松开按键）后再计算选区并弹出按钮。
   useEffect(() => {
     if (!enabled) return;
     const update = () => {
@@ -250,6 +256,11 @@ export function SelectionAddPrompt(props: Props): ReactNode {
       }
       // 复制反馈期间不清理浮层，保留「已复制」展示
       if (copyingRef.current) return;
+      // 正在拖选/选字中：先隐藏，待选择结束后由 mouseup/keyup 触发重新计算
+      if (selectingRef.current) {
+        setSelection(null);
+        return;
+      }
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
         setSelection(null);
@@ -280,20 +291,62 @@ export function SelectionAddPrompt(props: Props): ReactNode {
       }
       setSelection({ text, rect: range.getBoundingClientRect() });
     };
+    // 选择动作开始：按下鼠标（非浮层按钮）进入「正在选择」状态
+    const onMouseDown = (e: MouseEvent) => {
+      if (floatingRef.current?.contains(e.target as Node)) return;
+      selectingRef.current = true;
+    };
+    // 选择动作结束：松开鼠标后计算最终选区并弹出按钮
+    const onMouseUp = (e: MouseEvent) => {
+      if (floatingRef.current?.contains(e.target as Node)) return;
+      selectingRef.current = false;
+      update();
+    };
+    // 键盘选字（Shift/方向键/Home/End/PageUp/PageDown）：按住期间同样不弹出
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (
+        e.key === "Shift" ||
+        e.key.startsWith("Arrow") ||
+        e.key === "Home" ||
+        e.key === "End" ||
+        e.key === "PageUp" ||
+        e.key === "PageDown"
+      ) {
+        selectingRef.current = true;
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (
+        e.key === "Shift" ||
+        e.key.startsWith("Arrow") ||
+        e.key === "Home" ||
+        e.key === "End" ||
+        e.key === "PageUp" ||
+        e.key === "PageDown"
+      ) {
+        selectingRef.current = false;
+        update();
+      }
+    };
     document.addEventListener("selectionchange", update);
-    document.addEventListener("mouseup", update);
-    document.addEventListener("keyup", update);
+    document.addEventListener("mousedown", onMouseDown, true);
+    document.addEventListener("mouseup", onMouseUp, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    document.addEventListener("keyup", onKeyUp, true);
     window.addEventListener("scroll", update, true);
     // 选区消失或点按他处后自动清理
     const timer = window.setInterval(() => {
       if (copyingRef.current) return;
+      if (selectingRef.current) return;
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed || sel.rangeCount === 0) setSelection(null);
     }, 300);
     return () => {
       document.removeEventListener("selectionchange", update);
-      document.removeEventListener("mouseup", update);
-      document.removeEventListener("keyup", update);
+      document.removeEventListener("mousedown", onMouseDown, true);
+      document.removeEventListener("mouseup", onMouseUp, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+      document.removeEventListener("keyup", onKeyUp, true);
       window.removeEventListener("scroll", update, true);
       window.clearInterval(timer);
     };
@@ -369,6 +422,7 @@ export function SelectionAddPrompt(props: Props): ReactNode {
       {/* 高亮选中 → 浮层工具栏：定位在选区上方居中，含「复制」与「添加提示词」 */}
       {enabled && selection && (
         <div
+          ref={floatingRef}
           style={{
             position: "fixed",
             left: selection.rect.left + selection.rect.width / 2,

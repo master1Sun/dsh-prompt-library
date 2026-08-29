@@ -109,18 +109,6 @@ export function personaSoulPath(personaId: string): string {
   return join(personasDir(), `${personaId}.md`);
 }
 
-// ── 会话上下文（harness 文件化）────────────────────────────────────────────
-
-/** 会话上下文目录：~/.dsh/prompt-library/prompts/ */
-export function promptsDir(): string {
-  return join(dataDir(), "prompts");
-}
-
-/** harness 会话上下文文件：~/.dsh/prompt-library/prompts/HARNESS.md */
-export function harnessPath(): string {
-  return join(promptsDir(), "HARNESS.md");
-}
-
 // ── 会话级技能（仅用于历史数据迁移读取，当前存储为数据库 session_prompts 表）────
 
 /** 旧版会话级技能目录：~/.dsh/prompt-library/session-prompts/（迁移读取用） */

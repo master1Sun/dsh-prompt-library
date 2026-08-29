@@ -43,6 +43,7 @@ import {
   deleteTrash,
   emptyTrash,
   exportPrompts,
+  getPersona,
   getSettings,
   importPrompts,
   listPrompts,
@@ -57,14 +58,18 @@ import {
   updateSettings,
 } from "./store.js";
 import {
+  clearAllPersonaBindings,
+  clearAllSkillBindings,
   clearScopePromptBinding,
   createSessionPrompt,
   deleteSessionPrompt,
   getCurrentSessionScope,
   getScopeBoundPromptIds,
   getSessionActivePromptIds,
+  getSessionPromptsByIds,
   listScopePromptBindings,
   listSessionPrompts,
+  resolveSessionPromptBindingIds,
   setScopePromptBinding,
   setSessionActivePrompts,
   updateSessionPrompt,
@@ -88,10 +93,12 @@ import {
   getPersonaForSession,
   listPersonaViews,
   listScopeTree,
+  resolvePersonaForPath,
+  resolvePersonaForSession,
   updatePersonaWithContent,
 } from "./persona-service.js";
 import { listSessionScopeTree } from "./session-scope.js";
-import { listSessionRecords } from "./session-scope.js";
+import { listSessionRecords, getActiveSessionCwd } from "./session-scope.js";
 import { downloadDir } from "./paths.js";
 
 const PREFIX = "/api/prompt-library";
@@ -945,7 +952,7 @@ export function makePromptRoutes(): WebRoute[] {
 
       // GET /personas/scopes/binding?path= — 读取某路径的精确绑定（无绑定返回空串）
       if (method === "GET" && segments[0] === "personas" && segments[1] === "scopes" && segments[2] === "binding") {
-        const q = new URLSearchParams(tail.includes("?") ? tail.slice(tail.indexOf("?") + 1) : "");
+        const q = new URLSearchParams((req.url ?? "").split("?", 2)[1] ?? "");
         const path = q.get("path") ?? "";
         return json(res, 200, { ok: true, data: { personaId: getPersonaForScopePath(path) } });
       }
@@ -964,6 +971,12 @@ export function makePromptRoutes(): WebRoute[] {
         if (!path) return json(res, 400, { ok: false, error: "invalid body: {path, personaId}" });
         const bound = bindPersonaToScope(path, personaId);
         return json(res, 200, { ok: true, data: { personaId: bound } });
+      }
+
+      // DELETE /personas/scopes/bindings/all — 一键清空人格绑定（所有路径 + 会话的人格绑定，技能不受影响）
+      if (method === "DELETE" && segments[0] === "personas" && segments[1] === "scopes" && segments[2] === "bindings" && segments[3] === "all" && segments.length === 4) {
+        clearAllPersonaBindings();
+        return json(res, 200, { ok: true, data: { cleared: true } });
       }
 
       // POST /personas {name} — 新建自定义人格
@@ -1054,7 +1067,7 @@ export function makePromptRoutes(): WebRoute[] {
 
       // GET /session-prompts/bindings/path?path= — 读取某路径精确绑定的技能 id 列表
       if (method === "GET" && segments[0] === "session-prompts" && segments[1] === "bindings" && segments[2] === "path" && segments.length === 3) {
-        const q = new URLSearchParams(tail.includes("?") ? tail.slice(tail.indexOf("?") + 1) : "");
+        const q = new URLSearchParams((req.url ?? "").split("?", 2)[1] ?? "");
         const path = q.get("path") ?? "";
         return json(res, 200, { ok: true, data: { promptIds: getScopeBoundPromptIds(path) } });
       }
@@ -1072,9 +1085,15 @@ export function makePromptRoutes(): WebRoute[] {
         return json(res, 200, { ok: true, data: { promptIds } });
       }
 
+      // DELETE /session-prompts/bindings/all — 一键清空技能绑定（所有路径 + 会话的技能绑定，人格不受影响）
+      if (method === "DELETE" && segments[0] === "session-prompts" && segments[1] === "bindings" && segments[2] === "all" && segments.length === 3) {
+        clearAllSkillBindings();
+        return json(res, 200, { ok: true, data: { cleared: true } });
+      }
+
       // DELETE /session-prompts/bindings?path= — 清除某路径的绑定
       if (method === "DELETE" && segments[0] === "session-prompts" && segments[1] === "bindings" && segments.length === 2) {
-        const q = new URLSearchParams(tail.includes("?") ? tail.slice(tail.indexOf("?") + 1) : "");
+        const q = new URLSearchParams((req.url ?? "").split("?", 2)[1] ?? "");
         const path = q.get("path") ?? "";
         if (!path) return json(res, 400, { ok: false, error: "invalid query: path" });
         clearScopePromptBinding(path);
@@ -1086,9 +1105,74 @@ export function makePromptRoutes(): WebRoute[] {
         return json(res, 200, { ok: true, data: { scope: getCurrentSessionScope() } });
       }
 
+      // GET /session-prompts/diag?sessid= — 会话解析诊断（排查「设了人格/技能却没按设置生效」用）。
+      // 复现组装端同一套解析逻辑，展示该会话当前会命中哪一层（会话绑定/工作区/项目/默认）：
+      // 后端可从 registerSessionListProvider 缓存拿到每个会话的 header.cwd，无需注入宿主的 sessionQuery。
+      if (method === "GET" && segments[0] === "session-prompts" && segments[1] === "diag" && segments.length === 2) {
+        const q = new URLSearchParams((req.url ?? "").split("?", 2)[1] ?? "");
+        const sessid = (q.get("sessid") ?? "").trim() || getCurrentSessionScope() || "";
+        const records = await listSessionRecords();
+        const rec = records.find((r) => r.id === sessid);
+        // 优先用组装端记录的运行时 cwd（与解析同一来源），避免依赖 sessionQuery 未注入导致误判「无 cwd」
+        const cwd = getActiveSessionCwd(sessid) || rec?.cwd || "";
+        // 人格：会话绑定 → 工作区/项目路径（最深祖先）→ 默认
+        const sessionPersona = sessid ? getPersonaForSession(sessid) : "";
+        const pathPersona = resolvePersonaForPath(cwd || null);
+        const personaId = resolvePersonaForSession(sessid || null, cwd || null);
+        const personaSource =
+          sessionPersona && getPersona(personaId ?? "")?.name
+            ? "session"
+            : pathPersona
+              ? "path"
+              : "default";
+        const personaName =
+          (personaId && getPersona(personaId)?.name) ||
+          (personaSource === "default" ? "默认人格（default）" : "");
+        // 技能：临时注入优先 + 持久绑定（会话优先、路径回退），合并去重
+        const activeIds = sessid ? getSessionActivePromptIds(sessid) : [];
+        const persistentIds = resolveSessionPromptBindingIds(sessid || null, cwd || null);
+        const seen = new Set<string>();
+        const promptIds: string[] = [];
+        for (const id of [...activeIds, ...persistentIds]) {
+          if (!seen.has(id)) {
+            seen.add(id);
+            promptIds.push(id);
+          }
+        }
+        const promptTitles = getSessionPromptsByIds(promptIds).map((p) => p.title);
+        // 解析用的 cwd 上溯链路（展示「当前工作目录是否命中绑定」的依据）
+        const checkedPaths: string[] = [];
+        if (cwd) {
+          let cur = cwd.replace(/\\/g, "/").trim();
+          while (cur.length > 1 && cur.endsWith("/")) cur = cur.slice(0, -1);
+          if (process.platform === "win32") cur = cur.toLowerCase();
+          for (;;) {
+            checkedPaths.push(cur);
+            const idx = cur.lastIndexOf("/");
+            if (idx <= 0) break;
+            cur = cur.slice(0, idx);
+          }
+          if (!checkedPaths.includes("/")) checkedPaths.push("/");
+        }
+        return json(res, 200, {
+          ok: true,
+          data: {
+            sessid,
+            cwd,
+            personaId: personaId ?? "",
+            personaName,
+            personaSource,
+            promptIds,
+            promptTitles,
+            activeCount: activeIds.length,
+            checkedPaths,
+          },
+        });
+      }
+
       // GET /session-prompts/active?scope= — 读取某会话 scope 的临时注入技能 id 列表
       if (method === "GET" && segments[0] === "session-prompts" && segments[1] === "active" && segments.length === 2) {
-        const q = new URLSearchParams(tail.includes("?") ? tail.slice(tail.indexOf("?") + 1) : "");
+        const q = new URLSearchParams((req.url ?? "").split("?", 2)[1] ?? "");
         const scope = q.get("scope") ?? "";
         return json(res, 200, { ok: true, data: { promptIds: getSessionActivePromptIds(scope) } });
       }
@@ -1137,7 +1221,9 @@ export function makePromptRoutes(): WebRoute[] {
 
       // DELETE /session-prompts/session?sessionId= — 清除某会话的全部绑定（人格回落默认、技能不再注入）
       if (method === "DELETE" && segments[0] === "session-prompts" && segments[1] === "session" && segments.length === 2) {
-        const q = new URLSearchParams(tail.includes("?") ? tail.slice(tail.indexOf("?") + 1) : "");
+        // 注意：tail 已在 parseTail 中去掉了 query（仅保留 pathname），此处需从原始 req.url 解析查询参。
+        const raw = req.url ?? "";
+        const q = new URLSearchParams(raw.includes("?") ? raw.slice(raw.indexOf("?") + 1) : "");
         const sessionId = q.get("sessionId") ?? "";
         if (!sessionId) return json(res, 400, { ok: false, error: "invalid query: sessionId" });
         clearSessionBinding(sessionId);

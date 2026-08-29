@@ -20,6 +20,7 @@ import "../components/Tooltip.js";
 import { PromptLibraryButton } from "../components/PromptLibraryButton.js";
 import { AIPolishButton } from "../components/AIPolishButton.js";
 import { ContextRecommendations } from "../components/ContextRecommendations.js";
+import { TokenMonitorView } from "../components/TokenMonitorView.js";
 import { SettingsSection } from "../components/SettingsSection.js";
 import { en, NS, zh } from "./i18n.js";
 import { startDataChangedSubscription } from "./data-sync.js";
@@ -153,6 +154,21 @@ export function apply(ctx: ClientCtx): void {
       };
     },
     "prompt-library: settings navigation icon",
+  );
+
+  // 注册会话监控面板：作为会话轨迹旁的独立监控视图标签（conversation.view 插槽）。
+  // 组件通过宿主注入的 useSession / useProjection 直接读取实时 token 投影数据。
+  ctx.slots.inject("conversation.view", () =>
+    ctx.slots.register(
+      {
+        name: "conversation.view",
+        id: "prompt-library-monitor",
+        order: 20,
+        locale: NS,
+        label: () => t("pl.view.tokenMonitor"),
+      },
+      TokenMonitorView as (props: unknown) => ReactNode,
+    ),
   );
 
   // 注册设置面板到 harness 原生设置界面

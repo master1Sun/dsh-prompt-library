@@ -121,6 +121,15 @@ try {
   /* 无素材目录时忽略 */
 }
 
+// 复制外置文档资源（使用手册 / HARNESS 默认模板 / 版本说明）到 lib/doc，
+// host 侧运行时用 import.meta.url 相对产物读取（见 src/host/bundle-doc.ts）。
+const srcDoc = join(root, "doc");
+try {
+  await cp(srcDoc, join(libDir, "doc"), { recursive: true });
+} catch {
+  /* 无 doc 目录时忽略 */
+}
+
 // 一个小标记，让 `dsh --dump-config` 的消费者知道这是构建过的。
 await writeFile(
   join(libDir, ".build-meta.json"),

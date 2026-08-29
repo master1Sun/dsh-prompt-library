@@ -2756,6 +2756,15 @@ export function clearScopePersonaBinding(path: string): void {
   }
 }
 
+/** 清空全部路径（工作区/项目）的人格绑定（一律回到默认人格）。 */
+export function clearAllScopePersonaBindings(): void {
+  try {
+    getDb().prepare("DELETE FROM persona_scope_bindings").run();
+  } catch {
+    /* 删除失败静默 */
+  }
+}
+
 // ── 会话 id → 人格 + 会话级技能 绑定（存库，优先于路径绑定生效）──────────
 
 /** 记录某会话 id 绑定的人格与会话级技能 id 列表（personaId 为空 / promptIds 空 → 相应维度未绑定）。 */
@@ -2871,5 +2880,32 @@ export function clearScopePromptBinding(path: string): void {
     getDb().prepare("DELETE FROM prompt_scope_bindings WHERE path = ?").run(path);
   } catch {
     /* 删除失败静默 */
+  }
+}
+
+/** 清空全部路径（工作区/项目）的会话级技能绑定。 */
+export function clearAllScopePromptBindings(): void {
+  try {
+    getDb().prepare("DELETE FROM prompt_scope_bindings").run();
+  } catch {
+    /* 删除失败静默 */
+  }
+}
+
+/** 清空全部会话技能绑定（仅置空各会话的技能维度，保留人格绑定 —— 人格与技能是两个独立模块）。 */
+export function clearAllSessionPromptBindings(): void {
+  try {
+    getDb().prepare("UPDATE session_scope_bindings SET promptIds = '[]', updatedAt = ?").run(Date.now());
+  } catch {
+    /* 更新失败静默 */
+  }
+}
+
+/** 清空全部会话人格绑定（仅置空各会话的人格维度，保留技能绑定 —— 人格与技能是两个独立模块）。 */
+export function clearAllSessionPersonaBindings(): void {
+  try {
+    getDb().prepare("UPDATE session_scope_bindings SET personaId = '', updatedAt = ?").run(Date.now());
+  } catch {
+    /* 更新失败静默 */
   }
 }

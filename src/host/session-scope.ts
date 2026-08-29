@@ -30,6 +30,21 @@ export function registerSessionListProvider(provider: () => Promise<SessionQuery
   sessionProvider = provider;
 }
 
+/** 会话 id → 最近一次系统提示组装时记录的真实 cwd（来自 agent.session.header.cwd，与运行时解析同一来源）。
+ * 注意：listSessionRecords() 依赖 sessionQuery 服务，未注入时为空；而组装端始终有 agent，故以组装时记录为准，
+ * 避免诊断与运行时解析不一致（诊断误报「工作目录为空 → 命中默认」）。 */
+const activeSessionCwd = new Map<string, string>();
+
+/** 记录某会话最近一次组装时的真实 cwd（组装端每次调用解析时更新）。 */
+export function recordActiveSessionCwd(sessionId: string, cwd: string): void {
+  if (!sessionId) return;
+  if (cwd) activeSessionCwd.set(sessionId, cwd);
+}
+/** 读取某会话最近一次组装时的真实 cwd；无记录返回空串。 */
+export function getActiveSessionCwd(sessionId: string): string {
+  return activeSessionCwd.get(sessionId) ?? "";
+}
+
 /** 读取全部会话元信息；无提供器 / 失败时返回空数组。 */
 export async function listSessionRecords(): Promise<SessionQueryRecord[]> {
   if (!sessionProvider) return [];

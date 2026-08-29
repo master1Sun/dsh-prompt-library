@@ -499,6 +499,16 @@ export function clearSessionPromptBinding(path: string): Promise<{ cleared: bool
   );
 }
 
+/** 一键清空技能绑定（所有路径 + 会话的技能绑定，人格不受影响）。 */
+export function clearAllBindings(): Promise<{ cleared: boolean }> {
+  return send<{ cleared: boolean }>("DELETE", `${SESSION_PROMPTS_BASE}/bindings/all`);
+}
+
+/** 一键清空人格绑定（所有路径 + 会话的人格绑定，技能不受影响）。 */
+export function clearAllPersonaBindings(): Promise<{ cleared: boolean }> {
+  return send<{ cleared: boolean }>("DELETE", `${PERSONAS_BASE}/scopes/bindings/all`);
+}
+
 /** 读取某会话 scope 临时注入的会话级技能 id 列表。 */
 export function getSessionActivePrompts(scope: string): Promise<{ promptIds: string[] }> {
   return send<{ promptIds: string[] }>(
@@ -510,6 +520,27 @@ export function getSessionActivePrompts(scope: string): Promise<{ promptIds: str
 /** 设置某会话 scope 临时注入的会话级技能 id 列表（空数组 → 清除该会话的临时注入）。 */
 export function setSessionActivePrompts(scope: string, promptIds: string[]): Promise<{ promptIds: string[] }> {
   return send<{ promptIds: string[] }>("PUT", `${SESSION_PROMPTS_BASE}/active`, { scope, promptIds });
+}
+
+// ── 会话解析诊断（排查「设了人格/技能却没生效」用）──────────────────────
+
+/** 会话解析诊断结果（与组装端同一套逻辑）。 */
+export interface ScopeDiag {
+  sessid: string;
+  cwd: string;
+  personaId: string;
+  personaName: string;
+  personaSource: "session" | "path" | "default";
+  promptIds: string[];
+  promptTitles: string[];
+  activeCount: number;
+  checkedPaths: string[];
+}
+
+/** 拉取某会话（省略则取最近活跃）当前的解析命中：人格来源、命中的技能。 */
+export function diagSession(sessid?: string): Promise<ScopeDiag> {
+  const q = sessid ? `?sessid=${encodeURIComponent(sessid)}` : "";
+  return send<ScopeDiag>("GET", `${SESSION_PROMPTS_BASE}/diag${q}`);
 }
 
 // ── Harness 技能软控制（~/.dsh/skills 系统技能 + 项目技能）─────────────────

@@ -1,5 +1,29 @@
 [
   {
+    "version": "0.9.5",
+    "date": "2026-08-29",
+    "zh": {
+      "title": "会话注入修复 · HARNESS 完整注入 · 实时解析",
+      "items": [
+        "会话注入修复：会话绑定的人格与技能真正注入系统提示，聊天按你所设的性格与技能响应，不再失效。",
+        "人格占位升级：人格改为占用宿主 persona 槽位，成为会话最权威身份，避免被其他插件或预设冲掉。",
+        "HARNESS 完整注入：会话上下文（含插件定位、使用规则，49 字符的说明）随每次发送完整注入模型，作为必须遵守的内部上下文，不回显给用户。",
+        "监控新增「实时注入解析」：展示当前会话命中的 人格 与 技能，命中来源一目了然。",
+        "技能删除自动刷新：技能管理中删除技能配置后，右侧绑定数据立即刷新，不再残留过期关联。"
+      ]
+    },
+    "en": {
+      "title": "Session injection fix · Full HARNESS injection · Live injection view",
+      "items": [
+        "Session injection fixed: persona and skills bound to a session now truly reach the system prompt, so chat responds according to the persona and skills you set.",
+        "Persona slot upgrade: the persona takes the host persona slot and becomes the session's authoritative identity, no longer overridden by other plugins or presets.",
+        "Full HARNESS injection: session context (including the plugin positioning and usage rules) is injected in full on every send as internal context that must be followed, never echoed back to the user.",
+        "Monitor gains a live injection view showing the current session's matching persona and skills with their source.",
+        "Skill deletion auto-refresh: deleting a skill config instantly refreshes the right-hand binding data with no stale associations."
+      ]
+    }
+  },
+  {
     "version": "0.9.4",
     "date": "2026-08-29",
     "zh": {

@@ -258,16 +258,24 @@ export function LexiconManagerModal(props: {
     );
   };
 
-  /** 开始新建：清空草稿并进入右侧表单。 */
+  /** 开始新建：清空草稿并进入右侧表单（同时关闭已打开的标签/回收站覆盖层）。 */
   const startCreate = (): void => {
     setEditing({ id: null });
     setDraft({ title: "", body: "", tag: "" });
+    setDataSub(null);
   };
 
   /** 开始编辑指定项：用其内容填充草稿。 */
   const startEdit = (p: Prompt): void => {
     setEditing({ id: p.id });
     setDraft({ title: p.title, body: p.body, tag: (p.tags ?? [])[0] ?? "" });
+  };
+
+  /** 取消新建/编辑：退出表单；新建取消时同时关闭右侧预览（清空选中）。 */
+  const cancelEdit = (): void => {
+    const wasNew = editing?.id == null;
+    setEditing(null);
+    if (wasNew) setSelectedId(null);
   };
 
   /** 在正文光标处插入 {{变量名}}：先记录滚动位置，插入后恢复，避免内容回到顶部。 */
@@ -1184,7 +1192,7 @@ export function LexiconManagerModal(props: {
             variant="ghost"
             size="sm"
             className={plBtn("ghost", "sm")}
-            onClick={() => setEditing(null)}
+            onClick={cancelEdit}
             disabled={busy}
           >
             {T("pl.cancel")}

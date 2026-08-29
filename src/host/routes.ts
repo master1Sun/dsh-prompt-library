@@ -55,6 +55,7 @@ import {
   refinePrompt,
   renameTag,
   restorePrompts,
+  syncAchievementProgress,
   updatePrompt,
   updateSettings,
 } from "./store.js";
@@ -82,7 +83,7 @@ import {
 } from "./session-prompts.js";
 import { checkUpdate, getUpgradeState, getVersionInfo, restartService, startUpgrade } from "./update.js";
 import { getActivity } from "./activity.js";
-import { buildAssistantStatus } from "./gamification.js";
+import { buildAssistantStatus, computeAchievementProgress } from "./gamification.js";
 import { getAnnouncement } from "./announcement.js";
 import { getIssue, listIssueDates } from "./daily.js";
 import { deleteBackup, listBackups, restoreBackup, runBackup, type BackupFormat } from "./backup.js";
@@ -833,7 +834,9 @@ export function makePromptRoutes(): WebRoute[] {
             lastActiveAt: 0,
           })),
         ]);
-        const data = buildAssistantStatus(stats, streak, lang.toLowerCase().startsWith("en") ? "en" : "zh", points);
+        // 成就进度只增不减：实时进度与持久化最大进度合并后回写，词库数据回退也不影响已达成进度
+        const progress = syncAchievementProgress(computeAchievementProgress(stats, streak));
+        const data = buildAssistantStatus(stats, streak, lang.toLowerCase().startsWith("en") ? "en" : "zh", points, progress);
         return json(res, 200, { ok: true, data });
       }
 

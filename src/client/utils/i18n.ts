@@ -329,6 +329,21 @@ export const zh = {
   "pl.achievements.decayRule": "衰减规则",
   "pl.mood.happy": "今天心情很棒，元气满满",
   "pl.mood.sad": "今天遇到点小坎坷，有些低落",
+
+  // 时间生活流：节日祝福 / 深夜关怀（词库助手信息流）
+  "pl.festival.spring": "春节快乐！新春大吉，好事连连",
+  "pl.festival.lantern": "元宵节快乐！花好月圆，阖家团圆",
+  "pl.festival.dragonboat": "端午安康！粽叶飘香，事事顺遂",
+  "pl.festival.qixi": "七夕快乐！愿美好与灵感同至",
+  "pl.festival.zhongyuan": "中元安康，心平气和过一天",
+  "pl.festival.midautumn": "中秋快乐！月圆人团圆，词库伴你行",
+  "pl.festival.chongyang": "重阳安康！登高望远，灵感长青",
+  "pl.festival.laba": "腊八快乐！来碗热粥，暖暖过冬",
+  "pl.festival.newyeareve": "除夕守岁！辞旧迎新，明年更上一层楼",
+  "pl.time.night.0": "夜深啦，早点休息，明天再战",
+  "pl.time.night.1": "都这么晚了，保重身体哦",
+  "pl.time.night.2": "夜猫子辛苦了，记得睡个好觉",
+
   "pl.intro.0": "慧心记之，随取随用；灵感至此，皆有所归。",
   "pl.intro.1": "AI 润饰，如琢如磨；炼字成句，越发精妙。",
   "pl.intro.2": "分门别类，按图索骥；常学常新，温故知新。",
@@ -681,11 +696,9 @@ export const zh = {
   "pl.set.backupDeleteConfirm": "确认删除备份文件 {name}？删除后不可恢复。",
   "pl.set.backupDeleteDone": "已删除备份 {name}",
   "pl.set.backupDeleteFail": "删除备份失败：{err}",
-  "pl.set.updateReminder": "更新提醒",
+  "pl.set.currentVersion": "当前版本",
   "pl.set.checkUpdate": "检查更新",
   "pl.set.updateChecking": "正在检查更新…",
-  "pl.set.updateCurrent": "当前版本: v{version}",
-  "pl.set.updateCurrentDesc": "当前为 v{version} 版本",
   "pl.set.updateAvailable": "发现新版本 v{version}",
   "pl.set.updateLatest": "已是最新版本",
   "pl.set.updateNow": "立即更新",
@@ -1187,6 +1200,21 @@ export const en: Record<keyof typeof zh, string> = {
   "pl.achievements.decayRule": "Decay rule",
   "pl.mood.happy": "In high spirits today, full of energy",
   "pl.mood.sad": "Hit a snag today, feeling a bit low",
+
+  // Time-life stream: festival greetings / late-night care
+  "pl.festival.spring": "Happy Spring Festival! Good luck and joy to you",
+  "pl.festival.lantern": "Happy Lantern Festival! May your days be round and full",
+  "pl.festival.dragonboat": "Happy Dragon Boat Festival! Smooth sailing",
+  "pl.festival.qixi": "Happy Qixi! May wonder and inspiration come your way",
+  "pl.festival.zhongyuan": "Peace on Zhongyuan Festival, take it easy today",
+  "pl.festival.midautumn": "Happy Mid-Autumn! Full moon, full circle, library by your side",
+  "pl.festival.chongyang": "Happy Double Ninth! High climbs, fresh ideas",
+  "pl.festival.laba": "Happy Laba! A warm bowl of porridge for a cozy winter",
+  "pl.festival.newyeareve": "Happy New Year's Eve! Out with the old, up we go",
+  "pl.time.night.0": "It's late — rest up, see you tomorrow",
+  "pl.time.night.1": "So late already, take care of yourself",
+  "pl.time.night.2": "Night owl hard at work — get some good sleep",
+
   "pl.intro.0": "Jot it down, fetch it anytime; every spark finds a home.",
   "pl.intro.1": "AI polishes, stone into jade; words refined, ever sharper.",
   "pl.intro.2": "Filed by kind, found at a glance; learn what is new, revisit the old.",
@@ -1539,11 +1567,9 @@ export const en: Record<keyof typeof zh, string> = {
   "pl.set.backupDeleteConfirm": "Delete backup file {name}? This cannot be undone.",
   "pl.set.backupDeleteDone": "Deleted backup {name}",
   "pl.set.backupDeleteFail": "Failed to delete backup: {err}",
-  "pl.set.updateReminder": "Update reminder",
+  "pl.set.currentVersion": "Current version",
   "pl.set.checkUpdate": "Check for updates",
   "pl.set.updateChecking": "Checking for updates…",
-  "pl.set.updateCurrent": "Current version: v{version}",
-  "pl.set.updateCurrentDesc": "Currently on v{version}",
   "pl.set.updateAvailable": "New version available v{version}",
   "pl.set.updateLatest": "You're up to date",
   "pl.set.updateNow": "Update",
@@ -1739,6 +1765,9 @@ declare module "@deepseek-ai/dsh-client-ui-slots" {
 
 /** 本命名空间的类型化翻译函数（组件注入的 `t` 座位类型）。 */
 export type PLTranslate = TranslateNS<typeof NS>;
+
+/** 词库翻译键的联合类型（供动态拼键时断言使用）。 */
+export type PLKey = keyof typeof zh;
 
 /**
  * 组件内统一取翻译函数：优先用框架注入的 `t`（跟随系统语言切换），

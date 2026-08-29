@@ -138,6 +138,15 @@ function getDb(): DatabaseSync {
     );
   `);
   next.exec("CREATE INDEX IF NOT EXISTS idx_pl_points_createdAt ON pl_points_log (createdAt)");
+  // 成就进度持久化表：每条成就一行，记录其历史最大进度。
+  // 进度只增不减——即使词库数据回退（删除提示词 / 清空回收站 / 连续活跃断档）也不影响已达成进度。
+  next.exec(`
+    CREATE TABLE IF NOT EXISTS pl_achievement_progress (
+      id        TEXT PRIMARY KEY,
+      progress  INTEGER NOT NULL DEFAULT 0,
+      updatedAt INTEGER NOT NULL
+    );
+  `);
   // 统计历史表：每 7 天自动生成的词库统计快照（含 AI 点评）。
   next.exec(`
     CREATE TABLE IF NOT EXISTS stats_history (
@@ -1171,8 +1180,6 @@ export function autoLearn(
       );
     // 用用户配置的真实上限做后台淘汰（getSettingsSync 只回默认值）
     void getSettings().then((s) => enforceMaxCount(s.maxPromptCount, s.autoLearnTag));
-    // 等级积分：自动学习入库 +2（仅新入库时记；近似去重/回收站恢复不重复记）
-    void addPoints("learn");
     void continueEnrich(prompt, !!skipEnrich);
     emitDataChanged();
     return Promise.resolve(prompt);
@@ -1905,12 +1912,13 @@ export async function computeInactiveDays(): Promise<number> {
  * 一次性回填等级积分账本：从历史记录折算历史积分。
  * - 使用：每 fs.count 次计 1 分（避免历史海量使用把等级拉爆，按比例折算）
  * - AI 完善：每条 +3
- * - 自动学习：每条（auto-learned 标签）+2
  * - 新增收藏：每条 +1（按总词条数，过长库按比例折算）
  * 已回填过则跳过（幂等）。
  */
 function seedPointsLedger(cur: DatabaseSync): void {
   try {
+    // 自学习改为不再计积分：清理历史账本中残留的 learn 记录（幂等，每次启动兜底执行）
+    cur.prepare("DELETE FROM pl_points_log WHERE kind = 'learn'").run();
     if (getMetaValue("pl:points-seeded") === "1") return;
     const now = Date.now();
     const day = localDayKey(now);
@@ -1921,7 +1929,6 @@ function seedPointsLedger(cur: DatabaseSync): void {
     // 历史使用次数按每 3 次折算 1 分，兼顾留存与避免刷量放大；其余维度按条计
     const usePoints = Math.min(2000, Math.round((useCount?.c ?? 0) / 3));
     const aiPoints = all.filter((p) => p.aiRefined).length * POINTS_WEIGHT.ai;
-    const learnPoints = all.filter((p) => (p.tags ?? []).includes("auto-learned")).length * POINTS_WEIGHT.learn;
     const collectPoints = Math.min(500, all.length * POINTS_WEIGHT.collect);
     const insert = cur.prepare(
       "INSERT INTO pl_points_log (kind, points, createdAt, dayKey) VALUES (?, ?, ?, ?)",
@@ -1930,7 +1937,6 @@ function seedPointsLedger(cur: DatabaseSync): void {
       for (let i = 0; i < c; i++) insert.run(kind, POINTS_WEIGHT[kind], now - i, day);
     };
     cap("ai", aiPoints > 0 ? Math.ceil(aiPoints / POINTS_WEIGHT.ai) : 0);
-    cap("learn", learnPoints > 0 ? Math.ceil(learnPoints / POINTS_WEIGHT.learn) : 0);
     cap("collect", collectPoints > 0 ? Math.ceil(collectPoints / POINTS_WEIGHT.collect) : 0);
     cap("use", usePoints > 0 ? usePoints : 0);
     setMetaValue("pl:points-seeded", "1");
@@ -1940,15 +1946,14 @@ function seedPointsLedger(cur: DatabaseSync): void {
 }
 
 /** 积分事件类型。 */
-export type PointsKind = "use" | "ai" | "learn" | "collect" | "active";
+export type PointsKind = "use" | "ai" | "collect" | "active";
 
-/** 各维度单次基础权重：使用 +1 · AI完善 +3 · 自学习 +2 · 新增收藏 +1 · 每日活跃 +2。 */
+/** 各维度单次基础权重：使用 +1 · AI完善 +3 · 新增收藏 +1 · 每日活跃 +3（自学习已不再计积分）。 */
 export const POINTS_WEIGHT: Record<PointsKind, number> = {
   use: 1,
   ai: 3,
-  learn: 2,
   collect: 1,
-  active: 2,
+  active: 3,
 };
 
 /** 记入一笔积分事件（自动处理「每日活跃」加成：当天首笔任意活动额外加活跃分）。 */
@@ -1961,7 +1966,7 @@ export function addPoints(kind: PointsKind): Promise<void> {
     cur
       .prepare("INSERT INTO pl_points_log (kind, points, createdAt, dayKey) VALUES (?, ?, ?, ?)")
       .run(kind, base, now, day);
-    // 当天首次活动：额外计入「每日活跃」+2，驱动持续使用而非一次高强度刷量
+    // 当天首次活动：额外计入「每日活跃」+3，驱动持续使用而非一次高强度刷量
     const todayActive = cur
       .prepare("SELECT COUNT(*) AS c FROM pl_points_log WHERE kind = 'active' AND dayKey = ?")
       .get(day) as { c: number };
@@ -1974,6 +1979,45 @@ export function addPoints(kind: PointsKind): Promise<void> {
   } catch (e) {
     return Promise.reject(e);
   }
+}
+
+/** 读取全部成就的历史最大进度（id → 进度，进度只增不减的底账）。 */
+export function loadAchievementProgress(): Record<string, number> {
+  try {
+    const cur = getDb();
+    const rows = cur
+      .prepare("SELECT id, progress FROM pl_achievement_progress")
+      .all() as Array<{ id: string; progress: number }>;
+    const map: Record<string, number> = {};
+    for (const r of rows) map[r.id] = r.progress;
+    return map;
+  } catch {
+    /* 表不存在或读取失败时视为无历史进度 */
+    return {};
+  }
+}
+
+/**
+ * 合并并写回成就最大进度（幂等）：progress = max(实时, 历史最大)。
+ * 即使词库数据随后回退（删除提示词 / 清空回收站 / 连续活跃断档等），
+ * 已达成或已推进的进度也不会倒退。返回合并后的进度表供上层生成成就快照。
+ */
+export function syncAchievementProgress(raw: Record<string, number>): Record<string, number> {
+  const cur = getDb();
+  const now = Date.now();
+  const stored = loadAchievementProgress();
+  const merged: Record<string, number> = {};
+  const upsert = cur.prepare(
+    "INSERT INTO pl_achievement_progress (id, progress, updatedAt) VALUES (?, ?, ?) " +
+      "ON CONFLICT(id) DO UPDATE SET progress = MAX(progress, excluded.progress), updatedAt = excluded.updatedAt",
+  );
+  for (const [id, v] of Object.entries(raw)) {
+    const max = Math.max(v, stored[id] ?? 0);
+    merged[id] = max;
+    // 仅持久化有进度的成就，避免写入一堆全零行
+    if (max > 0) upsert.run(id, max, now);
+  }
+  return merged;
 }
 
 /** 等级积分账本快照：累计积分、按「连续未活跃周期」的衰减量、净积分与未活跃天数。 */
@@ -2265,6 +2309,14 @@ const PERSIST_EXCLUDED_KEYS = new Set<keyof PluginSettings>([
   "levelEnabled",
   "levelAnnouncementEnabled",
   "announcementEnabled",
+  // 自动学习设置已从设置界面移除（仅保留 DeepSeek 余额查询），不再写配置文件，读取时回退默认态
+  "autoLearnManualConfirm",
+  "autoLearnTag",
+  "autoLearnMinLength",
+  // AI 完善面板不再在界面上暴露，其运行参数（Provider/模型/开关）不写配置文件，读取时回退默认态
+  "aiProvider",
+  "aiModel",
+  "aiEnrichEnabled",
 ]);
 
 /** 剔除不落盘设置项（返回新对象，不修改入参）。 */

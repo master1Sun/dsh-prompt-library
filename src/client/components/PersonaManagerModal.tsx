@@ -117,10 +117,10 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
       /* 忽略存储失败 */
     }
   };
-  // 构建展开集合：有历史记录则沿用，否则默认全部展开（与旧行为一致）
+  // 构建展开集合：有历史记录则沿用（含「全部折叠」的空集合，不能当作无记录），否则默认全部展开
   const buildScopesExpanded = (tree: ScopeNode[]) => {
     const stored = scopesExpandedFromStorage();
-    if (stored && stored.size > 0) return stored;
+    if (stored !== null) return stored;
     const all = new Set<string>();
     const collect = (nodes: ScopeNode[]) => {
       for (const node of nodes) {

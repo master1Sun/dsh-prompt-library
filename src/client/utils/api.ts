@@ -374,6 +374,19 @@ export function getUpdate(): Promise<UpdateInfo> {
   return send<UpdateInfo>("GET", "/api/prompt-library/update");
 }
 
+/** 服务端运行版本与磁盘已安装版本（本地读取，不触发网络检查）。 */
+export interface VersionInfo {
+  /** 服务端编译版本号。 */
+  server: string;
+  /** 磁盘 package.json 已安装版本号。 */
+  installed: string;
+}
+
+/** 读取版本比对信息（轻量本地接口，用于展示当前版本号）。 */
+export function getVersion(): Promise<VersionInfo> {
+  return send<VersionInfo>("GET", "/api/prompt-library/version");
+}
+
 /** 手动升级的实时进度（客户端轮询以驱动更新进度条）。 */
 export interface UpdateProgress {
   /** 是否有升级正在后台执行。 */

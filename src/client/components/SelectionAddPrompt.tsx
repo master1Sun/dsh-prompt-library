@@ -92,13 +92,13 @@ function tplTagChipStyle(active: boolean): CSSProperties {
   };
 }
 
-/** 浮层工具栏按钮：贴合宿主主题（无阴影、状态背景色、14px 圆角）。 */
+/** 浮层工具栏按钮：贴合宿主主题（实色背景、轻投影、14px 圆角）。 */
 const floatingBtnStyle: CSSProperties = {
   height: 30,
   padding: "0 12px",
   border: 0,
   borderRadius: 14,
-  boxShadow: "none",
+  boxShadow: "0 1px 3px rgba(17, 24, 39, 0.14)",
   color: TONE.text,
   fontSize: 12,
   cursor: "pointer",
@@ -414,20 +414,26 @@ export function SelectionAddPrompt(props: Props): ReactNode {
     <>
       {/* 按钮悬停/按压反馈：与宿主主题 token 一致，无阴影 */}
       <style>{`
-.pl-selection-btn{background:var(--dsw-alias-interactive-bg-hover, rgba(17,24,39,0.06))}
-.pl-selection-btn:hover{background:var(--dsw-alias-interactive-bg-active, rgba(17,24,39,0.12))}
-.pl-selection-btn:active{background:var(--dsw-alias-interactive-bg-active, rgba(17,24,39,0.18))}
+.pl-selection-btn{background:var(--dsw-alias-bg-layer-2, #ffffff)}
+.pl-selection-btn:hover{background:var(--dsw-alias-bg-layer-3, #eef1f5)}
+.pl-selection-btn:active{background:var(--dsw-alias-bg-layer-3, #e0e4ea)}
 .pl-selection-btn:disabled{opacity:.6;cursor:default}
 `}</style>
-      {/* 高亮选中 → 浮层工具栏：定位在选区上方居中，含「复制」与「添加提示词」 */}
+      {/* 高亮选中 → 浮层工具栏：优先居选区上方居中；上方空间不足时翻转到选区下方。含「复制」与「添加提示词」 */}
       {enabled && selection && (
         <div
           ref={floatingRef}
           style={{
             position: "fixed",
-            left: selection.rect.left + selection.rect.width / 2,
-            top: selection.rect.top - 8,
-            transform: "translate(-50%, -100%)",
+            // 水平固定对准选区水平中心，远离两侧视口边缘（左右各留 140px）
+            left: Math.min(
+              Math.max(selection.rect.left + selection.rect.width / 2, 140),
+              window.innerWidth - 140,
+            ),
+            // 顶部余量不足以容纳浮层时翻转到选区下方，避免被裁出屏幕
+            top: selection.rect.top - 8 < 46 ? selection.rect.bottom + 8 : selection.rect.top - 8,
+            transform:
+              selection.rect.top - 8 < 46 ? "translate(-50%, 0)" : "translate(-50%, -100%)",
             zIndex: 2147483647,
             display: "flex",
             alignItems: "center",

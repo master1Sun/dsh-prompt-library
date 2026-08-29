@@ -21,6 +21,7 @@ import {
   getSettings,
   getUpdate,
   getUpdateProgress,
+  getVersion,
   restartService as apiRestartService,
   updateSettings as apiUpdateSettings,
   type UpdateInfo,
@@ -401,6 +402,8 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
   const [openUpdate, setOpenUpdate] = useState(false);
   // 更新提醒状态：updateInfo 为 null 表示尚未检查/检查失败
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  // 当前已安装版本号（从 /version 轻量读取，用于「更新提醒」标题后展示，如 v0.9.5）
+  const [installedVer, setInstalledVer] = useState("");
   const [checking, setChecking] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [updateMsg, setUpdateMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -418,6 +421,13 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
       .then((s) => setDraft(s))
       .catch(() => { /* 使用默认值 */ })
       .finally(() => setLoading(false));
+  }, []);
+
+  // 拉取当前已安装版本号，供「更新提醒」标题后展示（轻量本地接口，不触发网络检查）
+  useEffect(() => {
+    getVersion()
+      .then((v) => setInstalledVer(v.installed || ""))
+      .catch(() => { /* 忽略 */ });
   }, []);
 
   // 拉取游戏化快照，判断词库助手开关是否解锁：等级 >= 3 后可自由开启/关闭
@@ -631,7 +641,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           label={T("pl.set.personTipInterval")}
           value={draft.personTipInterval}
           min={10}
-          max={120}
+          max={3600}
           step={1}
           defaultValue={DEFAULT_SETTINGS.personTipInterval}
           onChange={(v) => updateAndSave({ personTipInterval: v })}
@@ -770,7 +780,10 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
         >
           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-              <span style={{ fontSize: 13 }}>{T("pl.set.updateReminder")}</span>
+              <span style={{ fontSize: 13 }}>
+                {T("pl.set.currentVersion")}
+                {installedVer ? `（v${installedVer}）` : ""}
+              </span>
               <button
                 type="button"
                 onClick={handleCheckUpdate}
@@ -826,11 +839,12 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           ) : updateInfo ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               <div style={{ fontSize: 11, color: TONE.quiet }}>
-                {T("pl.set.updateCurrent", { version: updateInfo.current })}
-                {updateInfo.hasUpdate && (
-                  <span style={{ color: TONE.accent, marginLeft: 4 }}>
+                {updateInfo.hasUpdate ? (
+                  <span style={{ color: TONE.accent }}>
                     {T("pl.set.updateAvailable", { version: updateInfo.latest })}
                   </span>
+                ) : (
+                  T("pl.set.updateLatest")
                 )}
               </div>
               {updateInfo.hasUpdate && (

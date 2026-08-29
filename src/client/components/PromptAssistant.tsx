@@ -29,9 +29,9 @@ import {
   type AssistantStatus,
   type DeepSeekBalance,
 } from "../utils/api.js";
-import { type PLTranslate, usePLT } from "../utils/i18n.js";
+import { type PLKey, type PLTranslate, usePLT } from "../utils/i18n.js";
 import { useThemeSync } from "../utils/theme.js";
-import { getCalendarToday } from "../utils/lunar.js";
+import { getCalendarToday, getFestival } from "../utils/lunar.js";
 import { AnnouncementModal } from "./AnnouncementModal.js";
 import { AchievementModal } from "./AchievementModal.js";
 import { PersonaManagerModal } from "./PersonaManagerModal.js";
@@ -410,14 +410,14 @@ export function PromptAssistant(props: Props): ReactNode {
     };
   }, []);
 
-  // 实时时钟：驱动底部时间/农历/节气信息条（每秒刷新）
+  // 实时时钟：驱动底部信息条（每秒刷新）
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     const iv = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(iv);
   }, []);
 
-  // 底部信息条内容：时间 + 星期 + 日期 + 农历/节气（按当前界面语言；中文才含农历与节气）
+  // 底部信息条内容：星期 + 日期 + 农历/节气（按当前界面语言；中文才含农历与节气）
   const info = useMemo(() => {
     const lang: "zh" | "en" = (
       document.documentElement.lang ||
@@ -430,13 +430,47 @@ export function PromptAssistant(props: Props): ReactNode {
       : "zh";
     const cale = getCalendarToday(now, lang);
     const pad = (n: number) => String(n).padStart(2, "0");
-    const time = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
     const date =
       lang === "zh"
         ? `${now.getMonth() + 1}月${now.getDate()}日`
         : `${now.getFullYear()}/${pad(now.getMonth() + 1)}/${pad(now.getDate())}`;
-    return { cale, time, date };
+    return { cale, date };
   }, [now]);
+
+  // 时间生活流：节日祝福 / 深夜关怀，注入简介轮播首位与底部信息条（仅中文含农历节日）
+  const timeTip = useMemo(() => {
+    const lang: "zh" | "en" = (
+      document.documentElement.lang ||
+      navigator.language ||
+      "zh"
+    )
+      .toLowerCase()
+      .startsWith("en")
+      ? "en"
+      : "zh";
+    const h = now.getHours();
+    // 深夜关怀：0:00-6:00 展示（按日期轮换文案，避免每晚重复同一条）
+    if (h >= 0 && h < 6) {
+      const key = ["pl.time.night.0", "pl.time.night.1", "pl.time.night.2"][
+        now.getDate() % 3
+      ] as PLKey;
+      return { text: T(key), festival: null };
+    }
+    // 节日祝福：命中农历传统节日时展示对应祝福
+    const festival = getFestival(now);
+    if (festival) {
+      return {
+        text: T(`pl.festival.${festival.key}` as PLKey),
+        festival: { key: festival.key, name: lang === "zh" ? festival.zh : festival.en },
+      };
+    }
+    return { text: "", festival: null };
+  }, [now]);
+  // 简介轮播列表：今日时节提示（若有）置于首位随轮播展示
+  const shownIntros = useMemo(
+    () => (timeTip.text ? [timeTip.text, ...intros] : intros),
+    [timeTip, intros],
+  );
   useEffect(() => {
     let cancelled = false;
     // 按当前系统语言请求，host 端返回匹配主题+阶段的文案
@@ -1317,9 +1351,6 @@ export function PromptAssistant(props: Props): ReactNode {
                       {mood === "happy" ? T("pl.mood.happy") : T("pl.mood.sad")}
                     </div>
                   )}
-                  <div style={{ fontWeight: 600, letterSpacing: 2 }}>
-                    {T("pl.floating.title")}
-                  </div>
                   <div
                     key={introIdx}
                     style={{
@@ -1331,7 +1362,7 @@ export function PromptAssistant(props: Props): ReactNode {
                   >
                     {eggMode && status?.easterEgg
                       ? status.easterEgg.text
-                      : intros[introIdx % intros.length]}
+                      : shownIntros[introIdx % shownIntros.length]}
                   </div>
                   {/* 轮询指示点（彩蛋模式单条展示，不轮播故隐藏） */}
                   {!eggMode && (
@@ -1342,8 +1373,8 @@ export function PromptAssistant(props: Props): ReactNode {
                         justifyContent: "center",
                       }}
                     >
-                      {intros.map((_, i) => {
-                        const active = i === introIdx % intros.length;
+                      {shownIntros.map((_, i) => {
+                        const active = i === introIdx % shownIntros.length;
                         return (
                           <span
                             key={i}
@@ -1378,12 +1409,13 @@ export function PromptAssistant(props: Props): ReactNode {
                   >
                     {(() => {
                       const segs: { key: string; text: string; accent?: boolean }[] = [
-                        { key: "t", text: info.time, accent: true },
                         { key: "w", text: info.cale.weekday },
                         { key: "d", text: info.date },
                       ];
                       if (info.cale.lunar) segs.push({ key: "l", text: info.cale.lunar });
                       if (info.cale.term) segs.push({ key: "g", text: info.cale.term, accent: true });
+                      if (timeTip.festival)
+                        segs.push({ key: "f", text: timeTip.festival.name, accent: true });
                       return segs.map((s) => (
                         <span key={s.key} style={{ color: s.accent ? TONE.accent : undefined }}>
                           {s.text}

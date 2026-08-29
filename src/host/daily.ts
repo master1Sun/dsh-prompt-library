@@ -16,9 +16,10 @@ import {
   getNewspaperRecord,
   listNewspaperDates,
   setNewspaperRecord,
+  syncAchievementProgress,
   type LibraryStats,
 } from "./store.js";
-import { buildAchievementNews } from "./gamification.js";
+import { buildAchievementNews, computeAchievementProgress } from "./gamification.js";
 import {
   generateDailyReport,
   type DailyReportItem,
@@ -111,9 +112,11 @@ async function generateTodayIssue(
       { date: today, lang: "en", ...empty },
     ];
   }
+  // 成就进度与历史最大进度合并（只增不减），供成就速报使用
+  const progress = syncAchievementProgress(computeAchievementProgress(stats, streak));
   const news = {
-    zh: buildAchievementNews(stats, streak, "zh"),
-    en: buildAchievementNews(stats, streak, "en"),
+    zh: buildAchievementNews(stats, streak, "zh", progress),
+    en: buildAchievementNews(stats, streak, "en", progress),
   };
   const [reportZh, reportEn] = await Promise.all([
     generateDailyReport(statsText, settings, "zh"),

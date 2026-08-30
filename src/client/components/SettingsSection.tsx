@@ -22,7 +22,6 @@ import {
   getUpdate,
   getUpdateProgress,
   getVersion,
-  restartService as apiRestartService,
   updateSettings as apiUpdateSettings,
   type UpdateInfo,
   type UpdateProgress,
@@ -470,9 +469,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
     try {
       const info = await getUpdate();
       setUpdateInfo(info);
-      if (!info.hasUpdate) {
-        setUpdateMsg({ ok: true, text: T("pl.set.updateLatest") });
-      }
+      // 已是最新时不再额外弹「已是最新版本」——版本信息行已固定展示该状态，避免重复/误导提示
     } catch {
       setUpdateMsg({ ok: false, text: T("pl.set.updateFail") });
     } finally {
@@ -533,13 +530,6 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
       setUpdating(false);
     }
   }, [T]);
-
-  // 重启本地 dsh web 服务使新版本代码生效（重启后连接会短暂断开）
-  const handleRestart = useCallback(async () => {
-    try {
-      await apiRestartService();
-    } catch { /* 重启断开连接，忽略 */ }
-  }, []);
 
   // 更新进度条阶段文案：按 stage 返回对应国际化描述
   const stageLabel = (p: UpdateProgress | null): string => {
@@ -931,52 +921,6 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
               </svg>
               <span>{updateMsg.text}</span>
               </div>
-              {/* 更新成功后显著提示：必须重启 dsh web 才会加载新版本代码 */}
-              {updateMsg.ok && (
-                <div
-                  role="alert"
-                  style={{
-                    width: "100%",
-                    boxSizing: "border-box",
-                    display: "flex",
-                    alignItems: "flex-start",
-                    gap: 8,
-                    padding: "10px 12px",
-                    borderRadius: 7,
-                    background:
-                      "linear-gradient(180deg, rgba(59, 130, 246, 0.08) 0%, rgba(59, 130, 246, 0.03) 100%)",
-                    border: "1px solid var(--dsw-alias-state-info-primary, rgba(59, 130, 246, 0.35))",
-                    color: TONE.text,
-                    fontSize: 12,
-                    lineHeight: 1.6,
-                  }}
-                >
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 16 16"
-                    style={{
-                      flexShrink: 0,
-                      marginTop: 1,
-                      color: "var(--dsw-alias-state-info-primary, #3b82f6)",
-                    }}
-                    aria-hidden="true"
-                  >
-                    <path
-                      d="M8 1.5A6.5 6.5 0 1 1 8 14.5 6.5 6.5 0 0 1 8 1.5zm0 2a.9.9 0 1 0 0 1.8.9.9 0 0 0 0-1.8zM6.5 7.5a.8.8 0 1 0 1.6 0V7a.8.8 0 0 0-1.6 0v.5zM7.2 6a.8.8 0 0 1 1.6 0v3.2a.8.8 0 0 1-1.6 0V6z"
-                      fill="currentColor"
-                    />
-                  </svg>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                    <strong style={{ fontSize: 12, fontWeight: 600 }}>
-                      {T("pl.set.updateSuccessRestartTitle")}
-                    </strong>
-                    <span style={{ color: TONE.muted, fontSize: 11.5 }}>
-                      {T("pl.set.updateSuccessRestartHint")}
-                    </span>
-                  </div>
-                </div>
-              )}
             </div>
           )}
 
@@ -1000,7 +944,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
                 lineHeight: 1.6,
               }}
             >
-              <div style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 <strong style={{ fontSize: 12, fontWeight: 600 }}>
                   {T("pl.set.updateSuccessRestartTitle")}
                 </strong>
@@ -1008,23 +952,6 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
                   {T("pl.set.updateSuccessRestartHint")}
                 </span>
               </div>
-              <button
-                type="button"
-                onClick={handleRestart}
-                style={{
-                  alignSelf: "flex-start",
-                  flexShrink: 0,
-                  padding: "5px 12px",
-                  fontSize: 12,
-                  color: TONE.text,
-                  background: TONE.row,
-                  border: `1px solid ${TONE.border}`,
-                  borderRadius: 5,
-                  cursor: "pointer",
-                }}
-              >
-                {T("pl.set.restartNow")}
-              </button>
             </div>
           )}
         </div>

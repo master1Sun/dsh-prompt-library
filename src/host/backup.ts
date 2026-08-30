@@ -68,6 +68,18 @@ function createdAtOf(name: string): number {
   return new Date(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!).getTime();
 }
 
+/**
+ * 判断文件名是否可作为备份文件识别（按内容而非固定命名）：
+ * 只要以 .db / .json 结尾即认可，文件名可随意重命名；同时拒绝路径分隔符与
+ * 遍历字符，杜绝路径穿越。默认命名仍可解析出时间戳，无时间戳时回退到文件 mtime。
+ */
+function isSafeBackupName(name: string): boolean {
+  if (!name) return false;
+  if (!(name.endsWith(".db") || name.endsWith(".json"))) return false;
+  if (name.includes("/") || name.includes("\\") || name.includes("..")) return false;
+  return true;
+}
+
 /** 依据备份文件名后缀判断格式（.json → json，否则 db）。 */
 function formatOf(name: string): BackupFormat {
   return name.endsWith(".json") ? "json" : "db";
@@ -79,7 +91,7 @@ export async function listBackups(): Promise<BackupEntry[]> {
   let names: string[] = [];
   try {
     const entries = await readdir(dir, { withFileTypes: true });
-    names = entries.filter((e) => e.isFile() && FILE_RE.test(e.name)).map((e) => e.name);
+    names = entries.filter((e) => e.isFile() && isSafeBackupName(e.name)).map((e) => e.name);
   } catch {
     // 目录不存在或不可读：视为暂无备份
     return [];
@@ -88,7 +100,7 @@ export async function listBackups(): Promise<BackupEntry[]> {
   for (const name of names) {
     try {
       const s = await stat(join(dir, name));
-      list.push({ name, size: s.size, createdAt: createdAtOf(name), format: formatOf(name) });
+      list.push({ name, size: s.size, createdAt: createdAtOf(name) || s.mtimeMs, format: formatOf(name) });
     } catch {
       /* 单条读取失败忽略，不阻塞其余 */
     }
@@ -153,7 +165,7 @@ export async function runBackup(
 export async function restoreBackup(
   name: string,
 ): Promise<{ format: BackupFormat; count: number }> {
-  if (!FILE_RE.test(name)) {
+  if (!isSafeBackupName(name)) {
     throw new Error("invalid backup name");
   }
   const file = join(backupDir(), name);
@@ -187,7 +199,7 @@ export async function restoreBackup(
  * 文件不存在时视为已删除；删除失败抛出异常供上层提示。
  */
 export async function deleteBackup(name: string): Promise<boolean> {
-  if (!FILE_RE.test(name)) {
+  if (!isSafeBackupName(name)) {
     throw new Error("invalid backup name");
   }
   await rm(join(backupDir(), name), { force: true });

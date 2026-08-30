@@ -691,12 +691,9 @@ export function PromptAssistant(props: Props): ReactNode {
 
   // 是否展示阶段气泡：会话进行中（思考/调工具/整理/回话/完成/失败）都展示思考气泡框；空闲不打扰
   const phaseActive = activity.sessionActive && activity.phase !== "idle";
-  // 是否处于「思考/工作」类阶段：此时从头顶向外扩散三个波纹圈，营造思考想象效果（完成/失败等收尾阶段不扩散）
-  const thinkActive =
-    phaseActive &&
-    (activity.phase === "thinking" ||
-      activity.phase === "tool" ||
-      activity.phase === "waiting");
+  // 会话运行状态气泡：会话进行中时在助手头部展示当前运行状态文案；
+  // 仅当没有更高优先级的 toast（成就解锁/点击互动）临时气泡时展示。
+  const showBubble = Boolean(toast) || phaseActive;
   // 阶段气泡激活标记：供自动冒泡循环判断优先级（阶段气泡 > 悬停/自动冒泡简介）
   const phaseActiveRef = useRef(phaseActive);
   useEffect(() => {
@@ -712,7 +709,7 @@ export function PromptAssistant(props: Props): ReactNode {
 
   // 气泡显示时测量实际宽高；内容变化（简介轮播 / 阶段内容 / toast）时同步更新
   useEffect(() => {
-    if (!toast || !bubbleRef.current) return;
+    if (!showBubble || !bubbleRef.current) return;
     const el = bubbleRef.current;
     const update = () => {
       setBubbleW(el.offsetWidth || 176);
@@ -722,7 +719,7 @@ export function PromptAssistant(props: Props): ReactNode {
     const ro = new ResizeObserver(update);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [toast]);
+  }, [showBubble, toast, activity.text]);
 
   // 公告弹窗：右键菜单入口打开（使用手册 + 通告 / 看板）
   const [announceOpen, setAnnounceOpen] = useState(false);
@@ -850,7 +847,7 @@ export function PromptAssistant(props: Props): ReactNode {
   // 并保证气泡整体落在视口内，避免助手拖到屏幕边缘时气泡被遮挡「显示没了」。
   // 优先级：上方 → 下方 → 左侧 → 右侧。
   const bubblePos = useMemo(() => {
-    if (!toast) return null;
+    if (!showBubble) return null;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
     const W = bubbleW;
@@ -897,11 +894,13 @@ export function PromptAssistant(props: Props): ReactNode {
     const tailX = cx - left - 5; // 尖角在气泡水平方向上的偏移（above/below）
     const tailY = cy - top - 5; // 尖角在气泡垂直方向上的偏移（left/right）
 
-    // 系统消息会话气泡与鼠标移入简介气泡整体上移 15px（toast 成就/互动气泡不偏移）
-    if (!toast) top -= 15;
+    // 系统消息会话气泡与鼠标移入简介气泡整体上移（会话状态气泡调高一点，远离人物头顶）；
+    // toast 成就/互动气泡不偏移，紧贴助手本体展示
+    if (!toast) top -= 24;
 
     return { left, top, dir, tailX, tailY };
   }, [
+    showBubble,
     toast,
     bubbleW,
     bubbleH,
@@ -990,9 +989,8 @@ export function PromptAssistant(props: Props): ReactNode {
             userSelect: "none",
           }}
         >
-          {/* 统一气泡框：仅 toast（成就解锁 / 点击互动）临时气泡使用。
-            会话状态改由右上角状态指示灯颜色表达，不再弹阶段气泡；节假日简介也一并移除 */}
-          {toast && bubblePos && (
+          {/* 统一气泡框：toast（成就解锁 / 点击互动）临时气泡或会话运行状态气泡（会话进行中的阶段状态文案）共用同一气泡 */}
+          {showBubble && bubblePos && (
             <div
               ref={bubbleRef}
               style={{
@@ -1005,70 +1003,86 @@ export function PromptAssistant(props: Props): ReactNode {
                 alignItems: "center",
                 gap: 3,
                 width: "max-content", // 宽随文字尺寸自适应（短文案贴合、长文案展开）
-                maxWidth: 210, // 仅保留最大宽度，避免超长文案撑出屏幕
-                padding: "5px 10px",
-                background: TONE.panel,
+                maxWidth: 220, // 仅保留最大宽度，避免超长文案撑出屏幕
+                padding: "6px 13px",
+                background: `linear-gradient(180deg, ${TONE.panel} 0%, rgba(17,24,39,0.06) 140%)`,
                 color: TONE.text,
                 border: `1px solid ${TONE.border}`,
-                borderRadius: 25, // 气泡四角 25 弧度：圆角矩形柔和风格
-                fontSize: 9.5,
-                lineHeight: 1.4,
+                borderTopColor: "rgba(255,255,255,.08)", // 顶部轻微高光边，增加精致感
+                borderRadius: 12, // 四角 12 弧度的圆角胶囊框：柔和而不失精致
+                fontSize: 10.5,
+                lineHeight: 1.45,
                 textAlign: "center",
-                boxShadow: "0 3px 12px rgba(17, 24, 39, .1)",
+                boxShadow:
+                  "0 4px 16px rgba(17,24,39,.14), 0 1px 2px rgba(17,24,39,.05), inset 0 1px 0 rgba(255,255,255,.05)",
                 animation: "pl-bubble-in .2s cubic-bezier(.22,1,.36,1)",
                 pointerEvents: "none", // 气泡仅展示，穿透不挡页面点击
               }}
             >
-              <>
-                {/* 成就解锁彩带特效：顶部闪光星 + 两侧飘落彩带（仅成就解锁时） */}
-                {toast.kind === "achievement" && (
-                  <>
-                    {CONFETTI_PIECES.map((c, i) => (
-                      <span
-                        key={i}
-                        className="pl-confetti"
-                        style={
-                          {
-                            left: c.left,
-                            background: c.color,
-                            boxShadow: `0 0 4px ${c.color}`,
-                            animationDelay: `${c.delay}s`,
-                            "--fall": `${c.fall}px`,
-                            "--spin": `${c.spin}deg`,
-                          } as CSSProperties
-                        }
-                      />
-                    ))}
-                    <div className="pl-shine" aria-hidden="true">
-                      <svg width="34" height="34" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 1l2.6 6.5L21 9l-5 4.3 1.5 6.7L12 16.9 6.5 20l1.5-6.7L3 9l6.4-1.5z" />
-                      </svg>
+              {toast ? (
+                <>
+                  {/* 成就解锁彩带特效：顶部闪光星 + 两侧飘落彩带（仅成就解锁时） */}
+                  {toast.kind === "achievement" && (
+                    <>
+                      {CONFETTI_PIECES.map((c, i) => (
+                        <span
+                          key={i}
+                          className="pl-confetti"
+                          style={
+                            {
+                              left: c.left,
+                              background: c.color,
+                              boxShadow: `0 0 4px ${c.color}`,
+                              animationDelay: `${c.delay}s`,
+                              "--fall": `${c.fall}px`,
+                              "--spin": `${c.spin}deg`,
+                            } as CSSProperties
+                          }
+                        />
+                      ))}
+                      <div className="pl-shine" aria-hidden="true">
+                        <svg width="34" height="34" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M12 1l2.6 6.5L21 9l-5 4.3 1.5 6.7L12 16.9 6.5 20l1.5-6.7L3 9l6.4-1.5z" />
+                        </svg>
+                      </div>
+                    </>
+                  )}
+                  {/* 临时提示：成就解锁 / 点击互动 */}
+                  {toast.title && (
+                    <div
+                      style={{
+                        fontWeight: 600,
+                        letterSpacing: 1,
+                        color: TONE.accent,
+                      }}
+                    >
+                      {toast.title}
                     </div>
-                  </>
-                )}
-                {/* 临时提示：成就解锁 / 点击互动 */}
-                {toast.title && (
-                  <div
+                  )}
+                  <span
                     style={{
-                      fontWeight: 600,
-                      letterSpacing: 1,
-                      color: TONE.accent,
+                      color: TONE.muted,
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                      textAlign: "center",
                     }}
                   >
-                    {toast.title}
-                  </div>
-                )}
+                    {toast.text}
+                  </span>
+                </>
+              ) : (
+                /* 会话运行状态气泡：仅展示阶段文案，状态色由右上角提示灯表达 */
                 <span
                   style={{
-                    color: TONE.muted,
+                    color: TONE.text,
                     whiteSpace: "pre-wrap",
                     wordBreak: "break-word",
                     textAlign: "center",
                   }}
                 >
-                  {toast.text}
+                  {activity.text}
                 </span>
-              </>
+              )}
               {/* 气泡小尾巴：始终指向助手中心（上→朝下、下→朝上、左→朝右、右→朝左）。
                 方块边长 10，旋转 45° 后三角底线（两平角连线）位于方块中心，悬出量取半宽 5，
                 使底线恰好落在卡片边界上，与卡片边无缝连接，消除「三角飘在卡片外、中间留空隙」。 */}
@@ -1109,8 +1123,8 @@ export function PromptAssistant(props: Props): ReactNode {
               />
             </div>
           )}
-          {/* 思考想象波纹：处于思考/工作阶段时，三个波纹圈从右上角 AI 状态指示灯圆点向外依次扩散，营造思考想象效果 */}
-          {thinkActive && (
+          {/* 思考想象波纹：处于任意会话运行状态时，三个波纹圈从右上角 AI 状态指示灯圆点向外依次扩散，营造思考想象效果 */}
+          {phaseActive && (
             <div
               aria-hidden="true"
               style={{
@@ -1143,34 +1157,6 @@ export function PromptAssistant(props: Props): ReactNode {
                   }}
                 />
               ))}
-            </div>
-          )}
-          {/* 心情标记：非平常情绪时贴心在人物头顶上方，作为常驻的情绪标识（不再随气泡展示） */}
-          {mood !== "neutral" && (
-            <div
-              title={mood === "happy" ? T("pl.mood.happy") : T("pl.mood.sad")}
-              style={{
-                position: "absolute",
-                top: -14,
-                left: "50%",
-                transform: "translateX(-50%)",
-                padding: "1px 6px",
-                borderRadius: 8,
-                fontSize: 8,
-                fontWeight: 600,
-                letterSpacing: 0.3,
-                whiteSpace: "nowrap",
-                background:
-                  mood === "happy"
-                    ? "var(--dsw-alias-state-success-primary, #16a34a)"
-                    : TONE.red,
-                color: "#fff",
-                zIndex: 2147483647,
-                pointerEvents: "none",
-                boxShadow: "0 1px 4px rgba(2, 6, 23, .25)",
-              }}
-            >
-              {mood === "happy" ? T("pl.mood.happy") : T("pl.mood.sad")}
             </div>
           )}
           {/* 助手本体：雪碧图就绪时用 background-position 帧播放；加载中/失败时保持空白 */}

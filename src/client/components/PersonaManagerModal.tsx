@@ -98,6 +98,8 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
   const [scopesLoaded, setScopesLoaded] = useState(false);
   // 展开的工作区路径集合（默认全部展开，便于看到所有项目）
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // 右栏树视图切换：all = 工作树和会话（默认） / scopes = 只显示工作区和项目 / sessions = 只显示会话
+  const [scopeView, setScopeView] = useState<"all" | "scopes" | "sessions">("all");
 
   // 工作区/项目树的展开/折叠状态持久化（人格管理右栏绑定树）：下次打开恢复到上次状态
   const SCOPE_EXPAND_KEY = "pl:persona-tree-expanded";
@@ -634,7 +636,8 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
   // 渲染单个绑定树节点；depth 决定缩进
   const renderScopeNode = (node: ScopeNode, depth: number): ReactNode => {
     const hasChildren = node.children.length > 0;
-    const hasSessions = (node.sessions?.length ?? 0) > 0;
+    // 「只显示工作区和项目」视图下不展示挂在下方的会话
+    const hasSessions = scopeView !== "scopes" && (node.sessions?.length ?? 0) > 0;
     const isExpandable = hasChildren || hasSessions;
     const displayTitle = node.path === UNMATCHED_SCOPE_PATH ? t("pl.personas.scopes.others") : node.title;
     return (
@@ -1184,6 +1187,39 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
               <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.6, marginTop: 4 }}>
                 {t("pl.personas.scopes.hint")}
               </div>
+              {/* 视图切换：工作树和会话 / 只显示工作区和项目 / 只显示会话 */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
+                {(
+                  [
+                    ["all", t("pl.personas.scopes.viewAll")],
+                    ["scopes", t("pl.personas.scopes.viewScopes")],
+                    ["sessions", t("pl.personas.scopes.viewSessions")],
+                  ] as const
+                ).map(([key, label]) => {
+                  const active = scopeView === key;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setScopeView(key)}
+                      style={{
+                        flexShrink: 0,
+                        border: `1px solid ${active ? TONE.accent : TONE.border}`,
+                        background: active ? TONE.accentSoft : "transparent",
+                        color: active ? TONE.accent : TONE.quiet,
+                        borderRadius: 999,
+                        padding: "2px 10px",
+                        fontSize: 11,
+                        lineHeight: "18px",
+                        cursor: "pointer",
+                        transition: "all .24s cubic-bezier(.22,1,.36,1)",
+                      }}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
               {/* 绑定详情：选中节点时展示该节点的绑定人格；否则展示最近活跃会话命中的人格来源 */}
               {(() => {
                 // 选中节点的绑定人格信息（实时按当前绑定状态读取）
@@ -1317,20 +1353,42 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
                 return <div style={{ minHeight: 72 }} />;
               })()}
             </div>
+            {/* 树内容：按视图模式渲染（工作树+会话 / 仅工作区项目 / 仅会话平铺） */}
             <div style={{ display: "flex", flexDirection: "column", padding: "10px 10px 10px" }}>
               {!scopesLoaded ? (
                 <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "14px 0" }}>
                   {t("pl.achievements.loading")}
                 </div>
-              ) : scopes.length === 0 ? (
-                <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "14px 0" }}>
-                  {t("pl.personas.scopes.empty")}
-                </div>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column" }}>
-                  {scopes.map((ws) => renderScopeNode(ws, 0))}
-                </div>
-              )}
+              ) : (scopeView === "sessions"
+                ? (() => {
+                    // 平铺收集全部会话（含未匹配分组），保持系统会话列表顺序
+                    const sess: SessionNode[] = [];
+                    const walk = (nodes: ScopeNode[]) => {
+                      for (const n of nodes) {
+                        if (n.sessions) sess.push(...n.sessions);
+                        walk(n.children);
+                      }
+                    };
+                    walk(scopes);
+                    return sess.length === 0 ? (
+                      <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "14px 0" }}>
+                        {t("pl.personas.scopes.empty")}
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column" }}>
+                        {sess.map((s) => renderSessionNode(s, 0))}
+                      </div>
+                    );
+                  })()
+                : scopes.length === 0 ? (
+                  <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "14px 0" }}>
+                    {t("pl.personas.scopes.empty")}
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column" }}>
+                    {scopes.map((ws) => renderScopeNode(ws, 0))}
+                  </div>
+                ))}
             </div>
           </div>
         </div>

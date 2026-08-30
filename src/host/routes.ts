@@ -12,12 +12,13 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
 
 import { fileURLToPath } from "node:url";
 import type { WebRoute } from "@deepseek-ai/dsh-host-webserver";
 import type { ApiResponse, PluginSettings, Prompt, PromptInput, PromptPatch } from "../types.js";
+import { UNMATCHED_SCOPE_PATH, type ScopeNode } from "../types.js";
 import { clearDeepSeekBalanceCache, commentOnStats, generateDraft, generateIntro, generateSkillDescriptor, isDeepSeekProviderInUse, listAiSelectables, polishPromptBody, polishPromptBodyWithSummary, queryDeepSeekBalance, todayLocalDate } from "./ai.js";
 import {
   exportAsSessionPrompts,
@@ -268,6 +269,113 @@ async function resolveCurrentProjectCwd(): Promise<string | null> {
     if (byScope) return byScope;
   }
   return records.find((r) => r.cwd)?.cwd || null;
+}
+
+// ── 会话预览（读取会话所属文件夹下的 md 文件） ────────────────────────
+
+/** 单文件预览大小上限（2 MiB，防止超大文件拖垮渲染）。 */
+const MAX_PREVIEW_FILE_SIZE = 2 * 1024 * 1024;
+
+/** 递归遍历时跳过的噪音目录（避免大仓库拖慢扫描）。 */
+const PREVIEW_SKIP_DIRS = new Set(["node_modules", ".git", ".svn", ".hg", "dist", "build"]);
+
+/** 预览文件数量上限（超出即停止继续收集，避免超大仓库卡死）。 */
+const MAX_PREVIEW_FILES = 300;
+
+/** 支持预览的文件类型（按扩展名识别）。 */
+type PreviewFileType = "md" | "json" | "txt" | "csv";
+
+const PREVIEW_EXT_TYPES: Record<string, PreviewFileType> = {
+  ".md": "md",
+  ".markdown": "md",
+  ".json": "json",
+  ".txt": "txt",
+  ".csv": "csv",
+};
+
+/** 按文件名判断类型；不支持/不合法（含路径分隔符、.. 遍历）返回 null，杜绝路径穿越。 */
+function previewTypeOf(name: string): PreviewFileType | null {
+  if (!name) return null;
+  if (name.includes("/") || name.includes("\\") || name.includes("..")) return null;
+  const ext = name.slice(name.lastIndexOf(".")).toLowerCase();
+  return PREVIEW_EXT_TYPES[ext] ?? null;
+}
+
+/** 递归列出目录下所有可预览文件（md/json/txt/csv，跳过噪音目录、限数量），name 为相对根目录的路径。 */
+async function listPreviewFiles(
+  dir: string,
+): Promise<Array<{ name: string; path: string; size: number; type: PreviewFileType }>> {
+  const list: Array<{ name: string; path: string; size: number; type: PreviewFileType }> = [];
+  const walk = async (d: string): Promise<void> => {
+    if (list.length >= MAX_PREVIEW_FILES) return;
+    let entries;
+    try {
+      entries = await readdir(d, { withFileTypes: true });
+    } catch {
+      // 目录不存在或不可读：跳过该目录
+      return;
+    }
+    for (const e of entries) {
+      if (list.length >= MAX_PREVIEW_FILES) return;
+      const full = join(d, e.name);
+      if (e.isDirectory()) {
+        if (!PREVIEW_SKIP_DIRS.has(e.name)) await walk(full);
+      } else if (e.isFile()) {
+        const type = previewTypeOf(e.name);
+        if (!type) continue;
+        try {
+          const s = await stat(full);
+          list.push({
+            name: full.slice(dir.length).replace(/\\/g, "/").replace(/^\/+/, ""),
+            path: full,
+            size: s.size,
+            type,
+          });
+        } catch {
+          /* 单条 stat 失败忽略，不阻塞其余 */
+        }
+      }
+    }
+  };
+  await walk(dir);
+  return list.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** 解析会话所属文件夹：在「工作区 → 项目 → 会话」树上找到该会话挂载的「最深」工作区/项目节点路径。
+ * 不直接取会话记录的 cwd，而是按会话在树上的归属（哪个文件夹下）确定根目录。 */
+async function resolveSessionFolder(sessid: string): Promise<string | null> {
+  if (!sessid) return null;
+  const tree = await listSessionScopeTree();
+  let found: string | null = null;
+  const walk = (node: ScopeNode): void => {
+    if (found) return;
+    for (const s of node.sessions ?? []) {
+      if (s.id === sessid && node.path !== UNMATCHED_SCOPE_PATH) {
+        found = node.path;
+        return;
+      }
+    }
+    for (const child of node.children) walk(child);
+  };
+  for (const ws of tree) walk(ws);
+  return found;
+}
+
+/** 读取单个可预览文件内容（仅允许 md/json/txt/csv、拒绝路径穿越、限大小）；不合法或不存在返回 null。 */
+async function readPreviewFile(
+  p: string,
+): Promise<{ name: string; path: string; content: string; size: number; type: PreviewFileType } | null> {
+  const type = previewTypeOf(basename(p));
+  if (!type) return null;
+  if (p.includes("..")) return null;
+  if (!existsSync(p)) return null;
+  const s = await stat(p);
+  if (!s.isFile()) return null;
+  if (s.size > MAX_PREVIEW_FILE_SIZE) {
+    throw new Error("file too large");
+  }
+  const content = await readFile(p, "utf8");
+  return { name: basename(p), path: p, content, size: s.size, type };
 }
 
 export function makePromptRoutes(): WebRoute[] {
@@ -1310,6 +1418,61 @@ export function makePromptRoutes(): WebRoute[] {
           return json(res, 404, {
             ok: false,
             error: err instanceof Error ? err.message : "asset not found",
+          });
+        }
+      }
+
+      // GET /preview/list?sessid=&dir= — 列出（递归）所有可预览文件（md/json/txt/csv）。
+      // 根目录确定：优先「打开文件夹」手动指定的 dir（source=manual，不经过会话解析）；
+      // 否则按「当前会话所在工作目录」确定：优先组装端记录的 cwd，其次会话自身 header.cwd，
+      // 最后才回退到「工作区 → 项目 → 会话」树上的归属节点（无 cwd 记录时兜底）。
+      // source 说明命中来源，便于排查「找不到目录」。会话切换时跟随新的会话 id 重新解析。
+      if (method === "GET" && segments[0] === "preview" && segments[1] === "list" && segments.length === 2) {
+        const q = new URLSearchParams((req.url ?? "").split("?", 2)[1] ?? "");
+        const manualDir = (q.get("dir") ?? "").trim();
+        const sessid = (q.get("sessid") ?? "").trim() || getCurrentSessionScope() || "";
+        let dir = "";
+        let source = "none";
+        if (manualDir) {
+          dir = manualDir;
+          source = "manual";
+        } else if (sessid) {
+          const cwd1 = getActiveSessionCwd(sessid);
+          if (cwd1) {
+            dir = cwd1;
+            source = "assembly";
+          } else {
+            const rec = (await listSessionRecords()).find((r) => r.id === sessid);
+            if (rec?.cwd) {
+              dir = rec.cwd;
+              source = "record";
+            } else {
+              const treeFolder = await resolveSessionFolder(sessid);
+              if (treeFolder) {
+                dir = treeFolder;
+                source = "tree";
+              }
+            }
+          }
+        }
+        if (!dir) return json(res, 200, { ok: true, data: { dir: "", files: [], source } });
+        const files = await listPreviewFiles(dir);
+        return json(res, 200, { ok: true, data: { dir, files, source } });
+      }
+
+      // GET /preview/read?path= — 读取单个可预览文件内容（md/json/txt/csv，供右侧渲染）
+      if (method === "GET" && segments[0] === "preview" && segments[1] === "read" && segments.length === 2) {
+        const q = new URLSearchParams((req.url ?? "").split("?", 2)[1] ?? "");
+        const p = q.get("path") ?? "";
+        if (!p) return json(res, 400, { ok: false, error: "invalid query: path" });
+        try {
+          const data = await readPreviewFile(p);
+          if (!data) return json(res, 404, { ok: false, error: "file not found or invalid" });
+          return json(res, 200, { ok: true, data });
+        } catch (err) {
+          return json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : "read failed",
           });
         }
       }

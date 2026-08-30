@@ -104,10 +104,8 @@ function attachSessionsToTree(tree: ScopeNode[], sessions: SessionQueryRecord[])
     }
   }
 
-  // 稳定排序：会话按标题，未命中分组最后追加（仅当存在未命中会话时）
-  for (const ws of tree) sortSessionsRecursively(ws);
+  // 保持会话列表提供器返回的顺序（与系统会话列表一致），不做重排；未命中分组最后追加（仅当存在未命中会话时）
   if (unmatched.length > 0) {
-    unmatched.sort((a, b) => a.title.localeCompare(b.title, "zh"));
     tree.push({
       path: UNMATCHED_SCOPE_PATH,
       title: UNMATCHED_SCOPE_PATH,
@@ -117,12 +115,6 @@ function attachSessionsToTree(tree: ScopeNode[], sessions: SessionQueryRecord[])
       children: [],
     });
   }
-}
-
-/** 递归排序：每个节点的会话按标题，项目按标题。 */
-function sortSessionsRecursively(node: ScopeNode): void {
-  if (node.sessions) node.sessions.sort((a, b) => a.title.localeCompare(b.title, "zh"));
-  for (const child of node.children) sortSessionsRecursively(child);
 }
 
 /**

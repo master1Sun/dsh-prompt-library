@@ -1425,7 +1425,8 @@ export function SkillImportModal(props: {
                     }
                     style={{
                       display: "flex",
-                      alignItems: "center",
+                      alignItems: "flex-start",
+                      flexWrap: "wrap",
                       gap: 7,
                       padding: "8px 10px",
                       background:
@@ -1569,6 +1570,26 @@ export function SkillImportModal(props: {
                     >
                       ×
                     </button>
+                    {entry.body.trim() && (
+                      <div
+                        style={{
+                          width: "100%",
+                          flexShrink: 0,
+                          marginTop: 2,
+                          fontSize: 11,
+                          lineHeight: 1.5,
+                          color: TONE.quiet,
+                          minWidth: 0,
+                          wordBreak: "break-word",
+                          display: "-webkit-box",
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: "vertical",
+                          overflow: "hidden",
+                        }}
+                      >
+                        {entry.body}
+                      </div>
+                    )}
                   </div>
                 ))
               )}

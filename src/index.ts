@@ -335,8 +335,13 @@ export function apply(ctx: Context) {
     on(event: string, listener: (session: { id: string }) => void): unknown;
     off(event: string, listener: (session: { id: string }) => void): unknown;
   };
-  const onSessionScope = (session: { id: string }) => {
-    setCurrentSessionScope(String(session.id));
+  const onSessionScope = (session: { id: string; header?: { cwd?: unknown } }) => {
+    const sid = String(session.id);
+    setCurrentSessionScope(sid);
+    // 尽早记录会话所属文件夹（session.header.cwd）：会话事件一触发就缓存，
+    // 这样即使还没发过消息（系统提示组装未执行），预览也能拿到所属文件夹。
+    const cwd = typeof session.header?.cwd === "string" ? session.header.cwd : "";
+    if (cwd) recordActiveSessionCwd(sid, cwd);
   };
   bus.on("session/event", onSessionScope);
 

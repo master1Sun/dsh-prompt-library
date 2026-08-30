@@ -19,8 +19,8 @@ export const PL_DIALOG_OVERLAY = "pl-dialog-overlay";
 
 /** 全项目统一的弹窗表面 + 遮罩 CSS（组件内 `<style>` 注入，遵循按钮样式注入约定）。 */
 export const PL_DIALOG_CSS = `
-.pl-dialog{box-sizing:border-box;display:flex;flex-direction:column;border-radius:24px;background:var(--dsw-specific-sidebar-fill,#f5f6f7);border:1px solid var(--dsw-alias-border-l2,rgba(17,24,39,.14));box-shadow:0 10px 32px rgba(2,6,23,.2),0 2px 8px rgba(2,6,23,.1),inset 0 1px 0 rgba(255,255,255,.55);padding:18px 7px 18px 10px;color:var(--dsw-alias-label-primary,#f2f6fc);font-family:var(--dsw-font-family,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif)}
-.pl-dialog-overlay{position:fixed;inset:0;z-index:2147483647;box-sizing:border-box;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.35)}
+.pl-dialog{box-sizing:border-box;display:flex;flex-direction:column;overflow:hidden;border-radius:24px;background:var(--dsw-specific-sidebar-fill,#f5f6f7);border:1px solid var(--dsw-alias-border-l2,rgba(17,24,39,.14));box-shadow:0 10px 32px rgba(2,6,23,.2),0 2px 8px rgba(2,6,23,.1),inset 0 1px 0 rgba(255,255,255,.55);padding:18px 7px 18px 10px;color:var(--dsw-alias-label-primary,#f2f6fc);font-family:var(--dsw-font-family,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif)}
+.pl-dialog-overlay{position:fixed;inset:0;z-index:2147483647;box-sizing:border-box;display:flex;align-items:center;justify-content:center;padding:20px;overflow:hidden;background:rgba(0,0,0,.35)}
 /* 解锁塔罗牌：卡片表面流动高光扫光 */
 .pl-card-sheen{position:absolute;inset:0;border-radius:11px;pointer-events:none;overflow:hidden;background:linear-gradient(115deg,transparent 40%,rgba(255,255,255,.5) 50%,transparent 60%);background-size:250% 250%;animation:plCardSheen 4.2s ease-in-out infinite;z-index:3}
 @keyframes plCardSheen{0%{background-position:130% 0}62%{background-position:-130% 0}100%{background-position:-130% 0}}
@@ -37,4 +37,11 @@ export const PL_DIALOG_CSS = `
 /* 等级详情：等级进度条由左向右生长填充 */
 .pl-lv-fill{transform-origin:left;animation:plLvFillGrow .65s cubic-bezier(.2,.7,.3,1) both}
 @keyframes plLvFillGrow{0%{transform:scaleX(0)}100%{transform:scaleX(1)}}
+/* 弹窗内滚动条稳定占位：滚动条出现/隐藏不改变内容宽度，消除重排闪烁 */
+.pl-dialog,.pl-dialog *{scrollbar-gutter:stable}
+/* 弹窗内滚动条统一细窄圆角半透明，减少突兀、与占位宽度一致 */
+.pl-dialog ::-webkit-scrollbar{width:8px;height:8px}
+.pl-dialog ::-webkit-scrollbar-thumb{background:rgba(128,134,148,.30);border-radius:4px;border:2px solid transparent;background-clip:padding-box}
+.pl-dialog ::-webkit-scrollbar-thumb:hover{background-color:rgba(128,134,148,.5)}
+.pl-dialog ::-webkit-scrollbar-track{background:transparent}
 `;

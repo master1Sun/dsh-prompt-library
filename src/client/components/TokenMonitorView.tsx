@@ -19,7 +19,12 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEven
 import type {
   AssistantMessageNode,
   ContextMessageNode,
+  ConversationNode,
   ConversationSnapshot,
+  ModelRetryNode,
+  ToolResultNode,
+  TurnErrorNode,
+  TurnMaxTokensNode,
   UserMessageNode,
 } from "@deepseek-ai/dsh-client-runtime/client";
 import type { PLTranslate } from "../utils/i18n.js";
@@ -99,6 +104,10 @@ interface DetailEntry {
   lang: "text" | "json";
   /** 正文全文。 */
   content: string;
+  /** file_path + content 类型的写入调用：抽屉内用 tab 展示内容预览（渲染 markdown）与参数 JSON。 */
+  file?: { path: string; content: string };
+  /** 需要「参数 / 对象」双 tab 的详情（如工具 schema），默认定位到「参数」。 */
+  dualTabs?: boolean;
 }
 
 /** 样式作用域前缀，避免与宿主类名冲突。 */
@@ -197,6 +206,13 @@ function formatDuration(ms: number): string {
   if (s < 60) return `${Math.round(s * 10) / 10}s`;
   const whole = Math.round(s);
   return `${Math.floor(whole / 60)}m${whole % 60}s`;
+}
+
+/** 时间轴时间：YYYY-MM-DD HH:mm:ss（本地时区）。 */
+function formatTime(ms: number): string {
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
 /** usage 字段取值（容错读取多种常见结构）。 */
@@ -328,6 +344,13 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
 
   // 右侧详情抽屉：点击列表条目时打开，展示该条目的全文 / 工具 schema
   const [detail, setDetail] = useState<DetailEntry | null>(null);
+  // 文件写入调用详情内的 tab：内容预览 / 参数 JSON / 对象视图
+  const [detailTab, setDetailTab] = useState<"content" | "params" | "object">("content");
+  // 统一打开详情：重置 tab（双 tab 定位「参数」，文件写入定位「内容」）
+  const openDetail = (d: DetailEntry) => {
+    setDetailTab(d.dualTabs ? "params" : "content");
+    setDetail(d);
+  };
   // 抽屉宽度（可拖拽调整，双击重置）；null 表示使用默认 clamp 宽度
   const [detailWidth, setDetailWidth] = useState<number | null>(null);
   const detailRef = useRef<HTMLElement | null>(null);
@@ -349,9 +372,7 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
     resizeDrag.current = null;
   };
 
-  const nodes = useSession((s) => s.chat.legacy.nodes) as
-    | readonly (UserMessageNode | AssistantMessageNode | ContextMessageNode)[]
-    | undefined;
+  const nodes = useSession((s) => s.chat.legacy.nodes) as readonly ConversationNode[] | undefined;
 
   // 会话注入信息：读取 trajectory 投影里的最近一次请求（系统提示 + 工具 schema）。
   // trajectory 插件未加载时 `views.get` 返回 undefined，相应子块自动隐藏。
@@ -415,7 +436,7 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
           injectDiag.personaSource === "default"
             ? (list.find((it) => it.isDefault) ?? list.find((it) => it.name === injectDiag.personaName))
             : list.find((it) => it.name === injectDiag.personaName);
-        setDetail({
+        openDetail({
           title: p?.name ?? injectDiag.personaName ?? (T?.("pl.monitor.persona") ?? "人格"),
           subtitle: `${T?.("pl.monitor.persona") ?? "人格"} · ${personaSourceLabel(injectDiag.personaSource)}`,
           lang: "text",
@@ -423,7 +444,7 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
         });
       })
       .catch(() => {
-        setDetail({
+        openDetail({
           title: injectDiag.personaName ?? (T?.("pl.monitor.persona") ?? "人格"),
           lang: "text",
           content: (T?.("pl.monitor.none") ?? "无"),
@@ -439,14 +460,14 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
         const body = matched.length
           ? matched.map((sp) => `### ${sp.title}\n\n${sp.body ?? ""}`.trim()).join("\n\n---\n\n")
           : (T?.("pl.monitor.none") ?? "无");
-        setDetail({
+        openDetail({
           title: `${T?.("pl.monitor.skills") ?? "技能"} · ${titles.join("、")}`,
           lang: "text",
           content: body,
         });
       })
       .catch(() => {
-        setDetail({
+        openDetail({
           title: `${T?.("pl.monitor.skills") ?? "技能"} · ${titles.join("、")}`,
           lang: "text",
           content: (T?.("pl.monitor.none") ?? "无"),
@@ -470,7 +491,7 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
   // 会话注入的上下文节点（context 类型消息：producer 注入到对话流的内容）
   const contextInjections = useMemo(() => {
     if (!nodes) return [];
-    return (nodes as readonly ContextMessageNode[])
+    return nodes
       .filter((n): n is ContextMessageNode => n.kind === "context")
       .map((n) => ({
         label: n.provenance?.label ?? "",
@@ -493,32 +514,152 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
       ? { chars: systemPrompt.length, lines: systemPrompt.split(/\r?\n/).length }
       : null;
 
-  // 会话动态：从上下文起始处完整回放全部用户/助手消息文本（实时 prompt 上下文），
-  // 每条消息附带 token 与耗时标注。
+  // 会话动态：按时间轴回放全部用户/助手消息、工具调用与会话事件（失败/重试/截断/中断），
+  // 每条消息附带 token 与耗时标注；AI 思考（reasoning 块）单独成行；
+  // 工具调用（tool-result）以「工具」对话形式插入，写文件类调用解析出 file_path + content。
   const activity = useMemo(() => {
     if (!nodes) return [];
     const tok = T?.("pl.monitor.tokShort") ?? "tok";
     const sep = T?.("pl.monitor.spacer") ?? " · ";
+    type ActivityItem = {
+      kind: "user" | "assistant" | "thinking" | "tool" | "error" | "retry" | "max-tokens" | "interrupted";
+      time: number;
+      text: string;
+      meta: string;
+      file?: { path: string; content: string } | null;
+      /** 事件详情（点击查看完整内容） */
+      detail?: string;
+    };
     return nodes
-      .filter((n): n is UserMessageNode | AssistantMessageNode => n.kind === "user" || n.kind === "assistant")
-      .map((n) => {
+      .filter(
+        (n): n is UserMessageNode | AssistantMessageNode | ToolResultNode | TurnErrorNode | ModelRetryNode | TurnMaxTokensNode =>
+          n.kind === "user" ||
+          n.kind === "assistant" ||
+          n.kind === "tool-result" ||
+          n.kind === "turn-error" ||
+          n.kind === "model-retry" ||
+          n.kind === "turn-max-tokens",
+      )
+      .flatMap((n): ActivityItem[] => {
         if (n.kind === "user") {
           const text = textOf(n.content);
           // 用户消息无真实 usage 数据，按 4 字符 ≈ 1 token 估计算号
           const est = Math.max(0, Math.ceil(text.length / 4));
-          return { kind: "user" as const, time: n.time, text, meta: `~${formatToken(est)} ${tok}` };
+          return text.length > 0
+            ? [{ kind: "user" as const, time: n.time, text, meta: `~${formatToken(est)} ${tok}` }]
+            : [];
         }
+        // 工具调用：以「工具」对话形式插入时间轴，展示工具名与文件/结果摘要
+        if (n.kind === "tool-result") {
+          const name = n.call?.name ?? n.callId;
+          const argsRaw = n.call?.argsRaw ?? "";
+          const file = toolFileOf(argsRaw);
+          const result = textOf(n.content);
+          const failed = n.isError ? (n.error?.name ?? n.error?.code ?? "error") : null;
+          const short = file ? file.path.split(/[\\/]/).pop() || file.path : result.slice(0, 40);
+          return [
+            {
+              kind: "tool" as const,
+              time: n.time,
+              text: `${name}${short ? ` · ${short}` : ""}`,
+              meta: failed ? (T?.("pl.monitor.failed") ?? "失败") : "",
+              file,
+            },
+          ];
+        }
+        // 会话事件：回合失败 / 等待重试（带失败原因）/ 输出截断 直接排进时间轴
+        if (n.kind === "turn-error") {
+          const msg = n.message || "";
+          const label = T?.("pl.monitor.evtError") ?? "回合失败";
+          const text = msg ? `${label} · ${msg.slice(0, 60)}${msg.length > 60 ? "…" : ""}` : label;
+          return [{ kind: "error" as const, time: n.time, text, meta: "", detail: msg || label }];
+        }
+        if (n.kind === "model-retry") {
+          // 已取消的重试不展示，也不影响后续节点类型收窄
+          if (n.retryState === "cancelled") return [];
+          const msg = n.failure?.message ?? "";
+          const label = T?.("pl.monitor.evtRetry") ?? "等待重试";
+          const text = msg ? `${label} · ${msg.slice(0, 60)}${msg.length > 60 ? "…" : ""}` : label;
+          return [{ kind: "retry" as const, time: n.time, text, meta: "", detail: msg || label }];
+        }
+        if (n.kind === "turn-max-tokens") {
+          return [
+            {
+              kind: "max-tokens" as const,
+              time: n.time,
+              text: T?.("pl.monitor.evtMaxTokens") ?? "输出达到上限",
+              meta: "",
+              detail: "",
+            },
+          ];
+        }
+        // 助手消息：先把思考（reasoning）块单独成行，再列出正文
+        const thinkText = n.blocks
+          .filter((b) => b.kind === "reasoning")
+          .map((b) => (b.kind === "reasoning" ? b.text : ""))
+          .join("\n")
+          .trim();
         const textBlock = n.blocks.find((b) => b.kind === "text");
         const text = (textBlock?.text ?? "").trim();
+        const model = n.provenance?.model ?? n.requestConfig?.model;
         const parts: string[] = [];
+        if (model) parts.push(model);
         const out = usageOutputTokens(n.usage);
         if (out !== null) parts.push(`${formatToken(out)} ${tok}`);
         const dur = assistantDuration(n.timing);
         if (dur !== null) parts.push(formatDuration(dur));
-        return { kind: "assistant" as const, time: n.time, text, meta: parts.join(sep) };
-      })
-      .filter((n) => n.text.length > 0);
+        const meta = parts.join(sep);
+        const items: ActivityItem[] = [];
+        if (thinkText.length > 0) items.push({ kind: "thinking", time: n.time, text: thinkText, meta });
+        if (text.length > 0) items.push({ kind: "assistant", time: n.time, text, meta });
+        if (n.interrupted) {
+          items.push({
+            kind: "interrupted",
+            time: n.time,
+            text: T?.("pl.monitor.evtInterrupted") ?? "回复被中断",
+            meta: "",
+            detail: "",
+          });
+        }
+        return items;
+      });
   }, [nodes, T]);
+
+  // 最近一次 LLM 调用的模型（用于成本估算）
+  const lastModel = useMemo(() => {
+    if (!nodes) return undefined;
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      const n = nodes[i];
+      if (n.kind === "assistant" && (n.provenance?.model || n.requestConfig?.model)) {
+        return n.provenance?.model ?? n.requestConfig?.model;
+      }
+    }
+    return undefined;
+  }, [nodes]);
+
+  // 成本估算：按最近一次模型的官方单价（DeepSeek ¥/1M token），未知模型返回 null
+  const estimatedCost = useMemo(() => {
+    if (!usage || !lastModel) return null;
+    const m = lastModel.toLowerCase();
+    let inP: number;
+    let outP: number;
+    let cacheP: number;
+    if (m.includes("reasoner")) {
+      inP = 4;
+      outP = 16;
+      cacheP = 1;
+    } else if (m.includes("deepseek") || m.includes("chat") || m.includes("gpt-4o-mini") || m.includes("moonshot") || m.includes("kimi")) {
+      inP = 2;
+      outP = 8;
+      cacheP = 0.5;
+    } else {
+      return null; // 未知模型不估算
+    }
+    const input = (usage.uncachedInputTokens ?? 0) + (usage.cacheWriteTokens ?? 0);
+    const cache = usage.cacheReadTokens ?? 0;
+    const output = usage.outputTokens ?? 0;
+    return (input * inP + cache * cacheP + output * outP) / 1e6;
+  }, [usage, lastModel]);
 
   // 派生统计
   const billedInput = usage ? usage.uncachedInputTokens + usage.cacheReadTokens + usage.cacheWriteTokens : 0;
@@ -652,10 +793,40 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
         .${S}-list{display:flex;flex-direction:column;gap:6px}
         .${S}-row{display:flex;gap:8px;padding:8px 10px;background:var(--dsw-alias-bg-base);border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
         .${S}-role{flex:none;font-size:11px;font-weight:600;padding:1px 7px;border-radius:999px;height:fit-content}
-        .${S}-role.user{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover)}
+        .${S}-role.user{color:#fff;background:#22c55e}
         .${S}-role.assistant{color:#fff;background:var(--dsw-static-blue-450)}
+        .${S}-role.thinking{color:#fff;background:#8b5cf6}
+        .${S}-role.tool{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover)}
+        .${S}-role.tool.failed{color:#fff;background:var(--dsw-alias-state-error-primary)}
+        .${S}-role.error,.${S}-role.interrupted{color:#fff;background:var(--dsw-alias-state-error-primary)}
+        .${S}-role.retry,.${S}-role.max-tokens{color:#fff;background:var(--dsw-alias-state-warning-primary)}
         .${S}-body{flex:1;min-width:0;color:var(--dsw-alias-label-secondary);white-space:pre-wrap;word-break:break-word;-webkit-line-clamp:3;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;line-height:20px}
         .${S}-rowMeta{flex:none;align-self:flex-start;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:20px;white-space:nowrap;font-variant-numeric:tabular-nums}
+        .${S}-timeline{display:flex;flex-direction:column;gap:6px}
+        .${S}-trow{display:flex;gap:8px;padding:2px 4px;border-radius:10px}
+        .${S}-taxis{flex:none;width:12px;display:flex;flex-direction:column;align-items:center;position:relative}
+        .${S}-taxis::before{content:"";position:absolute;top:11px;bottom:-15px;left:50%;width:1px;transform:translateX(-50%);background:var(--dsw-alias-border-l2)}
+        .${S}-trow:last-child .${S}-taxis::before{display:none}
+        .${S}-tnode{flex:none;width:8px;height:8px;border-radius:50%;margin-top:6px;background:var(--dsw-alias-label-tertiary)}
+        .${S}-tnode.user{background:#22c55e}
+        .${S}-tnode.assistant{background:var(--dsw-static-blue-450)}
+        .${S}-tnode.thinking{background:#8b5cf6}
+        .${S}-tnode.tool{background:#9ca3af}
+        .${S}-tnode.error,.${S}-tnode.interrupted{background:var(--dsw-alias-state-error-primary)}
+        .${S}-tnode.retry,.${S}-tnode.max-tokens{background:var(--dsw-alias-state-warning-primary)}
+        .${S}-tmain{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+        .${S}-ttime{flex:none;color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:15px;font-variant-numeric:tabular-nums;white-space:nowrap}
+        .${S}-bubble{min-width:0;box-sizing:border-box;max-width:100%;background:var(--dsw-alias-bg-base);border:1px solid var(--dsw-alias-border-l2);border-radius:10px;padding:6px 10px;transition:border-color .24s ease,background-color .24s ease}
+        .${S}-trow.clickable:hover{background:transparent}
+        .${S}-trow.clickable:hover .${S}-bubble{border-color:var(--dsw-alias-border-strong);background:var(--dsw-alias-interactive-bg-hover)}
+        .${S}-trow.user .${S}-bubble{background:color-mix(in srgb,#22c55e 10%,var(--dsw-alias-bg-base));border-color:color-mix(in srgb,#22c55e 30%,transparent)}
+        .${S}-trow.assistant .${S}-bubble{background:color-mix(in srgb,var(--dsw-static-blue-450) 8%,var(--dsw-alias-bg-base));border-color:color-mix(in srgb,var(--dsw-static-blue-450) 28%,transparent)}
+        .${S}-trow.thinking .${S}-bubble{background:color-mix(in srgb,#8b5cf6 7%,var(--dsw-alias-bg-base));border-color:color-mix(in srgb,#8b5cf6 26%,transparent)}
+        .${S}-trow.tool .${S}-bubble{background:color-mix(in srgb,#9ca3af 10%,var(--dsw-alias-bg-base));border-color:color-mix(in srgb,#9ca3af 30%,transparent)}
+        .${S}-trow.error .${S}-bubble,.${S}-trow.interrupted .${S}-bubble{background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 8%,var(--dsw-alias-bg-base));border-color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 30%,transparent)}
+        .${S}-trow.retry .${S}-bubble,.${S}-trow.max-tokens .${S}-bubble{background:color-mix(in srgb,var(--dsw-alias-state-warning-primary) 8%,var(--dsw-alias-bg-base));border-color:color-mix(in srgb,var(--dsw-alias-state-warning-primary) 30%,transparent)}
+        .${S}-thead{display:flex;align-items:baseline;gap:8px;margin-bottom:2px}
+        .${S}-tmeta{margin-left:auto;flex:none;color:var(--dsw-alias-label-tertiary);font-size:10.5px;line-height:16px;white-space:nowrap;font-variant-numeric:tabular-nums}
         .${S}-empty{color:var(--dsw-alias-label-tertiary);padding:10px;text-align:center}
         .${S}-block{margin-top:10px}
         .${S}-block:first-of-type{margin-top:0}
@@ -731,13 +902,13 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
         .${S}-mdTable td{color:var(--dsw-alias-label-primary)}
         .${S}-jkey{color:var(--dsw-alias-label-secondary)}
         .${S}-jstr,.${S}-jnum,.${S}-jbool,.${S}-jnull{color:var(--dsw-alias-label-primary)}
-        .${S}-jsonWrap{display:flex;flex-direction:column;min-width:0}
-        .${S}-jsonTabs{display:flex;width:100%;border-bottom:1px solid var(--dsw-alias-border-l1);margin-bottom:8px}
-        .${S}-jsonTab{appearance:none;flex:1 1 0%;min-width:0;border:none;background:transparent;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.6;padding:6px 10px;cursor:pointer;position:relative;transition:color .24s}
-        .${S}-jsonTab::after{content:"";position:absolute;left:20%;right:20%;bottom:-1px;height:2px;border-radius:2px;background:transparent;transition:background .24s}
-        .${S}-jsonTab:hover{color:var(--dsw-alias-label-primary)}
-        .${S}-jsonTab.active{color:var(--dsw-alias-label-primary);font-weight:600}
-        .${S}-jsonTab.active::after{background:var(--dsw-static-blue-450,var(--dsw-static-blue-500))}
+        .${S}-fileTabs{display:flex;width:100%;border-bottom:1px solid var(--dsw-alias-border-l1);margin-bottom:8px}
+        .${S}-fileTab{appearance:none;flex:1 1 0%;min-width:0;border:none;background:transparent;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.6;padding:6px 10px;cursor:pointer;position:relative;transition:color .24s}
+        .${S}-fileTab::after{content:"";position:absolute;left:20%;right:20%;bottom:-1px;height:2px;border-radius:2px;background:transparent;transition:background .24s}
+        .${S}-fileTab:hover{color:var(--dsw-alias-label-primary)}
+        .${S}-fileTab.active{color:var(--dsw-alias-label-primary);font-weight:600}
+        .${S}-fileTab.active::after{background:var(--dsw-static-blue-450,var(--dsw-static-blue-500))}
+        .${S}-fileTabBody{max-height:calc(100% - 40px);overflow-y:auto}
         .${S}-tree{max-width:100%;overflow-x:auto;font-size:11.5px;line-height:1.9}
         .${S}-tn{white-space:normal;overflow-wrap:anywhere;word-break:break-word}
         .${S}-tbranch{display:inline-flex;align-items:center;gap:5px;cursor:pointer;padding:1px 8px 1px 0;border-radius:4px}
@@ -839,7 +1010,7 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
             <span className={`${S}-metricValue`}>{formatToken(totalTokens)}</span>
           </div>
         </div>
-        <div className={`${S}-subgrid`}>
+        <div className={`${S}-subgrid`} style={{ gridTemplateColumns: "repeat(auto-fit,minmax(96px,1fr))" }}>
           <div className={`${S}-pill`}>
             <div className={`${S}-pillTitle`}>{T?.("pl.monitor.uncached") ?? "未命中缓存"}</div>
             <div className={`${S}-pillValue`}>{formatToken(usage?.uncachedInputTokens ?? 0)}</div>
@@ -852,8 +1023,40 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
             <div className={`${S}-pillTitle`}>{T?.("pl.monitor.cacheHit") ?? "缓存命中率"}</div>
             <div className={`${S}-pillValue`}>{cacheHit === null ? "—" : `${cacheHit}%`}</div>
           </div>
+          <div className={`${S}-pill`}>
+            <div className={`${S}-pillTitle`}>{T?.("pl.monitor.cost") ?? "预估花费"}</div>
+            <div className={`${S}-pillValue`}>
+              {estimatedCost === null ? "—" : `¥${estimatedCost < 0.01 ? estimatedCost.toFixed(4) : estimatedCost.toFixed(3)}`}
+            </div>
+          </div>
         </div>
       </div>
+
+      {/* 性能统计 */}
+      {stats && stats.steps > 0 && (
+        <div className={`${S}-card`}>
+          <h4 className={`${S}-cardTitle`}>{T?.("pl.monitor.sectionPerformance") ?? "性能统计"}</h4>
+          <div className={`${S}-grid`}>
+            <Metric label={T?.("pl.monitor.turns") ?? "回合"} value={String(stats.turns)} />
+            <Metric label={T?.("pl.monitor.steps") ?? "步骤"} value={String(stats.steps)} />
+            <Metric label={T?.("pl.monitor.llmDuration") ?? "生成耗时"} value={formatDuration(stats.llmMs)} />
+          </div>
+          <div className={`${S}-subgrid`}>
+            <div className={`${S}-pill`}>
+              <div className={`${S}-pillTitle`}>{T?.("pl.monitor.toolDuration") ?? "工具耗时"}</div>
+              <div className={`${S}-pillValue`}>{toolMs > 0 ? formatDuration(toolMs) : "—"}</div>
+            </div>
+            <div className={`${S}-pill`}>
+              <div className={`${S}-pillTitle`}>{T?.("pl.monitor.ttftAvg") ?? "平均首 token"}</div>
+              <div className={`${S}-pillValue`}>{ttftAvg !== null ? formatDuration(ttftAvg) : "—"}</div>
+            </div>
+            <div className={`${S}-pill`}>
+              <div className={`${S}-pillTitle`}>{T?.("pl.monitor.decodeSpeed") ?? "解码速度"}</div>
+              <div className={`${S}-pillValue`}>{decodeSpeed !== null ? `${formatTps(decodeSpeed)} tok/s` : "—"}</div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 上下文占用 */}
       {showPressure && (
@@ -985,7 +1188,7 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
                       className={`${S}-chip tool clickable`}
                       title={tool.name}
                       onClick={() =>
-                        setDetail({ title: tool.name, lang: "json", content: toJson(tool.schema) })
+                        openDetail({ title: tool.name, lang: "json", content: toJson(tool.schema), dualTabs: true })
                       }
                     >
                       {tool.name}
@@ -1009,7 +1212,7 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
                     key={i}
                     className={`${S}-sectionRow clickable`}
                     onClick={() =>
-                      setDetail({
+                      openDetail({
                         title: seg.title,
                         subtitle: `${formatToken(seg.chars)}${T?.("pl.monitor.charAbbr") ?? " 字符"}`,
                         lang: "text",
@@ -1035,7 +1238,7 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
                 <div
                   className={`${S}-sectionRow clickable`}
                   onClick={() =>
-                    setDetail({
+                    openDetail({
                       title: T?.("pl.monitor.system") ?? "系统提示",
                       subtitle: `${sysSummary.lines}${T?.("pl.monitor.lineAbbr") ?? " 行"} · ${formatToken(sysSummary.chars)}${T?.("pl.monitor.charAbbr") ?? " 字符"}`,
                       lang: "text",
@@ -1065,7 +1268,7 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
                     key={i}
                     className={`${S}-row clickable`}
                     onClick={() =>
-                      setDetail({
+                      openDetail({
                         title: c.label || (T?.("pl.monitor.context") ?? "上下文"),
                         subtitle: contextFormLabel(T, c.form),
                         lang: "text",
@@ -1093,61 +1296,68 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
         </div>
       )}
 
-      {/* 性能统计 */}
-      {stats && stats.steps > 0 && (
-        <div className={`${S}-card`}>
-          <h4 className={`${S}-cardTitle`}>{T?.("pl.monitor.sectionPerformance") ?? "性能统计"}</h4>
-          <div className={`${S}-grid`}>
-            <Metric label={T?.("pl.monitor.turns") ?? "回合"} value={String(stats.turns)} />
-            <Metric label={T?.("pl.monitor.steps") ?? "步骤"} value={String(stats.steps)} />
-            <Metric label={T?.("pl.monitor.llmDuration") ?? "生成耗时"} value={formatDuration(stats.llmMs)} />
-          </div>
-          <div className={`${S}-subgrid`}>
-            <div className={`${S}-pill`}>
-              <div className={`${S}-pillTitle`}>{T?.("pl.monitor.toolDuration") ?? "工具耗时"}</div>
-              <div className={`${S}-pillValue`}>{toolMs > 0 ? formatDuration(toolMs) : "—"}</div>
-            </div>
-            <div className={`${S}-pill`}>
-              <div className={`${S}-pillTitle`}>{T?.("pl.monitor.ttftAvg") ?? "平均首 token"}</div>
-              <div className={`${S}-pillValue`}>{ttftAvg !== null ? formatDuration(ttftAvg) : "—"}</div>
-            </div>
-            <div className={`${S}-pill`}>
-              <div className={`${S}-pillTitle`}>{T?.("pl.monitor.decodeSpeed") ?? "解码速度"}</div>
-              <div className={`${S}-pillValue`}>{decodeSpeed !== null ? `${formatTps(decodeSpeed)} tok/s` : "—"}</div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* 会话动态 */}
       <div className={`${S}-card`}>
         <h4 className={`${S}-cardTitle`}>{T?.("pl.monitor.sectionActivity") ?? "会话动态"}</h4>
         {activity.length === 0 ? (
           <div className={`${S}-empty`}>{T?.("pl.monitor.noActivity") ?? "暂无对话消息"}</div>
         ) : (
-          <div className={`${S}-list`}>
-            {shownActivity.map((a, i) => (
-              <div
-                key={i}
-                className={`${S}-row clickable`}
-                onClick={() =>
-                  setDetail({
-                    title:
-                      a.kind === "user"
-                        ? (T?.("pl.monitor.you") ?? "用户")
-                        : (T?.("pl.monitor.assistant") ?? "助手"),
-                    lang: "text",
-                    content: a.text,
-                  })
-                }
-              >
-                <span className={`${S}-role ${a.kind}`}>
-                  {a.kind === "user" ? (T?.("pl.monitor.you") ?? "用户") : (T?.("pl.monitor.assistant") ?? "助手")}
-                </span>
-                <span className={`${S}-body`}>{a.text || "…"}</span>
-                {a.meta ? <span className={`${S}-rowMeta`}>{a.meta}</span> : null}
-              </div>
-            ))}
+          <div className={`${S}-timeline`}>
+            {shownActivity.map((a, i) => {
+              const label =
+                a.kind === "user"
+                  ? (T?.("pl.monitor.you") ?? "用户")
+                  : a.kind === "thinking"
+                    ? (T?.("pl.monitor.thinking") ?? "思考")
+                    : a.kind === "tool"
+                      ? "⚙"
+                      : a.kind === "error"
+                        ? (T?.("pl.monitor.kindError") ?? "失败")
+                        : a.kind === "retry"
+                          ? (T?.("pl.monitor.kindRetry") ?? "重试")
+                          : a.kind === "max-tokens"
+                            ? (T?.("pl.monitor.kindMaxTokens") ?? "截断")
+                            : a.kind === "interrupted"
+                              ? (T?.("pl.monitor.kindInterrupted") ?? "中断")
+                              : (T?.("pl.monitor.assistant") ?? "助手");
+              return (
+                <div
+                  key={i}
+                  className={`${S}-trow clickable ${a.kind}`}
+                  onClick={() =>
+                    a.kind === "tool"
+                      ? openDetail({
+                          title: a.text,
+                          subtitle: a.file ? a.file.path : undefined,
+                          lang: a.file ? "json" : "text",
+                          content: a.file
+                            ? `{\n  "file_path": ${JSON.stringify(a.file.path)},\n  "content": ${JSON.stringify(a.file.content)}\n}`
+                            : a.text,
+                          file: a.file ?? undefined,
+                        })
+                      : openDetail({
+                          title: label,
+                          lang: "text",
+                          content: a.detail || a.text,
+                        })
+                  }
+                >
+                  <div className={`${S}-taxis`} aria-hidden="true">
+                    <span className={`${S}-tnode ${a.kind}`} />
+                  </div>
+                  <div className={`${S}-tmain`}>
+                    <div className={`${S}-ttime`}>{formatTime(a.time)}</div>
+                    <div className={`${S}-bubble`}>
+                      <div className={`${S}-thead`}>
+                        <span className={`${S}-role ${a.kind}`}>{label}</span>
+                        {a.meta ? <span className={`${S}-tmeta`}>{a.meta}</span> : null}
+                      </div>
+                      <div className={`${S}-body`}>{a.text || "…"}</div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -1192,7 +1402,80 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
             </button>
           </div>
           <div className={`${S}-detailBody`}>
-            <RichText lang={detail.lang} content={detail.content} />
+            {detail.file ? (
+              <>
+                <div className={`${S}-fileTabs`} role="tablist">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={detailTab === "content"}
+                    className={`${S}-fileTab ${detailTab === "content" ? "active" : ""}`}
+                    onClick={() => setDetailTab("content")}
+                  >
+                    {T?.("pl.monitor.tabContent") ?? "内容"}
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={detailTab === "params"}
+                    className={`${S}-fileTab ${detailTab === "params" ? "active" : ""}`}
+                    onClick={() => setDetailTab("params")}
+                  >
+                    {T?.("pl.monitor.tabParams") ?? "参数"}
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={detailTab === "object"}
+                    className={`${S}-fileTab ${detailTab === "object" ? "active" : ""}`}
+                    onClick={() => setDetailTab("object")}
+                  >
+                    {T?.("pl.monitor.tabObject") ?? "对象"}
+                  </button>
+                </div>
+                <div className={`${S}-fileTabBody`}>
+                  {detailTab === "content" ? (
+                    <RichText lang="text" content={detail.file.content} />
+                  ) : detailTab === "params" ? (
+                    <RichText lang="json" content={detail.content} />
+                  ) : (
+                    <JsonTree value={parseJsonSafe(detail.content)} />
+                  )}
+                </div>
+              </>
+            ) : detail.dualTabs ? (
+              <>
+                <div className={`${S}-fileTabs`} role="tablist">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={detailTab === "params"}
+                    className={`${S}-fileTab ${detailTab === "params" ? "active" : ""}`}
+                    onClick={() => setDetailTab("params")}
+                  >
+                    {T?.("pl.monitor.tabParams") ?? "参数"}
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={detailTab === "object"}
+                    className={`${S}-fileTab ${detailTab === "object" ? "active" : ""}`}
+                    onClick={() => setDetailTab("object")}
+                  >
+                    {T?.("pl.monitor.tabObject") ?? "对象"}
+                  </button>
+                </div>
+                <div className={`${S}-fileTabBody`}>
+                  {detailTab === "params" ? (
+                    <RichText lang="json" content={detail.content} />
+                  ) : (
+                    <JsonTree value={parseJsonSafe(detail.content)} />
+                  )}
+                </div>
+              </>
+            ) : (
+              <RichText lang={detail.lang} content={detail.content} />
+            )}
           </div>
         </aside>
       )}
@@ -1201,6 +1484,59 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
 }
 
 /* ------------------------------- 详情富文本渲染 ------------------------------- */
+
+/**
+ * 尝试从工具调用参数中解析 file_path + content 结构（写文件类调用）。
+ * 命中时返回文件路径与写入内容，供详情抽屉用 tab 展示内容预览。
+ */
+function toolFileOf(argsRaw: string): { path: string; content: string } | null {
+  if (!argsRaw) return null;
+  try {
+    const obj = JSON.parse(argsRaw);
+    if (
+      obj &&
+      typeof obj === "object" &&
+      typeof (obj as { file_path?: unknown }).file_path === "string" &&
+      typeof (obj as { content?: unknown }).content === "string"
+    ) {
+      return {
+        path: (obj as { file_path: string }).file_path,
+        content: (obj as { content: string }).content,
+      };
+    }
+  } catch {
+    // 非合法 JSON 参数，非写文件调用
+  }
+  return null;
+}
+
+/** 安全解析 JSON 字符串，失败返回原始字符串（供对象视图兜底）。 */
+function parseJsonSafe(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+/** 生成 JSON 字符串字面量：转义内部引号/反斜杠/控制字符，避免复杂 JSON 结构被破坏；
+ *  真实换行（\n / \r）保留原样，由调用方用 pre-wrap 保持多行可读性。 */
+function escapeJsonString(value: string): string {
+  let out = '"';
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    if (ch === '"') out += '\\"';
+    else if (ch === "\\") out += "\\\\";
+    else if (ch === "\n" || ch === "\r") out += ch; // 保留真实换行
+    else if (ch === "\t") out += "\\t";
+    else if (ch === "\b") out += "\\b";
+    else if (ch === "\f") out += "\\f";
+    else if (ch.charCodeAt(0) < 0x20)
+      out += `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`;
+    else out += ch;
+  }
+  return out + '"';
+}
 
 /** 高亮 JSON 字符串：格式化缩进 + 按 key/string/number/boolean/null 上色。 */
 function highlightJsonText(raw: string) {
@@ -1504,6 +1840,25 @@ function JsonTreeNode({
   const [open, setOpen] = useState(true);
   const pad = depth * 14;
   const isObj = value !== null && typeof value === "object";
+  // 字符串内嵌 JSON（对象/数组）：展开为可折叠子树而非纯字符串
+  if (typeof value === "string" && value.length <= 200000) {
+    let nested: unknown;
+    let nestedOk = false;
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed !== null && typeof parsed === "object") {
+        nested = parsed;
+        nestedOk = true;
+      }
+    } catch {
+      nestedOk = false;
+    }
+    if (nestedOk) {
+      return (
+        <JsonTreeNode name={name} value={nested} depth={depth} isArrayIndex={isArrayIndex} />
+      );
+    }
+  }
   // 标量节点：无折叠，直接展示键与着色值
   if (!isObj) {
     let cls = `${S}-jstr`;
@@ -1512,7 +1867,9 @@ function JsonTreeNode({
       cls = `${S}-jnull`;
       text = "null";
     } else if (typeof value === "string") {
-      text = `"${value}"`;
+      // 字符串值统一带引号（保持 JSON 语义），转义内部引号/反斜杠等避免破坏复杂 JSON 结构；
+      // 真实换行保留原样，由下方 span 用 pre-wrap 展示多行可读性
+      text = escapeJsonString(value);
     } else if (typeof value === "number") {
       cls = `${S}-jnum`;
       text = String(value);
@@ -1527,7 +1884,12 @@ function JsonTreeNode({
         {name !== undefined && (
           <span className={isArrayIndex ? `${S}-jidx` : `${S}-tk`}>{name}</span>
         )}
-        <span className={cls}>{text}</span>
+        <span
+          className={cls}
+          style={typeof value === "string" && /[\r\n]/.test(value) ? { whiteSpace: "pre-wrap" } : undefined}
+        >
+          {text}
+        </span>
       </div>
     );
   }
@@ -1568,59 +1930,16 @@ function JsonTree({ value }: { value: unknown }) {
   );
 }
 
-/** 详情正文富文本渲染：json 提供「原生 JSON / 表格视图」双 tab；text 按 markdown（含 ==重点== 高亮）渲染。 */
+/** 详情正文富文本渲染：json 直接渲染高亮原生 JSON；text 按 markdown（含 ==重点== 高亮）渲染。 */
 function RichText({
   lang,
   content,
-  t,
 }: {
   lang: "text" | "json";
   content: string;
-  t?: PLTranslate;
 }) {
-  const [jsonTab, setJsonTab] = useState<"json" | "table">("json");
   if (lang !== "json") {
     return <div className={`${S}-md`}>{mdBlocks(content)}</div>;
   }
-  let parsed: unknown;
-  let parseOk = false;
-  try {
-    parsed = JSON.parse(content);
-    parseOk = true;
-  } catch {
-    parseOk = false;
-  }
-  const tabJson = t?.("pl.monitor.tabJson") ?? "原生 JSON";
-  const tabTable = t?.("pl.monitor.tabTree") ?? "对象视图";
-  return (
-    <div className={`${S}-jsonWrap`}>
-      <div className={`${S}-jsonTabs`} role="tablist">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={jsonTab === "json"}
-          className={`${S}-jsonTab ${jsonTab === "json" ? "active" : ""}`}
-          onClick={() => setJsonTab("json")}
-        >
-          {tabJson}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={jsonTab === "table"}
-          className={`${S}-jsonTab ${jsonTab === "table" ? "active" : ""}`}
-          onClick={() => setJsonTab("table")}
-        >
-          {tabTable}
-        </button>
-      </div>
-      {jsonTab === "json" ? (
-        <pre className={`${S}-detailPre ${S}-json`}>{highlightJsonText(content)}</pre>
-      ) : parseOk && parsed !== undefined ? (
-        <JsonTree value={parsed} />
-      ) : (
-        <pre className={`${S}-detailPre ${S}-json`}>{content}</pre>
-      )}
-    </div>
-  );
+  return <pre className={`${S}-detailPre ${S}-json`}>{highlightJsonText(content)}</pre>;
 }

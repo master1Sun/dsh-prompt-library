@@ -978,3 +978,49 @@ export function restoreBackup(
 export function deleteBackup(name: string): Promise<{ deleted: boolean }> {
   return send<{ deleted: boolean }>("POST", "/api/prompt-library/backups/delete", { name });
 }
+
+// ── 会话预览（读取当前会话所在工作目录下的可预览文件）────────────────────
+
+/** 可预览文件类型（md / json / txt / csv）。 */
+export type PreviewFileType = "md" | "json" | "txt" | "csv";
+
+/** 当前会话工作目录下单个可预览文件信息。 */
+export interface PreviewFileEntry {
+  /** 相对根目录的路径（含子目录，如 docs/guide.md）。 */
+  name: string;
+  /** 文件绝对路径（读取内容用）。 */
+  path: string;
+  size: number;
+  type: PreviewFileType;
+}
+
+/** 列出当前会话所在工作目录下（递归）所有可预览文件；会话切换时后端按新会话 id 重新解析根目录。
+ * source 说明根目录命中来源（assembly=组装端 cwd / record=会话 header.cwd / tree=树归属 / none=未解析到）。 */
+export function listPreviewFiles(
+  sessid: string,
+): Promise<{ dir: string; files: PreviewFileEntry[]; source: string }> {
+  return send<{ dir: string; files: PreviewFileEntry[]; source: string }>(
+    "GET",
+    `/api/prompt-library/preview/list?sessid=${encodeURIComponent(sessid)}`,
+  );
+}
+
+/** 手动指定目录（「打开文件夹」选择）：直接列出该目录下（递归）所有可预览文件，不经过会话解析。 */
+export function listPreviewFilesByDir(
+  dir: string,
+): Promise<{ dir: string; files: PreviewFileEntry[]; source: string }> {
+  return send<{ dir: string; files: PreviewFileEntry[]; source: string }>(
+    "GET",
+    `/api/prompt-library/preview/list?dir=${encodeURIComponent(dir)}`,
+  );
+}
+
+/** 读取单个可预览文件内容（右侧渲染用）。 */
+export function readPreviewFile(
+  path: string,
+): Promise<{ name: string; path: string; content: string; size: number; type: PreviewFileType }> {
+  return send<{ name: string; path: string; content: string; size: number; type: PreviewFileType }>(
+    "GET",
+    `/api/prompt-library/preview/read?path=${encodeURIComponent(path)}`,
+  );
+}

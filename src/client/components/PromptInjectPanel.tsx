@@ -122,6 +122,8 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
   const [bindings, setBindings] = useState<Map<string, string[]>>(new Map());
   const [scopesLoaded, setScopesLoaded] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // 右栏树视图切换：all = 工作树和会话（默认） / scopes = 只显示工作区和项目 / sessions = 只显示会话
+  const [scopeView, setScopeView] = useState<"all" | "scopes" | "sessions">("all");
   // 正在配置绑定的节点路径（null = 无）
   const [editingPath, setEditingPath] = useState<string | null>(null);
   // 正在配置绑定的会话 id（null = 无；会话用独立状态，避免与节点路径冲突）
@@ -1094,7 +1096,8 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
     const boundCount = (bindings.get(node.path) ?? []).length;
     const isEditing = editingPath === node.path;
     const hasChildren = node.children.length > 0;
-    const hasSessions = (node.sessions?.length ?? 0) > 0;
+    // 「只显示工作区和项目」视图下不展示挂在下方的会话
+    const hasSessions = scopeView !== "scopes" && (node.sessions?.length ?? 0) > 0;
     const isExpandable = hasChildren || hasSessions;
     const displayTitle = node.path === UNMATCHED_SCOPE_PATH ? t("pl.personas.scopes.others") : node.title;
     const isSelected = selectedNode?.kind === "scope" && selectedNode.key === node.path;
@@ -1469,6 +1472,39 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
                     <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.6, marginTop: 4 }}>
                       {t("pl.inject.projectNote")}
                     </div>
+                    {/* 视图切换：工作树和会话 / 只显示工作区和项目 / 只显示会话 */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
+                      {(
+                        [
+                          ["all", t("pl.personas.scopes.viewAll")],
+                          ["scopes", t("pl.personas.scopes.viewScopes")],
+                          ["sessions", t("pl.personas.scopes.viewSessions")],
+                        ] as const
+                      ).map(([key, label]) => {
+                        const active = scopeView === key;
+                        return (
+                          <button
+                            key={key}
+                            type="button"
+                            onClick={() => setScopeView(key)}
+                            style={{
+                              flexShrink: 0,
+                              border: `1px solid ${active ? TONE.accent : TONE.border}`,
+                              background: active ? TONE.accentSoft : "transparent",
+                              color: active ? TONE.accent : TONE.quiet,
+                              borderRadius: 999,
+                              padding: "2px 10px",
+                              fontSize: 11,
+                              lineHeight: "18px",
+                              cursor: "pointer",
+                              transition: "all .24s cubic-bezier(.22,1,.36,1)",
+                            }}
+                          >
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </div>
                     {/* 会话解析诊断：展示当前会话最终命中哪一层（单会话 / 工作区路径 / 默认），固定随顶部标题悬浮、不随列表滚动 */}
                     {diagLoading && !selectedNode ? (
                       <div style={{ fontSize: 11, color: TONE.quiet, padding: "8px 0" }}>{t("pl.achievements.loading")}…</div>
@@ -1575,6 +1611,27 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
                   <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "14px 0" }}>
                     {t("pl.achievements.loading")}
                   </div>
+                ) : scopeView === "sessions" ? (
+                  (() => {
+                    // 平铺收集全部会话（含未匹配分组），保持系统会话列表顺序
+                    const sess: SessionNode[] = [];
+                    const walk = (nodes: ScopeNode[]) => {
+                      for (const n of nodes) {
+                        if (n.sessions) sess.push(...n.sessions);
+                        walk(n.children);
+                      }
+                    };
+                    walk(scopes);
+                    return sess.length === 0 ? (
+                      <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "14px 0" }}>
+                        {t("pl.personas.scopes.empty")}
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column" }}>
+                        {sess.map((s) => renderSessionNode(s, 0))}
+                      </div>
+                    );
+                  })()
                 ) : scopes.length === 0 ? (
                   <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "14px 0" }}>
                     {t("pl.personas.scopes.empty")}

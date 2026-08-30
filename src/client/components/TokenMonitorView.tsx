@@ -23,7 +23,8 @@ import type {
   UserMessageNode,
 } from "@deepseek-ai/dsh-client-runtime/client";
 import type { PLTranslate } from "../utils/i18n.js";
-import { diagSession, type ScopeDiag } from "../utils/api.js";
+import { diagSession, listPersonas, listSessionPrompts, type ScopeDiag } from "../utils/api.js";
+import { useDataChanged } from "../utils/data-sync.js";
 
 /** `conversation.view` 的宿主标准运行时套件（会话轨迹亦依赖同一套注入）。 */
 interface MonitorProps {
@@ -382,6 +383,7 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
   // 人格与技能。trajectory 快照在未发新消息前可能是旧的，本块保证「系统提示区块」始终
   // 反映插件真实注入内容，不依赖可能过期的请求快照。
   const [injectDiag, setInjectDiag] = useState<ScopeDiag | null>(null);
+  const refreshInjectDiag = useRef<() => void>(() => {});
   useEffect(() => {
     let alive = true;
     const load = () =>
@@ -390,6 +392,7 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
           if (alive) setInjectDiag(d);
         })
         .catch(() => { /* 后端未就绪时静默，下次轮询再试 */ });
+    refreshInjectDiag.current = load;
     load();
     const id = window.setInterval(load, 4000);
     return () => {
@@ -397,6 +400,59 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
       window.clearInterval(id);
     };
   }, []);
+  // 人格/技能被修改（保存/删除/启用切换/绑定变更）后，立即重新拉取注入解析，
+  // 无需等待下一轮轮询，保证「实时注入解析」始终与插件真实注入内容同步。
+  useDataChanged(() => refreshInjectDiag.current());
+
+  // 打开人格/技能详情：点击「实时注入解析」中的条目，在右侧抽屉展示具体信息。
+  const openPersonaDetail = () => {
+    if (!injectDiag?.personaName) return;
+    void listPersonas()
+      .then((list) => {
+        // 默认人格：实时解析的 personaName 是「默认人格（default）」，
+        // 与人格管理列表中的默认人格名「默认人格」不一致，改用 isDefault 匹配。
+        const p =
+          injectDiag.personaSource === "default"
+            ? (list.find((it) => it.isDefault) ?? list.find((it) => it.name === injectDiag.personaName))
+            : list.find((it) => it.name === injectDiag.personaName);
+        setDetail({
+          title: p?.name ?? injectDiag.personaName ?? (T?.("pl.monitor.persona") ?? "人格"),
+          subtitle: `${T?.("pl.monitor.persona") ?? "人格"} · ${personaSourceLabel(injectDiag.personaSource)}`,
+          lang: "text",
+          content: p?.content?.trim() ? p.content : (T?.("pl.monitor.none") ?? "无"),
+        });
+      })
+      .catch(() => {
+        setDetail({
+          title: injectDiag.personaName ?? (T?.("pl.monitor.persona") ?? "人格"),
+          lang: "text",
+          content: (T?.("pl.monitor.none") ?? "无"),
+        });
+      });
+  };
+  const openSkillDetail = () => {
+    const titles = injectDiag?.promptTitles ?? [];
+    if (titles.length === 0) return;
+    void listSessionPrompts()
+      .then((list) => {
+        const matched = list.filter((sp) => sp.enabled !== false && titles.includes(sp.title));
+        const body = matched.length
+          ? matched.map((sp) => `### ${sp.title}\n\n${sp.body ?? ""}`.trim()).join("\n\n---\n\n")
+          : (T?.("pl.monitor.none") ?? "无");
+        setDetail({
+          title: `${T?.("pl.monitor.skills") ?? "技能"} · ${titles.join("、")}`,
+          lang: "text",
+          content: body,
+        });
+      })
+      .catch(() => {
+        setDetail({
+          title: `${T?.("pl.monitor.skills") ?? "技能"} · ${titles.join("、")}`,
+          lang: "text",
+          content: (T?.("pl.monitor.none") ?? "无"),
+        });
+      });
+  };
 
   // 人格来源标签（单会话 / 工作区 / 默认）
   const personaSourceLabel = (src: ScopeDiag["personaSource"]): string =>
@@ -617,9 +673,14 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
         .${S}-role.context.recall{color:#fff;background:#6366f1}
         .${S}-role.persona{color:#a78bfa;background:color-mix(in srgb,#a78bfa 18%,transparent)}
         .${S}-role.skill{color:#60a5fa;background:color-mix(in srgb,#60a5fa 16%,transparent)}
+        .${S}-role.updated{color:#fbbf24;background:color-mix(in srgb,#fbbf24 16%,transparent)}
         .${S}-contextBody{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
         .${S}-contextHead{display:flex;align-items:center;gap:6px;font-weight:500;color:var(--dsw-alias-label-primary)} 
         .${S}-formBadge{font-style:normal;font-size:10.5px;line-height:16px;padding:0 6px;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-tertiary);font-weight:500}
+        .${S}-manage{flex:none;align-self:center;cursor:pointer;border:0;background:transparent;padding:0;font-size:10.5px;line-height:16px;color:#a78bfa;font-weight:600;text-decoration:none;transition:opacity .24s ease}
+        .${S}-manage.skill{color:#60a5fa}
+        .${S}-manage:hover{opacity:.72}
+        .${S}-manage:focus-visible{outline:none}
         .${S}-clickable{cursor:pointer;transition:background-color .24s ease}
         .${S}-clickable:hover{background:var(--dsw-alias-interactive-bg-hover)}
         .${S}-chip.clickable:hover{border-color:var(--dsw-alias-border-strong)} 
@@ -864,7 +925,7 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
                 {T?.("pl.monitor.injectLive") ?? "实时注入解析"}
               </div>
               <div className={`${S}-list`}>
-                <div className={`${S}-row`}>
+                <div className={`${S}-row clickable`} onClick={openPersonaDetail}>
                   <span className={`${S}-role persona`}>{T?.("pl.monitor.persona") ?? "人格"}</span>
                   <span className={`${S}-contextBody`}>
                     <span className={`${S}-contextHead`}>
@@ -872,13 +933,35 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
                       <em className={`${S}-formBadge`}>{personaSourceLabel(injectDiag.personaSource)}</em>
                     </span>
                   </span>
+                  {/* 点击打开「人格管理」弹窗（PromptAssistant 监听事件后打开）；阻止冒泡避免误触详情 */}
+                  <button
+                    type="button"
+                    className={`${S}-manage`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      window.dispatchEvent(new CustomEvent("pl:open-persona-manager"));
+                    }}
+                  >
+                    {T?.("pl.monitor.manage") ?? "管理"}
+                  </button>
                 </div>
                 {injectDiag.promptTitles.length > 0 && (
-                  <div className={`${S}-row`}>
+                  <div className={`${S}-row clickable`} onClick={openSkillDetail}>
                     <span className={`${S}-role skill`}>{T?.("pl.monitor.skills") ?? "技能"}</span>
                     <span className={`${S}-contextBody`}>
                       <span className={`${S}-contextHead`}>{injectDiag.promptTitles.join("、")}</span>
                     </span>
+                    {/* 点击打开「技能管理」弹窗（PromptAssistant 监听事件后打开）；阻止冒泡避免误触详情 */}
+                    <button
+                      type="button"
+                      className={`${S}-manage skill`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        window.dispatchEvent(new CustomEvent("pl:open-skill-manager"));
+                      }}
+                    >
+                      {T?.("pl.monitor.manage") ?? "管理"}
+                    </button>
                   </div>
                 )}
               </div>

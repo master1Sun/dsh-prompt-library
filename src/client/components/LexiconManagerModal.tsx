@@ -6,7 +6,7 @@
  * - 右侧窗口：展示所选提示词的完整详情（标题 / 标签 / AI 摘要 / 正文 / 统计），并可进入编辑。
  * 新建 / 编辑共用右侧的表单（标题 + 标签单选 + 正文），保存后刷新列表。
  *
- * 由词库助手右键菜单打开，弹窗只能通过关闭按钮手动关闭，不响应遮罩点击。
+ * 由词库助手右键菜单打开，点击遮罩（空白处）或右上角关闭按钮均可关闭。
  */
 import { createPortal } from "react-dom";
 import {
@@ -1317,7 +1317,10 @@ export function LexiconManagerModal(props: {
       aria-modal="true"
       aria-label={T("pl.lexicon.title")}
       className={PL_DIALOG_OVERLAY}
-      onClick={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        // 点击蒙层（空白处）关闭；点击对话框内部不关闭
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
       <style>{PL_DIALOG_CSS}</style>
       {/* AI 优化进度条动画（与 PromptLibraryButton 查看详情一致的不确定进度） */}

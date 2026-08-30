@@ -1,5 +1,27 @@
 [
   {
+    "version": "0.9.6",
+    "date": "2026-08-30",
+    "zh": {
+      "title": "实时注入解析详情 · 注入实时同步 · 弹窗交互统一",
+      "items": [
+        "实时注入解析详情：监控中点击「实时注入解析」里的人格或技能，右侧抽屉直接展示该人格正文与命中的技能详情，所见即所得。",
+        "注入实时同步：人格 / 技能保存、删除、启用切换或绑定变更后，监控的「实时注入解析」立即刷新，无需刷新页面。",
+        "修复默认人格问题：监控「实时注入解析」中默认人格不再显示「无」，正确展示人格管理里的默认人格及其正文。",
+        "弹窗交互统一：词库助手右键菜单弹窗支持点击空白区域关闭；导入导出的二级弹窗仍仅手动关闭，避免误关。"
+      ]
+    },
+    "en": {
+      "title": "Live injection details · Real-time injection sync · Unified dialog interaction",
+      "items": [
+        "Live injection details: click a persona or skill in the live injection view to see its body / matched skill detail in the right drawer — what you click is what you get.",
+        "Real-time injection sync: after saving, deleting, toggling or rebinding a persona or skill, the live injection view refreshes instantly without reloading the page.",
+        "Default persona fix: the default persona no longer shows \"none\" in the live injection view; it now correctly shows the default persona and its body from the persona manager.",
+        "Unified dialog interaction: assistant context-menu dialogs close on blank-area click; second-level import/export dialogs stay manual-close-only to avoid accidental dismissal."
+      ]
+    }
+  },
+  {
     "version": "0.9.5",
     "date": "2026-08-29",
     "zh": {

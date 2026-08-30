@@ -7,7 +7,7 @@
  * - 每个会话在发送消息时由 host 按其会话绑定自动选用对应人格。
  *
  * 交互约束（与其它弹窗一致）：
- * - 只能通过右上角关闭按钮或底部「完成」按钮关闭，禁止点击遮罩/外部区域关闭；
+ * - 点击遮罩（空白处）、右上角关闭按钮或底部「完成」按钮均可关闭；
  * - 删除需二次确认。
  */
 import { useEffect, useRef, useState, type ChangeEvent, type CSSProperties, type ReactNode } from "react";
@@ -28,6 +28,7 @@ import {
   updatePersona as apiUpdatePersona,
   type ScopeDiag,
 } from "../utils/api.js";
+import { notifyDataChanged } from "../utils/data-sync.js";
 import { plBtn } from "../utils/button-style.js";
 import { getTone, useThemeSync } from "../utils/theme.js";
 import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../utils/dialog-style.js";
@@ -164,11 +165,17 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
 
   // 拉取最近活跃会话的解析诊断（未选中节点时展示）；silent=false 时显示加载态
   const loadDiag = (silent = false) => {
-    if (!silent) setDiagLoading(true);
-    setDiag(null);
+    // 静默刷新（silent=true）不清空旧内容，避免切换时卡片闪烁/被瞬间移除；
+    // 仅首次/显式加载时清空并进入加载态。
+    if (!silent) {
+      setDiagLoading(true);
+      setDiag(null);
+    }
     void diagSession()
       .then((d) => setDiag(d))
-      .catch(() => setDiag(null))
+      .catch(() => {
+        if (!silent) setDiag(null);
+      })
       .finally(() => {
         if (!silent) setDiagLoading(false);
       });
@@ -285,6 +292,7 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
     try {
       const created = await apiCreatePersona(name);
       await refresh();
+      notifyDataChanged();
       setNames((prev) => ({ ...prev, [created.id]: created.name }));
       setEditContent(created.content);
       setEditingId(created.id);
@@ -323,6 +331,8 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
       const updated = await apiUpdatePersona(p.id, { name, content: editContent });
       setNames((prev) => ({ ...prev, [updated.id]: updated.name }));
       await refresh();
+      notifyDataChanged();
+      setMsg({ text: t("pl.personas.modifyDone", { name: updated.name }), kind: "success" });
       setEditingId(null);
     } catch {
       setError(t("pl.personas.opFailed"));
@@ -359,6 +369,11 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
     try {
       await apiUpdatePersona(p.id, { enabled: !p.enabled });
       await refresh();
+      notifyDataChanged();
+      setMsg({
+        text: t(p.enabled ? "pl.personas.enableOff" : "pl.personas.enableOn", { name: p.name }),
+        kind: "info",
+      });
     } catch {
       setError(t("pl.personas.opFailed"));
     } finally {
@@ -371,7 +386,10 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
     setBusy(true);
     setError(null);
     apiDeletePersona(deleteId)
-      .then(() => refresh())
+      .then(() => {
+        refresh();
+        notifyDataChanged();
+      })
       .catch(() => setError(t("pl.personas.opFailed")))
       .finally(() => {
         setBusy(false);
@@ -387,6 +405,8 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
     apiClearAllPersonaBindings()
       .then(() => {
         void refreshScopes().catch(() => setError(t("pl.personas.opFailed")));
+        notifyDataChanged();
+        setMsg({ text: t("pl.personas.bindDone"), kind: "info" });
       })
       .catch(() => setError(t("pl.inject.opFailed")))
       .finally(() => {
@@ -456,6 +476,8 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
         // 就地回写该路径节点的绑定，避免整树刷新导致节点重挂载、下拉失焦闪烁
         setScopes((prev) => prev.map((node) => rewriteScopePersona(node, nodePath, bound)));
         loadDiag(true);
+        notifyDataChanged();
+        setMsg({ text: t("pl.personas.bindDone"), kind: "info" });
       })
       .catch(() => setError(t("pl.personas.opFailed")))
       .finally(() => setBusy(false));
@@ -472,6 +494,8 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
           prev.map((node) => rewriteSessionPersona(node, sessionId, bound)),
         );
         loadDiag(true);
+        notifyDataChanged();
+        setMsg({ text: t("pl.personas.bindDone"), kind: "info" });
       })
       .catch(() => setError(t("pl.personas.opFailed")))
       .finally(() => setBusy(false));
@@ -923,7 +947,10 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
       aria-modal="true"
       aria-label={t("pl.personas.title")}
       className={PL_DIALOG_OVERLAY}
-      onClick={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        // 点击蒙层（空白处）关闭；点击对话框内部不关闭
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
       <style>{PL_DIALOG_CSS}</style>
       <div
@@ -1236,7 +1263,17 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
                 }
                 if (diagLoading) {
                   return (
-                    <div style={{ fontSize: 11, color: TONE.quiet, padding: "8px 0" }}>
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: TONE.quiet,
+                        minHeight: 72,
+                        boxSizing: "border-box",
+                        display: "flex",
+                        alignItems: "center",
+                        padding: "0 10px",
+                      }}
+                    >
                       {t("pl.achievements.loading")}…
                     </div>
                   );
@@ -1253,6 +1290,8 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
                         fontSize: 11,
                         lineHeight: 1.6,
                         color: TONE.text,
+                        minHeight: 72,
+                        boxSizing: "border-box",
                       }}
                     >
                       <div style={{ height: 20, lineHeight: "20px", fontWeight: 600, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", marginBottom: 4 }}>
@@ -1275,7 +1314,7 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
                     </div>
                   );
                 }
-                return null;
+                return <div style={{ minHeight: 72 }} />;
               })()}
             </div>
             <div style={{ display: "flex", flexDirection: "column", padding: "10px 10px 10px" }}>

@@ -41,8 +41,6 @@ const PHASE_POOL: Record<ActivityPhase, string[]> = {
 };
 /** 悬停打招呼动画（一次性）。 */
 const HOVER_ANIM = "点击回应-元气挥手";
-/** 单击回应动画（一次性）。 */
-const CLICK_ANIM = "点击回应-开心跃动";
 
 /** 从池中随机抽一个动画名。 */
 function pickFrom(arr: readonly string[]): string {
@@ -54,15 +52,13 @@ export interface WhaleStageProps {
   phase: ActivityPhase;
   /** 是否悬停在助手上。 */
   hovering: boolean;
-  /** 单击递增计数：每次变化播放一次点击回应动画。 */
-  clickRev: number;
   /** 助手显示边长（px），默认 72。 */
   size?: number;
   /** webm 加载失败回调（如 dsh-pet 未安装），由上层回退经典助手。 */
   onFail: () => void;
 }
 
-export function WhaleStage({ phase, hovering, clickRev, size = 72, onFail }: WhaleStageProps) {
+export function WhaleStage({ phase, hovering, size = 72, onFail }: WhaleStageProps) {
   const aRef = useRef<HTMLVideoElement | null>(null);
   const bRef = useRef<HTMLVideoElement | null>(null);
   const frontRef = useRef(0); // 当前前台：0=videoA，1=videoB
@@ -111,16 +107,7 @@ export function WhaleStage({ phase, hovering, clickRev, size = 72, onFail }: Wha
     if (el.readyState >= 2) onReady(); // 已在缓存中就绪时直接切换
   };
 
-  // 单击回应：clickRev 每次递增播放一次性动画
-  const prevClickRef = useRef(0);
-  useEffect(() => {
-    if (clickRev === prevClickRef.current) return;
-    prevClickRef.current = clickRev;
-    if (clickRev > 0) switchTo(CLICK_ANIM, false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clickRev]);
-
-  // 阶段 / 悬停 / 空闲变化：驱动基础动画
+  // 阶段 / 悬停 / 空闲变化：驱动基础动画（点击不切换动画，常态空闲时每播完随机换一个新动画）
   useEffect(() => {
     if (hovering) {
       switchTo(HOVER_ANIM, false); // 打招呼一次性，播完跳回阶段/空闲

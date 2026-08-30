@@ -5,7 +5,7 @@
  * - 导出：勾选要导出的提示词，选择格式（JSON / CSV / Markdown / 文本）下载，或导出为 Skill
  * - 导入：从备份文件（JSON / CSV / Markdown / 文本）导入（卡片编辑校验后合并入库），或从 Skills 导入
  *
- * 由词库助手右键菜单打开，弹窗只能通过关闭按钮手动关闭，不响应遮罩点击。
+ * 由词库助手右键菜单打开，点击遮罩（空白处）或右上角关闭按钮均可关闭。
  */
 import { createPortal } from "react-dom";
 import {
@@ -449,7 +449,19 @@ export function ImportExportModal(props: {
       aria-modal="true"
       aria-label={T("pl.moduleImportExport")}
       className={PL_DIALOG_OVERLAY}
-      onClick={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        // 点击蒙层（空白处）关闭；点击对话框内部不关闭
+        // 有二级弹窗（技能导入/导出、通用导入、预览删除确认）打开时，不响应点击关闭，需先关闭二级弹窗
+        if (
+          skillImportOpen ||
+          importEditOpen ||
+          skillExportOpen ||
+          deleteTarget
+        ) {
+          return;
+        }
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
       <style>{PL_DIALOG_CSS}</style>
       <style>{`

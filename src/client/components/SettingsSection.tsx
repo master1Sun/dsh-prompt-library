@@ -637,24 +637,6 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           defaultValue={DEFAULT_SETTINGS.maxPromptCount}
           onChange={(v) => updateAndSave({ maxPromptCount: v })}
         />
-        <NumberRow
-          label={T("pl.set.personTipInterval")}
-          value={draft.personTipInterval}
-          min={10}
-          max={3600}
-          step={1}
-          defaultValue={DEFAULT_SETTINGS.personTipInterval}
-          onChange={(v) => updateAndSave({ personTipInterval: v })}
-        />
-        <NumberRow
-          label={T("pl.set.personTipDuration")}
-          value={draft.personTipDuration}
-          min={5}
-          max={30}
-          step={1}
-          defaultValue={DEFAULT_SETTINGS.personTipDuration}
-          onChange={(v) => updateAndSave({ personTipDuration: v })}
-        />
       </ModuleCard>
 
       {/* 分类模块三：显示与交互 */}

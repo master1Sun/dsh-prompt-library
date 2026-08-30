@@ -202,10 +202,6 @@ export interface PluginSettings {
   aiModel: string;
   /** DeepSeek API Key（可选）：填写后用于向 DeepSeek 官方余额接口查询账户余额并实时推送；留空则不查询。 */
   deepseekApiKey: string;
-  /** 助手提示间隔（秒）：未悬停时自动冒气泡的频率。 */
-  personTipInterval: number;
-  /** 助手提示显示时长（秒）：自动冒气泡持续展示的时间。 */
-  personTipDuration: number;
   /** 是否自动更新：开启后后台发现有新版本即自动安装，无需手动干预。 */
   autoUpdateEnabled: boolean;
   /** 是否启用公告弹窗（词库助手右键菜单「公告」打开使用手册 + 版本通告）。仅当词库助手显示时可开关，默认开启。 */
@@ -241,8 +237,6 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   panelWidth: 360, // 右侧面板宽度（px）
   panelHeight: 500, // 右侧面板高度（px）
   maxPromptCount: 100, // 提示词最大存储数量（超出时按使用次数/更新时间淘汰）
-  personTipInterval: 10, // 助手未悬停时自动冒气泡的间隔（秒）
-  personTipDuration: 20, // 自动冒气泡的持续显示时长（秒）
   aiProvider: "", // AI 智能完善使用的 provider（留空自动发现）
   aiModel: "", // AI 智能完善使用的模型 id（留空自动发现）
   deepseekApiKey: "", // DeepSeek API Key（可选）：用于查询并实时推送账户余额

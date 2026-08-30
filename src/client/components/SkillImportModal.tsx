@@ -1414,13 +1414,15 @@ export function SkillImportModal(props: {
                     marginTop: 6,
                   }}
                 >
-                  {T("pl.skillModal.noEntry")}
+                  {T(mode === "export" ? "pl.skillModal.noEntryExport" : "pl.skillModal.noEntry")}
                 </div>
               ) : (
                 entries.map((entry) => (
                   <div
                     key={entry.key}
-                    onClick={() => setSelectedKey(entry.key)}
+                    onClick={() =>
+                      setSelectedKey((cur) => (cur === entry.key ? null : entry.key))
+                    }
                     style={{
                       display: "flex",
                       alignItems: "center",

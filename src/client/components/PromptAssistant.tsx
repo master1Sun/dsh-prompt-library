@@ -1,9 +1,9 @@
 /**
  * 词库助手（独立组件）。
  *
- * 以一个助手形象常驻屏幕，可独立拖动；悬停时展示功能简介气泡，未悬停时也会
- * 按设置的频率自动冒气泡提示。与右侧面板解耦：本组件自管理位置/冒泡/简介，
- * 不再内嵌于面板状态。左键不联动面板，右键菜单「打开词库管理」直接打开独立的词库管理弹窗。
+ * 以一个助手形象常驻屏幕，可独立拖动；悬停时展示气泡（情绪/时间信息）。
+ * 与右侧面板解耦：本组件自管理位置/气泡/情绪与时间展示，不再内嵌于面板状态。
+ * 左键不联动面板，右键菜单「打开词库管理」直接打开独立的词库管理弹窗。
  */
 import {
   useCallback,
@@ -20,7 +20,6 @@ import { createPortal } from "react-dom";
 import type { PluginSettings } from "../../types.js";
 import { DEFAULT_SETTINGS } from "../../types.js";
 import {
-  genIntro,
   getActivity,
   getAssistantStatus,
   getDeepSeekBalance,
@@ -29,9 +28,9 @@ import {
   type AssistantStatus,
   type DeepSeekBalance,
 } from "../utils/api.js";
-import { type PLKey, type PLTranslate, usePLT } from "../utils/i18n.js";
+import { type PLTranslate, usePLT } from "../utils/i18n.js";
 import { useThemeSync } from "../utils/theme.js";
-import { getCalendarToday, getFestival } from "../utils/lunar.js";
+
 import { AnnouncementModal } from "./AnnouncementModal.js";
 import { AchievementModal } from "./AchievementModal.js";
 import { PersonaManagerModal } from "./PersonaManagerModal.js";
@@ -269,8 +268,6 @@ export function PromptAssistant(props: Props): ReactNode {
     };
   }, []);
 
-  // 气泡显隐
-  const [bubble, setBubble] = useState(false);
   // 气泡实际渲染宽高：随内容动态伸缩（max-content），实时测量用于居中、贴头与尖角定位
   const bubbleRef = useRef<HTMLDivElement | null>(null);
   const [bubbleW, setBubbleW] = useState(176);
@@ -284,10 +281,6 @@ export function PromptAssistant(props: Props): ReactNode {
   const [docked, setDocked] = useState(false);
   const dockedRef = useRef(false);
   const preDockRef = useRef<Pos | null>(null);
-  const bubbleRefId = useRef(false);
-  useEffect(() => {
-    bubbleRefId.current = bubble;
-  }, [bubble]);
   // 拖拽中标记：拖拽时禁用位移动画，保证实时跟手
   const [dragging, setDragging] = useState(false);
 
@@ -326,7 +319,6 @@ export function PromptAssistant(props: Props): ReactNode {
     const iv = window.setInterval(() => {
       if (
         !dockedRef.current &&
-        !bubbleRefId.current &&
         !phaseActiveRef.current &&
         !hoverRef.current &&
         Date.now() - lastActiveRef.current >= IDLE_MS
@@ -347,9 +339,7 @@ export function PromptAssistant(props: Props): ReactNode {
   useEffect(() => {
     if (!docked) return;
     preDockRef.current = { px: pos.px, py: pos.py };
-    // 贴边瞬间收起气泡、清除悬停标记，避免贴边后气泡仍悬在旁边
-    setBubble(false);
-    setEggMode(false);
+    // 贴边瞬间清除悬停标记，避免悬停状态残留
     hoverRef.current = false;
   }, [docked]);
 
@@ -369,14 +359,6 @@ export function PromptAssistant(props: Props): ReactNode {
       py: clamp(pos.py, FLOAT_MARGIN, hiY),
     };
   }, [pos, docked, viewVersion]);
-  // 气泡展示的功能简介：优先用首次加载时 AI 生成并缓存的词，否则用 i18n 内置词
-  const [intros, setIntros] = useState<string[]>(() => [
-    T("pl.intro.0"),
-    T("pl.intro.1"),
-    T("pl.intro.2"),
-    T("pl.intro.3"),
-    T("pl.intro.4"),
-  ]);
 
   // 活动状态机：轮询 host 投影的 phase，驱动助手动作动画与阶段气泡。
   // 会话 turn/step/工具/结束事件 → idle/waiting/thinking/tool/review/done/failed；
@@ -410,67 +392,6 @@ export function PromptAssistant(props: Props): ReactNode {
     };
   }, []);
 
-  // 实时时钟：驱动底部信息条（每秒刷新）
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    const iv = window.setInterval(() => setNow(new Date()), 1000);
-    return () => window.clearInterval(iv);
-  }, []);
-
-  // 底部信息条内容：星期 + 日期 + 农历/节气（按当前界面语言；中文才含农历与节气）
-  const info = useMemo(() => {
-    const lang: "zh" | "en" = (
-      document.documentElement.lang ||
-      navigator.language ||
-      "zh"
-    )
-      .toLowerCase()
-      .startsWith("en")
-      ? "en"
-      : "zh";
-    const cale = getCalendarToday(now, lang);
-    const pad = (n: number) => String(n).padStart(2, "0");
-    const date =
-      lang === "zh"
-        ? `${now.getMonth() + 1}月${now.getDate()}日`
-        : `${now.getFullYear()}/${pad(now.getMonth() + 1)}/${pad(now.getDate())}`;
-    return { cale, date };
-  }, [now]);
-
-  // 时间生活流：节日祝福 / 深夜关怀，注入简介轮播首位与底部信息条（仅中文含农历节日）
-  const timeTip = useMemo(() => {
-    const lang: "zh" | "en" = (
-      document.documentElement.lang ||
-      navigator.language ||
-      "zh"
-    )
-      .toLowerCase()
-      .startsWith("en")
-      ? "en"
-      : "zh";
-    const h = now.getHours();
-    // 深夜关怀：0:00-6:00 展示（按日期轮换文案，避免每晚重复同一条）
-    if (h >= 0 && h < 6) {
-      const key = ["pl.time.night.0", "pl.time.night.1", "pl.time.night.2"][
-        now.getDate() % 3
-      ] as PLKey;
-      return { text: T(key), festival: null };
-    }
-    // 节日祝福：命中农历传统节日时展示对应祝福
-    const festival = getFestival(now);
-    if (festival) {
-      return {
-        text: T(`pl.festival.${festival.key}` as PLKey),
-        festival: { key: festival.key, name: lang === "zh" ? festival.zh : festival.en },
-      };
-    }
-    return { text: "", festival: null };
-  }, [now]);
-  // 简介轮播列表：今日时节提示（若有）置于首位随轮播展示
-  const shownIntros = useMemo(
-    () => (timeTip.text ? [timeTip.text, ...intros] : intros),
-    [timeTip, intros],
-  );
   useEffect(() => {
     let cancelled = false;
     // 按当前系统语言请求，host 端返回匹配主题+阶段的文案
@@ -544,8 +465,6 @@ export function PromptAssistant(props: Props): ReactNode {
   }
   const [status, setStatus] = useState<AssistantStatus | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
-  // 彩蛋模式：自动冒泡时以较小概率展示 host 推送的应景彩蛋文案
-  const [eggMode, setEggMode] = useState(false);
   // 已播报过的成就 id（localStorage 记忆，避免重复弹）
   const [announced] = useState<Set<string>>(() => {
     try {
@@ -563,8 +482,6 @@ export function PromptAssistant(props: Props): ReactNode {
   // 首次进入标记：只播报「之后新增解锁」的成就，避免历史成就一次性轰炸
   const statusInitedRef = useRef(false);
   const toastTimerRef = useRef<number | undefined>(undefined);
-  // 连续点击时间戳（2 秒内 5 次触发「晕」效果）
-  const tapTimesRef = useRef<number[]>([]);
 
   const showToast = useCallback((t: Toast) => {
     setToast(t);
@@ -662,48 +579,11 @@ export function PromptAssistant(props: Props): ReactNode {
     };
   }, [showToast]);
 
-  // 点击助手的互动反馈：随机「彩蛋抽奖」或俏皮话；2 秒内连点 5 次触发「晕」
-  const triggerTap = useCallback(() => {
-    const now = Date.now();
-    const recent = tapTimesRef.current.filter((t) => now - t < 2000);
-    recent.push(now);
-    tapTimesRef.current = recent;
-    if (recent.length >= 5) {
-      tapTimesRef.current = [];
-      showToast({ kind: "tap", text: tRef.current("pl.tap.dizzy") });
-      return;
-    }
-    // 抽奖：应景彩蛋（host 推送）+ 幸运彩蛋池混合，50% 概率开出一条彩蛋，否则回落到俏皮话
-    const egg = statusRef.current?.easterEgg ? statusRef.current.easterEgg.text : "";
-    const lucky = [
-      tRef.current("pl.lucky.0"),
-      tRef.current("pl.lucky.1"),
-      tRef.current("pl.lucky.2"),
-      tRef.current("pl.lucky.3"),
-      tRef.current("pl.lucky.4"),
-      tRef.current("pl.lucky.5"),
-    ].filter((x, i) => x && x !== `pl.lucky.${i}`); // 过滤缺失的翻译键（t 会原样返回键名）
-    const pool = egg ? [egg, ...lucky] : lucky;
-    const taps = [
-      tRef.current("pl.tap.0"),
-      tRef.current("pl.tap.1"),
-      tRef.current("pl.tap.2"),
-      tRef.current("pl.tap.3"),
-    ];
-    const useEgg = pool.length > 0 && Math.random() < 0.5;
-    const text = useEgg
-      ? pool[Math.floor(Math.random() * pool.length)]
-      : taps[Math.floor(Math.random() * taps.length)];
-    showToast({ kind: "tap", text });
-    setClickRev((c) => c + 1); // 触发鲸鱼点击回应动画
-  }, [showToast]);
-
   // ── 雪碧图助手：把鲸鱼款助手渲染成雪碧图，用 background-position 帧播放 ──
   // 轨道 = 行、帧 = 列，配合每轨道时长与阶段序列实现帧播放；鼠标移入播放打招呼小动画。
   // 动效鲸鱼（dshpet）走 WhaleStage 的 dsh-pet webm 双缓冲 video；素材失败时回退静态鲸鱼雪碧图。
   const [sheet, setSheet] = useState<SpriteSheet | null>(null);
   const [whaleBroken, setWhaleBroken] = useState(false); // 鲸鱼 webm 加载失败时回退静态鲸鱼
-  const [clickRev, setClickRev] = useState(0); // 鲸鱼点击回应动画触发计数
   const spriteRef = useRef<HTMLDivElement | null>(null);
   // 已加载雪碧图对应的形象；形象切换时据此清空旧图，避免残留旧款
   const spriteCharRef = useRef<PetCharacter | null>(null);
@@ -811,6 +691,12 @@ export function PromptAssistant(props: Props): ReactNode {
 
   // 是否展示阶段气泡：会话进行中（思考/调工具/整理/回话/完成/失败）都展示思考气泡框；空闲不打扰
   const phaseActive = activity.sessionActive && activity.phase !== "idle";
+  // 是否处于「思考/工作」类阶段：此时从头顶向外扩散三个波纹圈，营造思考想象效果（完成/失败等收尾阶段不扩散）
+  const thinkActive =
+    phaseActive &&
+    (activity.phase === "thinking" ||
+      activity.phase === "tool" ||
+      activity.phase === "waiting");
   // 阶段气泡激活标记：供自动冒泡循环判断优先级（阶段气泡 > 悬停/自动冒泡简介）
   const phaseActiveRef = useRef(phaseActive);
   useEffect(() => {
@@ -826,7 +712,7 @@ export function PromptAssistant(props: Props): ReactNode {
 
   // 气泡显示时测量实际宽高；内容变化（简介轮播 / 阶段内容 / toast）时同步更新
   useEffect(() => {
-    if ((!bubble && !phaseActive && !toast) || !bubbleRef.current) return;
+    if (!toast || !bubbleRef.current) return;
     const el = bubbleRef.current;
     const update = () => {
       setBubbleW(el.offsetWidth || 176);
@@ -836,7 +722,7 @@ export function PromptAssistant(props: Props): ReactNode {
     const ro = new ResizeObserver(update);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [bubble, phaseActive, toast]);
+  }, [toast]);
 
   // 公告弹窗：右键菜单入口打开（使用手册 + 通告 / 看板）
   const [announceOpen, setAnnounceOpen] = useState(false);
@@ -871,6 +757,18 @@ export function PromptAssistant(props: Props): ReactNode {
     setCtxMenu(null);
     setDashboardOpen(true);
   };
+
+  // 监听会话监控面板「实时注入解析」发出的打开事件：人格 → 人格管理，技能 → 技能管理
+  useEffect(() => {
+    const openPersona = () => setPersonaOpen(true);
+    const openSkill = () => setInjectOpen(true);
+    window.addEventListener("pl:open-persona-manager", openPersona);
+    window.addEventListener("pl:open-skill-manager", openSkill);
+    return () => {
+      window.removeEventListener("pl:open-persona-manager", openPersona);
+      window.removeEventListener("pl:open-skill-manager", openSkill);
+    };
+  }, []);
 
   // 右键菜单显隐规则：词库助手自常驻以来始终启用；「技能注入」为常驻入口（无开关），
   // 因此右键菜单始终显示（其余词库管理 / 公告 / 成就 / 人格管理 / 看板 / 数据管理均可单独关闭）。
@@ -938,38 +836,21 @@ export function PromptAssistant(props: Props): ReactNode {
       updatePos({ px, py });
     };
     const onUp = () => {
-      const d = personDragRef.current;
-      const clicked = d ? !d.moved : false;
       personDragRef.current = null;
       setDragging(false); // 恢复位移动画
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
-      // 左键单击（未拖动）：不联动面板，只触发互动反馈（面板开合统一走右键菜单「打开词库管理」）
-      if (clicked) {
-        triggerTap();
-      }
+      // 左键单击（未移动）不触发任何互动（面板开合统一走右键菜单「打开词库管理」）
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   };
 
-  // 悬停气泡：功能简介轮播展示（固定较快节奏切换，移开即重置）
-  const [introIdx, setIntroIdx] = useState(0);
-  const rotMs = 2500;
-  useEffect(() => {
-    if (!bubble) {
-      setIntroIdx(0);
-      return;
-    }
-    const timer = setInterval(() => setIntroIdx((i) => i + 1), rotMs);
-    return () => clearInterval(timer);
-  }, [bubble]);
-
   // 气泡固定定位：根据助手所在位置，在上/下/左/右四个方向中选择一个能完整容纳的方向展示，
   // 并保证气泡整体落在视口内，避免助手拖到屏幕边缘时气泡被遮挡「显示没了」。
   // 优先级：上方 → 下方 → 左侧 → 右侧。
   const bubblePos = useMemo(() => {
-    if (!bubble && !phaseActive && !toast) return null;
+    if (!toast) return null;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
     const W = bubbleW;
@@ -1016,13 +897,11 @@ export function PromptAssistant(props: Props): ReactNode {
     const tailX = cx - left - 5; // 尖角在气泡水平方向上的偏移（above/below）
     const tailY = cy - top - 5; // 尖角在气泡垂直方向上的偏移（left/right）
 
-    // 系统消息会话气泡与鼠标移入简介气泡整体上移 3px（toast 成就/互动气泡不偏移）
-    if (!toast) top -= 10;
+    // 系统消息会话气泡与鼠标移入简介气泡整体上移 15px（toast 成就/互动气泡不偏移）
+    if (!toast) top -= 15;
 
     return { left, top, dir, tailX, tailY };
   }, [
-    bubble,
-    phaseActive,
     toast,
     bubbleW,
     bubbleH,
@@ -1030,116 +909,6 @@ export function PromptAssistant(props: Props): ReactNode {
     view.py,
     viewVersion,
   ]);
-
-  // 首次加载：请求 AI 生成词库功能简介；AI 不可用或失败时保持 i18n 内置词。
-  // 按「语言 + 当天日期」缓存到 localStorage：每天换新键重新请求一次，让 AI 每天出新的文案。
-  useEffect(() => {
-    const lang: "zh" | "en" = (document.documentElement.lang || "zh")
-      .toLowerCase()
-      .startsWith("en")
-      ? "en"
-      : "zh";
-    const now = new Date();
-    const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-    const cacheKey = `pl:intro:${lang}:${day}`;
-    let cancelled = false;
-    try {
-      const cached = localStorage.getItem(cacheKey);
-      if (cached) {
-        const parsed = JSON.parse(cached) as { lines?: string[] };
-        if (Array.isArray(parsed.lines) && parsed.lines.length > 0) {
-          setIntros(parsed.lines.slice(0, 6));
-          return;
-        }
-      }
-    } catch {
-      /* 缓存解析失败忽略 */
-    }
-    genIntro(lang)
-      .then((r) => {
-        if (cancelled) return;
-        if (Array.isArray(r.lines) && r.lines.length > 0) {
-          const lines = r.lines.slice(0, 6);
-          setIntros(lines);
-          try {
-            // 只保留当天的简介缓存，移除同语言的历史缓存键，避免 localStorage 无限累积
-            const allKeys = localStorage.keys?.() ?? [];
-            for (const k of allKeys) {
-              if (k.startsWith(`pl:intro:${lang}:`) && k !== cacheKey)
-                localStorage.removeItem(k);
-            }
-            localStorage.setItem(cacheKey, JSON.stringify({ lines }));
-          } catch {
-            /* 忽略存储失败 */
-          }
-        }
-      })
-      .catch(() => {
-        /* AI 不可用：保持内置简介 */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // 未悬停时不定时自动冒气泡展示功能简介；无论面板折叠与否都会触发（助手在场即冒泡）。
-  // 悬停中或显示中则跳过本轮，间隔取自设置。
-  useEffect(() => {
-    const intervalMs =
-      Math.max(
-        5,
-        settings?.personTipInterval ?? DEFAULT_SETTINGS.personTipInterval,
-      ) * 1000;
-    const hideDuration =
-      Math.max(
-        10,
-        settings?.personTipDuration ?? DEFAULT_SETTINGS.personTipDuration,
-      ) * 1000;
-    let showT: ReturnType<typeof setTimeout> | undefined;
-    let hideT: ReturnType<typeof setTimeout> | undefined;
-    const loop = () => {
-      showT = setTimeout(
-        () => {
-          // 阶段气泡显示中优先级更高，跳过本轮自动冒泡，避免结束后残留简介气泡
-          if (phaseActiveRef.current) {
-            loop();
-            return;
-          }
-          // 到点要弹气泡：若当前处于贴边状态，先取消贴边回到原位再弹，保证提示正常展示
-          if (dockedRef.current) {
-            dockedRef.current = false;
-            setDocked(false);
-            if (preDockRef.current) setPos(preDockRef.current);
-            preDockRef.current = null;
-          }
-          // 悬停中（气泡已由悬停展示）则跳过本轮，避免与悬停气泡叠加
-          if (hoverRef.current) {
-            loop();
-            return;
-          }
-          // 自动冒泡：以较小概率展示 host 推送的应景彩蛋，否则走简介轮播
-          setEggMode(
-            statusRef.current?.easterEgg != null && Math.random() < 0.3,
-          );
-          setIntroIdx((i) => i + 1);
-          setBubble(true);
-          hideT = setTimeout(() => {
-            if (!hoverRef.current && !dockedRef.current) {
-              setBubble(false);
-              setEggMode(false);
-            }
-            loop();
-          }, hideDuration);
-        },
-        intervalMs + Math.random() * intervalMs,
-      );
-    };
-    loop();
-    return () => {
-      if (showT) clearTimeout(showT);
-      if (hideT) clearTimeout(hideT);
-    };
-  }, [settings?.personTipInterval, settings?.personTipDuration]);
 
   // 满级成就（最高等级）解锁「词库助手」开关：满级且用户关闭时才隐藏目前助手与其气泡；
   // 未满级强制常驻，忽略 assistantEnabled 的历史值，保证旧用户升级后也能恢复显示
@@ -1162,11 +931,11 @@ export function PromptAssistant(props: Props): ReactNode {
 @keyframes pl-person-tilt { 0%,100% { transform: rotate(0deg); } 25% { transform: rotate(-6deg); } 75% { transform: rotate(6deg); } }
 @keyframes pl-person-jump { 0% { transform: translateY(0); } 30% { transform: translateY(-14px); } 50% { transform: translateY(0); } 70% { transform: translateY(-7px); } 100% { transform: translateY(0); } }
 @keyframes pl-person-shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
+
 @keyframes pl-person-happybob { 0%,100% { transform: translateY(0) scale(1,1); } 40% { transform: translateY(-8px) scale(1.06,.94); } 70% { transform: translateY(-3px); } }
 @keyframes pl-person-sadbob { 0%,100% { transform: translateY(0) rotate(0deg) scale(1,1); } 50% { transform: translateY(2px) rotate(-3deg) scale(.99,1.02); } }
-.pl-think-dot { display: inline-block; border-radius: 50%; animation: pl-think-bounce 1.2s ease-in-out infinite; }
-@keyframes pl-think-bounce { 0%, 80%, 100% { transform: scale(.55); opacity: .45; } 40% { transform: scale(1); opacity: 1; } }
 @keyframes pl-ctx-in { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: scale(1); } }
+@keyframes pl-think-ripple { 0% { transform: scale(.4); opacity: 0; } 18% { opacity: .9; } 100% { transform: scale(4.2); opacity: 0; } }
 .pl-ctx-menu { padding: 6px; border-radius: 13px; background: var(--dsw-specific-sidebar-fill, #f5f6f7); border: 1px solid var(--dsw-alias-border-l2, rgba(17, 24, 39, .14)); box-shadow: 0 10px 32px rgba(2, 6, 23, .2), 0 2px 8px rgba(2, 6, 23, .1), inset 0 1px 0 rgba(255, 255, 255, .55); animation: pl-ctx-in .16s cubic-bezier(.22, 1, .36, 1); transform-origin: top left; }
 .pl-ctx-head { display: flex; align-items: center; gap: 6px; padding: 6px 10px 8px; font-size: 12px; font-weight: 600; letter-spacing: .2px; color: var(--dsw-alias-label-secondary, #6b7280); border-bottom: 1px solid var(--dsw-alias-border-l2, rgba(17, 24, 39, .08)); margin-bottom: 4px; }
 .pl-ctx-item { display: flex; align-items: center; gap: 9px; padding: 6px 9px; font-size: 12.5px; border-radius: 9px; cursor: pointer; user-select: none; color: var(--dsw-alias-label-primary, #1f2937); transition: background .16s ease, transform .12s ease; }
@@ -1199,13 +968,11 @@ export function PromptAssistant(props: Props): ReactNode {
           onMouseEnter={() => {
             hoverRef.current = true;
             setHovering(true);
-            setBubble(true);
+            // 悬停改为不弹出气泡，仅切换形象动画
           }}
           onMouseLeave={() => {
             hoverRef.current = false;
             setHovering(false);
-            setBubble(false);
-            setEggMode(false);
           }}
           style={{
             position: "fixed",
@@ -1223,8 +990,9 @@ export function PromptAssistant(props: Props): ReactNode {
             userSelect: "none",
           }}
         >
-          {/* 统一气泡框：toast（成就/互动，优先级最高）> 阶段气泡 > 简介轮播，共用同一圆弧气泡样式与定位 */}
-          {(phaseActive || bubble || toast) && bubblePos && (
+          {/* 统一气泡框：仅 toast（成就解锁 / 点击互动）临时气泡使用。
+            会话状态改由右上角状态指示灯颜色表达，不再弹阶段气泡；节假日简介也一并移除 */}
+          {toast && bubblePos && (
             <div
               ref={bubbleRef}
               style={{
@@ -1235,196 +1003,72 @@ export function PromptAssistant(props: Props): ReactNode {
                 display: "flex",
                 flexDirection: "column",
                 alignItems: "center",
-                gap: 5,
+                gap: 3,
                 width: "max-content", // 宽随文字尺寸自适应（短文案贴合、长文案展开）
-                maxWidth: 288, // 仅保留最大宽度，避免超长文案撑出屏幕
-                padding: "8px 14px",
+                maxWidth: 210, // 仅保留最大宽度，避免超长文案撑出屏幕
+                padding: "5px 10px",
                 background: TONE.panel,
                 color: TONE.text,
                 border: `1px solid ${TONE.border}`,
-                borderRadius: 16, // 圆弧气泡：大圆角圆润风格
-                fontSize: 10.5,
-                lineHeight: 1.45,
+                borderRadius: 25, // 气泡四角 25 弧度：圆角矩形柔和风格
+                fontSize: 9.5,
+                lineHeight: 1.4,
                 textAlign: "center",
                 boxShadow: "0 3px 12px rgba(17, 24, 39, .1)",
                 animation: "pl-bubble-in .2s cubic-bezier(.22,1,.36,1)",
                 pointerEvents: "none", // 气泡仅展示，穿透不挡页面点击
               }}
             >
-              {toast ? (
-                <>
-                  {/* 成就解锁彩带特效：顶部闪光星 + 两侧飘落彩带（仅成就解锁时） */}
-                  {toast.kind === "achievement" && (
-                    <>
-                      {CONFETTI_PIECES.map((c, i) => (
-                        <span
-                          key={i}
-                          className="pl-confetti"
-                          style={
-                            {
-                              left: c.left,
-                              background: c.color,
-                              boxShadow: `0 0 4px ${c.color}`,
-                              animationDelay: `${c.delay}s`,
-                              "--fall": `${c.fall}px`,
-                              "--spin": `${c.spin}deg`,
-                            } as CSSProperties
-                          }
-                        />
-                      ))}
-                      <div className="pl-shine" aria-hidden="true">
-                        <svg width="34" height="34" viewBox="0 0 24 24" fill="currentColor">
-                          <path d="M12 1l2.6 6.5L21 9l-5 4.3 1.5 6.7L12 16.9 6.5 20l1.5-6.7L3 9l6.4-1.5z" />
-                        </svg>
-                      </div>
-                    </>
-                  )}
-                  {/* 临时提示：成就解锁 / 点击互动 */}
-                  {toast.title && (
-                    <div
-                      style={{
-                        fontWeight: 600,
-                        letterSpacing: 1,
-                        color: TONE.accent,
-                      }}
-                    >
-                      {toast.title}
-                    </div>
-                  )}
-                  <span
-                    style={{
-                      color: TONE.muted,
-                      whiteSpace: "pre-wrap",
-                      wordBreak: "break-word",
-                      textAlign: "center",
-                    }}
-                  >
-                    {toast.text}
-                  </span>
-                </>
-              ) : phaseActive ? (
-                <>
-                  {/* 阶段内容：三个依次弹跳的思考小点 + 状态文字 */}
-                  <div
-                    style={{
-                      display: "flex",
-                      gap: 4,
-                      alignItems: "center",
-                      justifyContent: "center",
-                      height: 7,
-                    }}
-                  >
-                    {[0, 1, 2].map((i) => (
+              <>
+                {/* 成就解锁彩带特效：顶部闪光星 + 两侧飘落彩带（仅成就解锁时） */}
+                {toast.kind === "achievement" && (
+                  <>
+                    {CONFETTI_PIECES.map((c, i) => (
                       <span
                         key={i}
-                        className="pl-think-dot"
-                        style={{
-                          width: 5,
-                          height: 5,
-                          background: TONE.accent,
-                          animationDelay: `${i * 0.18}s`,
-                        }}
+                        className="pl-confetti"
+                        style={
+                          {
+                            left: c.left,
+                            background: c.color,
+                            boxShadow: `0 0 4px ${c.color}`,
+                            animationDelay: `${c.delay}s`,
+                            "--fall": `${c.fall}px`,
+                            "--spin": `${c.spin}deg`,
+                          } as CSSProperties
+                        }
                       />
                     ))}
-                  </div>
-                  {/* 阶段内容：优先用 host 按聊天主题推送的文案，缺失时回退到 i18n 内置文案 */}
-                  <span style={{ color: TONE.muted, whiteSpace: "nowrap" }}>
-                    {activity.text || T(PHASE_KEY[activity.phase])}
-                  </span>
-                </>
-              ) : (
-                <>
-                  {/* 简介内容：心情气泡 + 标题 + 轮播正文 + 指示点（彩蛋模式展示应景文案、隐藏指示点） */}
-                  {/* 心情气泡：非平常情绪时在简介顶部展示当日情绪小结（气泡表情） */}
-                  {mood !== "neutral" && (
-                    <div
-                      style={{
-                        fontWeight: 600,
-                        fontSize: 10.5,
-                        letterSpacing: 0.5,
-                        color:
-                          mood === "happy"
-                            ? "var(--dsw-alias-state-success-primary, #16a34a)"
-                            : TONE.red,
-                      }}
-                    >
-                      {mood === "happy" ? T("pl.mood.happy") : T("pl.mood.sad")}
+                    <div className="pl-shine" aria-hidden="true">
+                      <svg width="34" height="34" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 1l2.6 6.5L21 9l-5 4.3 1.5 6.7L12 16.9 6.5 20l1.5-6.7L3 9l6.4-1.5z" />
+                      </svg>
                     </div>
-                  )}
-                  <div
-                    key={introIdx}
-                    style={{
-                      color: TONE.muted,
-                      whiteSpace: "pre-wrap",
-                      wordBreak: "break-word",
-                      animation: "pl-bubble-intro .45s ease",
-                    }}
-                  >
-                    {eggMode && status?.easterEgg
-                      ? status.easterEgg.text
-                      : shownIntros[introIdx % shownIntros.length]}
-                  </div>
-                  {/* 轮询指示点（彩蛋模式单条展示，不轮播故隐藏） */}
-                  {!eggMode && (
-                    <div
-                      style={{
-                        display: "flex",
-                        gap: 4,
-                        justifyContent: "center",
-                      }}
-                    >
-                      {shownIntros.map((_, i) => {
-                        const active = i === introIdx % shownIntros.length;
-                        return (
-                          <span
-                            key={i}
-                            style={{
-                              width: 5,
-                              height: 5,
-                              borderRadius: "50%",
-                              background: active ? TONE.accent : TONE.quiet,
-                              transition: "background .2s, transform .2s",
-                              transform: active ? "scale(1.35)" : "scale(1)",
-                            }}
-                          />
-                        );
-                      })}
-                    </div>
-                  )}
-                  {/* 气泡常驻时间信息：当前时间 + 星期日期 + 农历/节气（中文），随气泡展示 */}
+                  </>
+                )}
+                {/* 临时提示：成就解锁 / 点击互动 */}
+                {toast.title && (
                   <div
                     style={{
-                      display: "flex",
-                      flexWrap: "wrap",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      gap: 4,
-                      fontSize: 9,
-                      color: TONE.quiet,
-                      marginTop: 5,
-                      paddingTop: 5,
-                      borderTop: `1px solid ${TONE.border}`,
-                      opacity: 0.85,
+                      fontWeight: 600,
+                      letterSpacing: 1,
+                      color: TONE.accent,
                     }}
                   >
-                    {(() => {
-                      const segs: { key: string; text: string; accent?: boolean }[] = [
-                        { key: "w", text: info.cale.weekday },
-                        { key: "d", text: info.date },
-                      ];
-                      if (info.cale.lunar) segs.push({ key: "l", text: info.cale.lunar });
-                      if (info.cale.term) segs.push({ key: "g", text: info.cale.term, accent: true });
-                      if (timeTip.festival)
-                        segs.push({ key: "f", text: timeTip.festival.name, accent: true });
-                      return segs.map((s) => (
-                        <span key={s.key} style={{ color: s.accent ? TONE.accent : undefined }}>
-                          {s.text}
-                        </span>
-                      ));
-                    })()}
+                    {toast.title}
                   </div>
-                </>
-              )}
+                )}
+                <span
+                  style={{
+                    color: TONE.muted,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    textAlign: "center",
+                  }}
+                >
+                  {toast.text}
+                </span>
+              </>
               {/* 气泡小尾巴：始终指向助手中心（上→朝下、下→朝上、左→朝右、右→朝左）。
                 方块边长 10，旋转 45° 后三角底线（两平角连线）位于方块中心，悬出量取半宽 5，
                 使底线恰好落在卡片边界上，与卡片边无缝连接，消除「三角飘在卡片外、中间留空隙」。 */}
@@ -1465,6 +1109,70 @@ export function PromptAssistant(props: Props): ReactNode {
               />
             </div>
           )}
+          {/* 思考想象波纹：处于思考/工作阶段时，三个波纹圈从右上角 AI 状态指示灯圆点向外依次扩散，营造思考想象效果 */}
+          {thinkActive && (
+            <div
+              aria-hidden="true"
+              style={{
+                position: "absolute",
+                top: 1,
+                right: 1,
+                width: 9,
+                height: 9,
+                pointerEvents: "none",
+              }}
+            >
+              {[0, 0.6, 1.2].map((delay) => (
+                <span
+                  key={delay}
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    borderRadius: "50%",
+                    // 水波纹质感：青蓝半透明描边 + 内层高光 + 柔和光晕，模拟水面扩散的涟漪
+                    border: "1.5px solid rgba(56, 189, 248, 0.75)",
+                    boxShadow:
+                      "0 0 6px rgba(14, 165, 233, .5), inset 0 0 5px rgba(186, 230, 253, .7)",
+                    background:
+                      "radial-gradient(circle, rgba(14,165,233,.3) 0%, rgba(56,189,248,.14) 55%, transparent 78%)",
+                    opacity: 0,
+                    animation:
+                      "pl-think-ripple 1.8s cubic-bezier(.22,1,.36,1) " +
+                      delay +
+                      "s infinite",
+                  }}
+                />
+              ))}
+            </div>
+          )}
+          {/* 心情标记：非平常情绪时贴心在人物头顶上方，作为常驻的情绪标识（不再随气泡展示） */}
+          {mood !== "neutral" && (
+            <div
+              title={mood === "happy" ? T("pl.mood.happy") : T("pl.mood.sad")}
+              style={{
+                position: "absolute",
+                top: -14,
+                left: "50%",
+                transform: "translateX(-50%)",
+                padding: "1px 6px",
+                borderRadius: 8,
+                fontSize: 8,
+                fontWeight: 600,
+                letterSpacing: 0.3,
+                whiteSpace: "nowrap",
+                background:
+                  mood === "happy"
+                    ? "var(--dsw-alias-state-success-primary, #16a34a)"
+                    : TONE.red,
+                color: "#fff",
+                zIndex: 2147483647,
+                pointerEvents: "none",
+                boxShadow: "0 1px 4px rgba(2, 6, 23, .25)",
+              }}
+            >
+              {mood === "happy" ? T("pl.mood.happy") : T("pl.mood.sad")}
+            </div>
+          )}
           {/* 助手本体：雪碧图就绪时用 background-position 帧播放；加载中/失败时保持空白 */}
           <div
             style={{
@@ -1480,7 +1188,6 @@ export function PromptAssistant(props: Props): ReactNode {
               <WhaleStage
                 phase={activity.phase}
                 hovering={hovering}
-                clickRev={clickRev}
                 size={PERSON_SIZE}
                 onFail={() => setWhaleBroken(true)}
               />
@@ -1590,7 +1297,9 @@ export function PromptAssistant(props: Props): ReactNode {
                 Lv.{status.level.level}
               </div>
             )}
-            {/* AI 状态指示灯：右上角小圆点，颜色随当前活动阶段变化；悬停 title 显示阶段文案 */}
+            {/* AI 状态指示灯：右上角小圆点，颜色随当前活动阶段变化；悬停 title 显示阶段文案。
+              仅会话活跃且非空闲时显示：对话结束后（阶段回落 idle）即隐藏 */}
+            {activity.sessionActive && activity.phase !== "idle" && (
             <div
               title={activity.text || T(PHASE_KEY[activity.phase])}
               style={{
@@ -1600,12 +1309,13 @@ export function PromptAssistant(props: Props): ReactNode {
                 width: 9,
                 height: 9,
                 borderRadius: "50%",
-                background: activity.sessionActive ? PHASE_COLOR[activity.phase] : PHASE_COLOR.idle,
+                background: PHASE_COLOR[activity.phase],
                 boxShadow: "0 0 6px rgba(2, 6, 23, .3)",
                 zIndex: 2147483647,
                 pointerEvents: "none",
               }}
             />
+            )}
           </div>
         </div>,
         document.body,

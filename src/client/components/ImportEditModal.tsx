@@ -559,7 +559,7 @@ export function ImportEditModal(props: {
                 entries.map((entry) => (
                   <div
                     key={entry.key}
-                    onClick={() => setSelectedKey(entry.key)}
+                    onClick={() => setSelectedKey((cur) => (cur === entry.key ? null : entry.key))}
                     style={{
                       display: "flex",
                       alignItems: "center",

@@ -11,7 +11,7 @@
  * 持久绑定存 SQLite（prompts.db 的 prompt_scope_bindings 表，与人格绑定一致）。
  *
  * 交互约束（与其它弹窗一致）：
- * - 只能通过右上角关闭按钮关闭，禁止点击遮罩/外部区域关闭；
+ * - 点击遮罩（空白处）或右上角关闭按钮均可关闭；
  * - 删除需二次确认。
  */
 import { useEffect, useRef, useState, type ChangeEvent, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
@@ -35,6 +35,7 @@ import {
   updateSessionPrompt as apiUpdateSessionPrompt,
   diagSession,
 } from "../utils/api.js";
+import { notifyDataChanged } from "../utils/data-sync.js";
 import { plBtn } from "../utils/button-style.js";
 import { getTone, useThemeSync } from "../utils/theme.js";
 import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../utils/dialog-style.js";
@@ -358,6 +359,7 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
     try {
       const created = await apiCreateSessionPrompt({ title, body: "", tags: undefined });
       await refresh();
+      notifyDataChanged();
       setEditTitle(created.title);
       setEditTag((created.tags ?? [])[0] ?? "");
       setEditBody(created.body);
@@ -400,6 +402,8 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
       const tags = editTag.trim() ? [editTag.trim()] : undefined;
       await apiUpdateSessionPrompt(p.id, { title, body: editBody, tags });
       await refresh();
+      notifyDataChanged();
+      setMsg({ text: t("pl.inject.modifyDone", { name: title }), kind: "success" });
       setEditingId(null);
     } catch {
       setError(t("pl.inject.opFailed"));
@@ -435,7 +439,14 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
     setBusy(true);
     setError(null);
     apiUpdateSessionPrompt(p.id, { enabled: !p.enabled })
-      .then(() => refresh())
+      .then(() => {
+        refresh();
+        notifyDataChanged();
+        setMsg({
+          text: t(p.enabled ? "pl.inject.enableOff" : "pl.inject.enableOn", { name: p.title }),
+          kind: "info",
+        });
+      })
       .catch(() => setError(t("pl.inject.opFailed")))
       .finally(() => setBusy(false));
   };
@@ -449,6 +460,7 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
         refresh();
         // 删除技能后同步刷新右侧绑定树（依赖 scopes/bindings），清除已删除技能在路径与会话下的残留
         void refreshScopes();
+        notifyDataChanged();
       })
       .catch(() => setError(t("pl.inject.opFailed")))
       .finally(() => {
@@ -466,6 +478,8 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
       .then(() => {
         void refreshScopes();
         loadDiag(true);
+        notifyDataChanged();
+        setMsg({ text: t("pl.inject.bindDone"), kind: "info" });
       })
       .catch(() => setError(t("pl.inject.opFailed")))
       .finally(() => {
@@ -776,6 +790,8 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
       .then(() => {
         setBindings((prev) => new Map(prev).set(nodePath, [...draftIds]));
         setEditingPath(null);
+        notifyDataChanged();
+        setMsg({ text: t("pl.inject.bindDone"), kind: "info" });
       })
       .catch(() => setError(t("pl.inject.opFailed")))
       .finally(() => setBusy(false));
@@ -790,6 +806,8 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
         // 回写树里该会话节点的绑定
         setScopes((prev) => prev.map((node) => rewriteSessionPrompts(node, sessionId, [...draftIds])));
         setEditingSession(null);
+        notifyDataChanged();
+        setMsg({ text: t("pl.inject.bindDone"), kind: "info" });
       })
       .catch(() => setError(t("pl.inject.opFailed")))
       .finally(() => setBusy(false));
@@ -819,6 +837,8 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
           return m;
         });
         setEditingPath(null);
+        notifyDataChanged();
+        setMsg({ text: t("pl.inject.bindDone"), kind: "info" });
       })
       .catch(() => setError(t("pl.inject.opFailed")))
       .finally(() => setBusy(false));
@@ -832,6 +852,8 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
       .then(() => {
         setScopes((prev) => prev.map((node) => rewriteSessionPrompts(node, sessionId, [])));
         setEditingSession(null);
+        notifyDataChanged();
+        setMsg({ text: t("pl.inject.bindDone"), kind: "info" });
       })
       .catch(() => setError(t("pl.inject.opFailed")))
       .finally(() => setBusy(false));
@@ -1211,7 +1233,10 @@ export function PromptInjectPanel({ open, onClose, t }: Props): ReactNode {
           aria-modal="true"
           aria-label={t("pl.inject.title")}
           className={PL_DIALOG_OVERLAY}
-          onClick={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            // 点击蒙层（空白处）关闭；点击对话框内部不关闭
+            if (e.target === e.currentTarget) onClose();
+          }}
         >
           <style>{PL_DIALOG_CSS}</style>
           <div

@@ -20,13 +20,14 @@ import "../components/Tooltip.js";
 import { PromptLibraryButton } from "../components/PromptLibraryButton.js";
 import { AIPolishButton } from "../components/AIPolishButton.js";
 import { ContextRecommendations } from "../components/ContextRecommendations.js";
-import { TokenMonitorView } from "../components/TokenMonitorView.js";
-import { PreviewView } from "../components/PreviewView.js";
+// 会话监控 / 文件预览已拆分为独立插件 dsh-session-monitor，能力代码保留、仅停用注册：
+// import { TokenMonitorView } from "../components/TokenMonitorView.js";
+// import { PreviewView } from "../components/PreviewView.js";
 import { SettingsSection } from "../components/SettingsSection.js";
 import { en, NS, zh } from "./i18n.js";
 import { startDataChangedSubscription } from "./data-sync.js";
 import { registerWorkspaces } from "./workspace-picker.js";
-import { registerProducedFileIntercept } from "./preview-target.js";
+// import { registerProducedFileIntercept } from "./preview-target.js";
 import {
   registerSettingsNavIcon,
   SETTINGS_NAV_CSS,
@@ -90,11 +91,12 @@ export function apply(ctx: ClientCtx): void {
     },
     "prompt-library: sse subscription",
   );
-  // 拦截官方聊天结果内「产物文件」卡片的点击，改跳自研预览面板打开该文件
-  ctx.effect(
-    () => registerProducedFileIntercept(),
-    "prompt-library: produced-file intercept",
-  );
+  // 拦截官方聊天结果内「产物文件」卡片的点击，改跳自研预览面板打开该文件。
+  // 预览已拆分为独立插件 dsh-session-monitor，能力代码保留、仅停用：
+  // ctx.effect(
+  //   () => registerProducedFileIntercept(),
+  //   "prompt-library: produced-file intercept",
+  // );
   // 绑定命名空间的翻译函数，用于设置导航标签（每次读取当前语言）
   const t = ctx.locale.bind(NS);
 
@@ -164,34 +166,34 @@ export function apply(ctx: ClientCtx): void {
   );
 
   // 注册会话监控面板：作为会话轨迹旁的独立监控视图标签（conversation.view 插槽）。
-  // 组件通过宿主注入的 useSession / useProjection 直接读取实时 token 投影数据。
-  ctx.slots.inject("conversation.view", () =>
-    ctx.slots.register(
-      {
-        name: "conversation.view",
-        id: "prompt-library-monitor",
-        order: 20,
-        locale: NS,
-        label: () => t("pl.view.tokenMonitor"),
-      },
-      TokenMonitorView as (props: unknown) => ReactNode,
-    ),
-  );
-
-  // 注册会话预览面板：读取当前会话工作目录下的 md 文件并渲染预览，
-  // 多文件时左侧文件列表 + 右侧正文，正文含大纲时再分左右（大纲 + 正文）。
-  ctx.slots.inject("conversation.view", () =>
-    ctx.slots.register(
-      {
-        name: "conversation.view",
-        id: "prompt-library-preview",
-        order: 21,
-        locale: NS,
-        label: () => t("pl.view.preview"),
-      },
-      PreviewView as (props: unknown) => ReactNode,
-    ),
-  );
+  // 已拆分为独立插件 dsh-session-monitor，能力代码保留、仅停用：
+  // ctx.slots.inject("conversation.view", () =>
+  //   ctx.slots.register(
+  //     {
+  //       name: "conversation.view",
+  //       id: "prompt-library-monitor",
+  //       order: 20,
+  //       locale: NS,
+  //       label: () => t("pl.view.tokenMonitor"),
+  //     },
+  //     TokenMonitorView as (props: unknown) => ReactNode,
+  //   ),
+  // );
+  //
+  // // 注册会话预览面板：读取当前会话工作目录下的 md 文件并渲染预览，
+  // // 多文件时左侧文件列表 + 右侧正文，正文含大纲时再分左右（大纲 + 正文）。
+  // ctx.slots.inject("conversation.view", () =>
+  //   ctx.slots.register(
+  //     {
+  //       name: "conversation.view",
+  //       id: "prompt-library-preview",
+  //       order: 21,
+  //       locale: NS,
+  //       label: () => t("pl.view.preview"),
+  //     },
+  //     PreviewView as (props: unknown) => ReactNode,
+  //   ),
+  // );
 
   // 注册设置面板到 harness 原生设置界面
   ctx.slots.inject("settings.section", () =>

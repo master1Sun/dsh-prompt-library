@@ -665,6 +665,11 @@ export function subscribeActivity(
 
   // 使用原生 EventSource API（浏览器内置支持 SSE）
   const eventSource = new EventSource(url);
+  let connected = false;
+
+  eventSource.onopen = () => {
+    connected = true;
+  };
 
   eventSource.onmessage = (event) => {
     try {
@@ -676,7 +681,11 @@ export function subscribeActivity(
   };
 
   eventSource.onerror = () => {
-    // SSE 连接错误时自动关闭，避免无限重试
+    if (connected) {
+      // 已连接后出错，可能是服务器断开
+      console.warn("[Activity SSE] Connection lost, falling back to polling");
+    }
+    // SSE 连接错误时自动关闭
     eventSource.close();
   };
 

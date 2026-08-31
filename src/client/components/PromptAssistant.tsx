@@ -407,16 +407,34 @@ export function PromptAssistant(props: Props): ReactNode {
       ? "en"
       : "zh";
 
+    // done/failed 阶段自动回落到 idle 的定时器
+    let settleTimer: ReturnType<typeof setTimeout> | undefined;
+
     // 使用 SSE 实时订阅状态变化（替代轮询）
     const unsubscribe = subscribeActivity(
       (snap) => {
-        if (!cancelled) setActivity(snap);
+        if (cancelled) return;
+        setActivity(snap);
+
+        // 收到 done/failed 时启动倒计时，2.4秒后强制回落到 idle
+        if (settleTimer !== undefined) {
+          clearTimeout(settleTimer);
+          settleTimer = undefined;
+        }
+        if (snap.phase === "done" || snap.phase === "failed") {
+          settleTimer = setTimeout(() => {
+            if (!cancelled) {
+              setActivity((prev) => ({ ...prev, phase: "idle" as ActivityPhase }));
+            }
+          }, 2400);
+        }
       },
       lang,
     );
 
     return () => {
       cancelled = true;
+      if (settleTimer !== undefined) clearTimeout(settleTimer);
       unsubscribe();
     };
   }, []);

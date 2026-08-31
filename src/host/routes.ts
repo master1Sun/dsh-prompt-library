@@ -949,8 +949,9 @@ export function makePromptRoutes(): WebRoute[] {
         const initial = getActivity(langNorm);
         res.write(`data: ${JSON.stringify(initial)}\n\n`);
 
-        // 订阅状态变化
-        const unsubscribe = onActivityChange((snapshot) => {
+        // 订阅状态变化（回调中重新获取当前语言的快照）
+        const unsubscribe = onActivityChange(() => {
+          const snapshot = getActivity(langNorm);
           res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
         });
 

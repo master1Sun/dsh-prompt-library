@@ -50,7 +50,7 @@ interface ActivityInput {
 
 /** 机器配置。 */
 interface ActivityMachineConfig {
-  /** done 后的庆祝窗口，ms 内保持 jumping，随后回落 idle。 */
+  /** done 后的庆祝窗口，ms 内保持 jumping，随后回落 idle（供 render() 时间判断用）。 */
   celebrateMs: number;
   /** failed 后的低落窗口，ms 内保持失败表现，随后回落 idle。 */
   failureMs: number;
@@ -106,20 +106,30 @@ class ActivityMachine {
   /** 渲染当前决策：done/failed 的展示窗口到期后回落 idle，并附上匹配主题+阶段的文案。 */
   render(lang: CopyLang): ActivitySnapshot {
     const nowMs = this.now();
-    const doneSettled =
-      this.phase === "done" &&
-      this.doneAt !== undefined &&
-      nowMs - this.doneAt >= this.config.celebrateMs;
-    const failedSettled =
-      this.phase === "failed" &&
-      this.failedAt !== undefined &&
-      nowMs - this.failedAt >= this.config.failureMs;
-    const phase: ActivityPhase = doneSettled || failedSettled ? "idle" : this.phase;
+
+    // 防御性检查：如果 done/failed 已过期但定时器未触发，强制回落到 idle
+    if (this.phase === "done" && this.doneAt !== undefined && nowMs - this.doneAt >= this.config.celebrateMs) {
+      this.phase = "idle";
+      this.doneAt = undefined;
+      if (this.settleTimer !== undefined) {
+        clearTimeout(this.settleTimer);
+        this.settleTimer = undefined;
+      }
+    }
+    if (this.phase === "failed" && this.failedAt !== undefined && nowMs - this.failedAt >= this.config.failureMs) {
+      this.phase = "idle";
+      this.failedAt = undefined;
+      if (this.settleTimer !== undefined) {
+        clearTimeout(this.settleTimer);
+        this.settleTimer = undefined;
+      }
+    }
+
     return {
-      phase,
+      phase: this.phase,
       sessionActive: this.sessionActive,
       topic: this.topic,
-      text: pickPhaseCopy(lang, phase, this.counters[phase] ?? 0),
+      text: pickPhaseCopy(lang, this.phase, this.counters[this.phase] ?? 0),
     };
   }
 }
@@ -249,8 +259,9 @@ export function getActivity(lang: CopyLang = "zh"): ActivitySnapshot {
 export function onActivityChange(
   callback: (snapshot: ActivitySnapshot) => void,
 ): () => void {
-  const handler = (lang: CopyLang) => {
-    callback(getActivity(lang));
+  const handler = () => {
+    // 使用默认语言，实际语言由路由层通过 getActivity 参数控制
+    callback(getActivity("zh"));
   };
   sseEmitter.on("change", handler);
   // 立即发送当前状态

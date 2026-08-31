@@ -178,6 +178,8 @@ export interface PluginSettings {
   assistantEnabled: boolean;
   /** 是否启用右侧侧边栏展开/折叠（需先勾选词库助手才可选）。 */
   rightPanelEnabled: boolean;
+  /** 是否显示左侧设置按钮上方的词库按钮。 */
+  settingsAboveMenuEnabled: boolean;
   /** 是否在聊天框工具栏显示词库按钮。 */
   showComposerButton: boolean;
   /** 词库按钮用纯图标显示（隐藏文字标签，仅保留图标）。 */
@@ -247,6 +249,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   autoLearnManualConfirm: true, // 手动确认学习（检测到可学习内容时弹保存/取消，确认后才入库）
   assistantEnabled: true, // 词库助手显隐（主开关，关闭后右侧面板也无法启用）
   rightPanelEnabled: true, // 是否启用右侧侧边栏展开/折叠（需先开启词库助手）
+  settingsAboveMenuEnabled: true, // 是否显示左侧设置按钮上方的词库按钮（默认开启）
   showComposerButton: true, // 是否在聊天框工具栏显示词库按钮
   composerButtonIconOnly: true, // 词库按钮用纯图标显示（隐藏文字，仅保留图标）
   showAIPolishButton: true, // 是否在聊天框工具栏显示 AI 润色按钮

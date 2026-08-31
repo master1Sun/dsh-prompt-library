@@ -14,7 +14,7 @@
  * factory 的 `require` 解析注入的运行时包
  *（@deepseek-ai/dsh-client-runtime/client 等）和 react——它们不会被打包。
  */
-import type { ReactNode } from "react";
+import { type ReactNode } from "react";
 // 副作用引入：注册全局 data-tip 主题自适应提示的监听（取代原生 title，适配黑夜/白天模式）
 import "../components/Tooltip.js";
 import { PromptLibraryButton } from "../components/PromptLibraryButton.js";
@@ -24,9 +24,11 @@ import { ContextRecommendations } from "../components/ContextRecommendations.js"
 // import { TokenMonitorView } from "../components/TokenMonitorView.js";
 // import { PreviewView } from "../components/PreviewView.js";
 import { SettingsSection } from "../components/SettingsSection.js";
+import { registerSettingsAboveMenu, SETTINGS_ABOVE_CSS } from "../components/SettingsAboveMenuButton.js";
 import { en, NS, zh } from "./i18n.js";
 import { startDataChangedSubscription } from "./data-sync.js";
 import { registerWorkspaces } from "./workspace-picker.js";
+import { getSettings } from "./api.js";
 // import { registerProducedFileIntercept } from "./preview-target.js";
 import {
   registerSettingsNavIcon,
@@ -207,5 +209,53 @@ export function apply(ctx: ClientCtx): void {
       },
       SettingsSection as (props: unknown) => ReactNode,
     ),
+  );
+
+  // 设置按钮上方词库菜单按钮：通过 MutationObserver 找到原生「设置」按钮，在其上方注入同样样式的按钮
+  ctx.effect(
+    () => {
+      // 注入样式
+      let style = document.getElementById("pl-settings-above-style") as HTMLStyleElement | null;
+      if (!style) {
+        style = document.createElement("style");
+        style.id = "pl-settings-above-style";
+        style.textContent = SETTINGS_ABOVE_CSS;
+        document.head.appendChild(style);
+      }
+
+      // 注册菜单按钮（纯 DOM 操作，无需 React）
+      const dispose = registerSettingsAboveMenu(
+        (key) => t(key),
+        async () => {
+          try {
+            const settings = await getSettings();
+            return {
+              lexicon: settings.rightPanelEnabled ?? true,
+              importExport: settings.dataManagementEnabled ?? true,
+              persona: settings.personaEnabled ?? true,
+              skill: settings.injectEnabled ?? true,
+              dashboard: settings.dashboardEnabled ?? true,
+              achievement: settings.levelEnabled ?? true,
+              announce: settings.announcementEnabled ?? true,
+            };
+          } catch {
+            return { lexicon: true, importExport: true, persona: true, skill: true, dashboard: true, achievement: true, announce: true };
+          }
+        },
+        async () => {
+          try {
+            const settings = await getSettings();
+            return settings.settingsAboveMenuEnabled ?? true;
+          } catch {
+            return true;
+          }
+        },
+      );
+      return () => {
+        dispose();
+        style?.remove();
+      };
+    },
+    "prompt-library: settings-above menu button",
   );
 }

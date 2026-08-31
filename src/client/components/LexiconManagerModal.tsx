@@ -79,8 +79,9 @@ export function LexiconManagerModal(props: {
   open: boolean;
   onClose: () => void;
   t?: PLTranslate;
+  container?: HTMLElement;
 }): ReactNode {
-  const { open, onClose, t } = props;
+  const { open, onClose, t, container } = props;
   const T = usePLT(t);
   useThemeSync(); // 订阅宿主主题变化，切换白天/黑夜时刷新主题色
   const TONE = getTone();
@@ -1316,13 +1317,13 @@ export function LexiconManagerModal(props: {
       role="dialog"
       aria-modal="true"
       aria-label={T("pl.lexicon.title")}
-      className={PL_DIALOG_OVERLAY}
+      className={container ? undefined : PL_DIALOG_OVERLAY}
       onClick={(e) => {
         // 点击蒙层（空白处）关闭；点击对话框内部不关闭
-        if (e.target === e.currentTarget) onClose();
+        if (!container && e.target === e.currentTarget) onClose();
       }}
     >
-      <style>{PL_DIALOG_CSS}</style>
+      {!container && <style>{PL_DIALOG_CSS}</style>}
       {/* AI 优化进度条动画（与 PromptLibraryButton 查看详情一致的不确定进度） */}
       <style>{`@keyframes pl-progress { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }`}</style>
       <style>{`
@@ -1334,8 +1335,7 @@ export function LexiconManagerModal(props: {
         className={PL_DIALOG}
         style={{
           position: "relative",
-          width: 800,
-          height: 800,
+          ...(container ? {} : { width: 800, height: 800 }),
           maxWidth: "calc(100vw - 40px)",
           maxHeight: "calc(100vh - 40px)",
         }}
@@ -1361,7 +1361,7 @@ export function LexiconManagerModal(props: {
           >
             {T("pl.lexicon.title")}
           </strong>
-          <DialogCloseButton onClick={onClose} label={T("pl.close")} />
+          {!container && <DialogCloseButton onClick={onClose} label={T("pl.close")} />}
         </div>
         {/* 模块说明（与人格管理 / 技能管理说明框一致） */}
         <div
@@ -1966,10 +1966,9 @@ export function LexiconManagerModal(props: {
                   zIndex: 5,
                   display: "flex",
                   flexDirection: "column",
-                  background: TONE.panel,
-                  border: `1px solid ${TONE.borderStrong}`,
+                  background: TONE.row,
                   borderRadius: 10,
-                  padding: "0 10px 10px",
+                  padding: "0 0 10px",
                   boxSizing: "border-box",
                 }}
               >
@@ -1980,7 +1979,7 @@ export function LexiconManagerModal(props: {
                     alignItems: "center",
                     gap: 8,
                     flexShrink: 0,
-                    padding: "8px 0 9px",
+                    padding: "8px 0 9px 8px",
                     borderBottom: `1px solid ${TONE.border}`,
                   }}
                 >
@@ -2059,6 +2058,6 @@ export function LexiconManagerModal(props: {
         />
       </div>
     </div>,
-    document.body,
+    container || document.body,
   );
 }

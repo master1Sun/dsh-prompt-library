@@ -20,8 +20,6 @@ import { createPortal } from "react-dom";
 import type { PluginSettings } from "../../types.js";
 import { DEFAULT_SETTINGS } from "../../types.js";
 import {
-  getActivity,
-  getAssistantStatus,
   getDeepSeekBalance,
   subscribeActivity,
   subscribeAssistantStatus,
@@ -752,6 +750,15 @@ export function PromptAssistant(props: Props): ReactNode {
 
   // 词库管理弹窗：右键菜单「数据管理」入口打开
   const [lexiconOpen, setLexiconOpen] = useState(false);
+
+  // ── 设置面板内嵌模式：将 Modal 渲染到面板内容区而非独立弹窗 ──
+  const panelContainerRef = useRef<HTMLElement | null>(null);
+  const [panelNavKey, setPanelNavKey] = useState<string | null>(null);
+  const closePanelContent = useCallback(() => {
+    setPanelNavKey(null);
+    panelContainerRef.current = null;
+  }, []);
+
   // 右键迷你菜单：记录弹出位置（clientX/Y）；点击外部或菜单项后关闭
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   // 右键菜单 DOM 引用，用于测量真实高度后补偿位置，避免底部溢出
@@ -771,15 +778,47 @@ export function PromptAssistant(props: Props): ReactNode {
     setDashboardOpen(true);
   };
 
-  // 监听会话监控面板「实时注入解析」发出的打开事件：人格 → 人格管理，技能 → 技能管理
+  // 监听词库助手菜单按钮发出的打开事件
   useEffect(() => {
     const openPersona = () => setPersonaOpen(true);
     const openSkill = () => setInjectOpen(true);
+    const openLexicon = () => setLexiconOpen(true);
+    const openImportExport = () => setImportExportOpen(true);
+    const openDashboard = () => openMenuDashboard();
+    const openAchievements = () => openMenuAchievements();
+    const openAnnounce = () => openMenuAnnounce();
+
     window.addEventListener("pl:open-persona-manager", openPersona);
     window.addEventListener("pl:open-skill-manager", openSkill);
+    window.addEventListener("pl:open-lexicon", openLexicon);
+    window.addEventListener("pl:open-import-export", openImportExport);
+    window.addEventListener("pl:open-dashboard", openDashboard);
+    window.addEventListener("pl:open-achievement", openAchievements);
+    window.addEventListener("pl:open-announcement", openAnnounce);
+
+    // 设置面板内嵌模式：在面板内容区直接渲染 Modal
+    const onPanelContent = (e: Event) => {
+      const custom = e as CustomEvent<{ container: HTMLElement; key: string }>;
+      panelContainerRef.current = custom.detail.container;
+      setPanelNavKey(custom.detail.key);
+    };
+    window.addEventListener("pl:show-panel-content", onPanelContent);
+
+    // 设置面板关闭时清除内嵌内容
+    window.addEventListener("pl:hide-panel-content", () => {
+      closePanelContent();
+      panelContainerRef.current = null;
+    });
+
     return () => {
       window.removeEventListener("pl:open-persona-manager", openPersona);
       window.removeEventListener("pl:open-skill-manager", openSkill);
+      window.removeEventListener("pl:open-lexicon", openLexicon);
+      window.removeEventListener("pl:open-import-export", openImportExport);
+      window.removeEventListener("pl:open-dashboard", openDashboard);
+      window.removeEventListener("pl:open-achievement", openAchievements);
+      window.removeEventListener("pl:open-announcement", openAnnounce);
+      window.removeEventListener("pl:show-panel-content", onPanelContent);
     };
   }, []);
 
@@ -925,11 +964,10 @@ export function PromptAssistant(props: Props): ReactNode {
     viewVersion,
   ]);
 
-  // 满级成就（最高等级）解锁「词库助手」开关：满级且用户关闭时才隐藏目前助手与其气泡；
-  // 未满级强制常驻，忽略 assistantEnabled 的历史值，保证旧用户升级后也能恢复显示
-  const assistantMaxed = (status?.level?.next ?? 1) === 0;
-  if (assistantMaxed && !(settings?.assistantEnabled ?? DEFAULT_SETTINGS.assistantEnabled))
-    return null;
+  // 是否隐藏助手：仅跟随 assistantEnabled 设置（不再受等级限制）。
+
+  const hidden = !(settings?.assistantEnabled ?? DEFAULT_SETTINGS.assistantEnabled);
+  if (hidden) return null;
 
   return (
     <>
@@ -1527,6 +1565,33 @@ export function PromptAssistant(props: Props): ReactNode {
         onClose={() => setLexiconOpen(false)}
         t={T}
       />
+      {/* 设置面板内嵌内容：在 SettingsAboveMenu 面板内容区直接渲染对应 Modal */}
+      {panelNavKey && panelContainerRef.current && (() => {
+        const container = panelContainerRef.current;
+        return createPortal(
+          (() => {
+            switch (panelNavKey) {
+              case "lexicon":
+                return <LexiconManagerModal open onClose={closePanelContent} t={T} container={container} />;
+              case "importExport":
+                return <ImportExportModal open onClose={closePanelContent} t={T} container={container} />;
+              case "persona":
+                return <PersonaManagerModal open onClose={closePanelContent} t={T} container={container} />;
+              case "skill":
+                return <PromptInjectPanel open onClose={closePanelContent} t={T} container={container} />;
+              case "dashboard":
+                return <DashboardModal open onClose={closePanelContent} t={T} container={container} />;
+              case "achievement":
+                return <AchievementModal open onClose={closePanelContent} t={T} container={container} />;
+              case "announce":
+                return <AnnouncementModal open onClose={closePanelContent} t={T} container={container} />;
+              default:
+                return null;
+            }
+          })(),
+          container,
+        );
+      })()}
     </>
   );
 }

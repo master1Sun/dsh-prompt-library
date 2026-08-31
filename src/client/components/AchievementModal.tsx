@@ -31,6 +31,8 @@ interface Props {
   onClose: () => void;
   /** 翻译函数。 */
   t: PLT;
+  /** 渲染目标容器，默认 document.body。 */
+  container?: HTMLElement;
 }
 
 /** 等级对应的分阶色（与助手身体/胸前星章同源，QQ 式成长色阶；满级即最高档橙色）。 */
@@ -1496,7 +1498,7 @@ function TarotSlotCard({ no, t, TONE, lang }: { no: number; t: PLT; TONE: ThemeT
 }
 
 /** 居中遮罩成就弹窗（QQ 风格：等级圆环 + 奖牌墙）。 */
-export function AchievementModal({ open, onClose, t }: Props): ReactNode {
+export function AchievementModal({ open, onClose, t, container }: Props): ReactNode {
   useThemeSync(); // 订阅宿主主题变化，切换白天/黑夜时刷新主题色
   const TONE = getTone();
   // 区块小标题样式（跟随当前主题）
@@ -1592,18 +1594,17 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
       role="dialog"
       aria-modal="true"
       aria-label={t("pl.achievements.title")}
-      className={PL_DIALOG_OVERLAY}
+      className={container ? undefined : PL_DIALOG_OVERLAY}
       onClick={(e) => {
         // 点击蒙层（空白处）关闭；点击对话框内部不关闭
-        if (e.target === e.currentTarget) onClose();
+        if (!container && e.target === e.currentTarget) onClose();
       }}
     >
-      <style>{PL_DIALOG_CSS}</style>
+      {!container && <style>{PL_DIALOG_CSS}</style>}
       <div
         className={PL_DIALOG}
         style={{
-          width: 800,
-          height: 800,
+          ...(container ? {} : { width: 800, height: 800 }),
           maxWidth: "calc(100vw - 40px)",
           maxHeight: "calc(100vh - 40px)",
         }}
@@ -1614,7 +1615,7 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
             <BookIcon color={TONE.accent} size={15} />
             <span>{t("pl.achievements.title")}</span>
           </strong>
-          <DialogCloseButton onClick={onClose} label={t("pl.close")} />
+          {!container && <DialogCloseButton onClick={onClose} label={t("pl.close")} />}
         </div>
 
         {/* 说明 */}
@@ -2241,6 +2242,6 @@ export function AchievementModal({ open, onClose, t }: Props): ReactNode {
         </div>
       </div>
     </div>,
-    document.body,
+    container || document.body,
   );
 }

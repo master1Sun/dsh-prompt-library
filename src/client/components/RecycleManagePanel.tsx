@@ -279,7 +279,7 @@ export function RecycleManagePanel(props: { t?: PLTranslate }): ReactNode {
             position: "sticky",
             top: 0,
             zIndex: 3,
-            padding: "2px 0 8px",
+            padding: "2px 10px 8px 10px",
             background: TONE.row,
             borderBottom: `1px solid ${TONE.border}`,
             flexShrink: 0,
@@ -398,7 +398,7 @@ export function RecycleManagePanel(props: { t?: PLTranslate }): ReactNode {
         </div>
 
         {/* 回收内容列表：仅此区域滚动 */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "10px 0", overflowY: "auto", minHeight: 0, flex: 1 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "3px", overflowY: "auto", minHeight: 0, flex: 1}}>
           {trashLoading ? (
             <div style={{ padding: "12px 0", fontSize: 12, color: TONE.muted }}>
               {T("pl.loading")}

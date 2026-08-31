@@ -88,6 +88,8 @@ interface Props {
   onClose: () => void;
   /** 翻译函数。 */
   t: PLT;
+  /** 渲染目标容器，默认 document.body。 */
+  container?: HTMLElement;
 }
 
 /** 栏目题：衬线大字 + 下方主题色短横线。 */
@@ -170,7 +172,7 @@ function NavIcon({
 }
 
 /** 居中遮罩公告弹窗（报纸风格 + 历史翻页）。 */
-export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
+export function AnnouncementModal({ open, onClose, t, container }: Props): ReactNode {
   useThemeSync(); // 订阅宿主主题变化，切换白天/黑夜时刷新主题色
   const TONE = getTone();
   // 语言与界面文案（t）同源推导：界面为英文（t 返回英文）时，日报/成就速报也请求英文版本，
@@ -285,26 +287,25 @@ export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
       role="dialog"
       aria-modal="true"
       aria-label={t("pl.announce.title")}
-      className={PL_DIALOG_OVERLAY}
+      className={container ? undefined : PL_DIALOG_OVERLAY}
       onClick={(e) => {
         // 点击蒙层（空白处）关闭；点击对话框内部不关闭
-        if (e.target === e.currentTarget) onClose();
+        if (!container && e.target === e.currentTarget) onClose();
       }}
     >
-      <style>{PL_DIALOG_CSS}</style>
+      {!container && <style>{PL_DIALOG_CSS}</style>}
       <style>{`@keyframes plPageFade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}.pl-page-turn{animation:plPageFade .32s ease-out}`}</style>
       <div
         className={PL_DIALOG}
         style={{
-          width: 800,
-          height: 800,
+          ...(container ? {} : { width: 800, height: 800 }),
           maxWidth: "calc(100vw - 40px)",
           maxHeight: "calc(100vh - 40px)",
         }}
       >
         {/* 右上角关闭按钮（仅按钮触发） */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", flexShrink: 0 }}>
-          <DialogCloseButton onClick={onClose} label={t("pl.close")} />
+          {!container && <DialogCloseButton onClick={onClose} label={t("pl.close")} />}
         </div>
 
         {/* 内容区：整块限制在弹窗高度内，网格自适应填充，不出现滚动条 */}
@@ -773,7 +774,7 @@ export function AnnouncementModal({ open, onClose, t }: Props): ReactNode {
         </div>
       </div>
     </div>,
-    document.body,
+    container || document.body,
   );
 }
 

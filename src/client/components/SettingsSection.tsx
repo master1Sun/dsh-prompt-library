@@ -17,7 +17,6 @@ import type { PluginSettings } from "../../types.js";
 import { DEFAULT_SETTINGS } from "../../types.js";
 import {
   applyUpdate,
-  getAssistantStatus,
   getSettings,
   getUpdate,
   getUpdateProgress,
@@ -412,8 +411,6 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 记录已保存的 DeepSeek API Key：保存成功后若发生变化，再通知小助手刷新余额
   const lastDeepseekKeyRef = useRef<string>("");
-  // 词库助手开关是否已解锁：等级 >= 3（成就中档）后解锁，可自由开启/关闭；低于 3 级强制常驻
-  const [assistantUnlocked, setAssistantUnlocked] = useState(false);
 
   useEffect(() => {
     getSettings()
@@ -427,13 +424,6 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
     getVersion()
       .then((v) => setInstalledVer(v.installed || ""))
       .catch(() => { /* 忽略 */ });
-  }, []);
-
-  // 拉取游戏化快照，判断词库助手开关是否解锁：等级 >= 3 后可自由开启/关闭
-  useEffect(() => {
-    getAssistantStatus()
-      .then((s) => setAssistantUnlocked((s.level?.level ?? 0) >= 3))
-      .catch(() => setAssistantUnlocked(false));
   }, []);
 
   // 保存设置到后台并通知其他组件
@@ -636,18 +626,14 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
         open={openDisplay}
         onToggle={() => setOpenDisplay((v) => !v)}
       >
-        {/* 词库助手显隐（主开关）：默认常驻锁定为开启并置灰；满级成就解锁后可自由开关，
-             关闭后不再显示词库助手与其气泡；主开关关闭时子项一并置灰（仅灰显，不改动保存值），词库助手显示时始终可配置 */}
+        {/* 词库助手显隐（主开关）：关闭后不再显示词库助手与其气泡；主开关关闭时子项一并置灰（仅灰显，不改动保存值），词库助手显示时始终可配置 */}
         <ToggleRow
           label={T("pl.set.assistant")}
-          desc={`${T("pl.set.assistantDesc")} · ${
-            assistantUnlocked ? T("pl.set.assistantUnlocked") : T("pl.set.assistantUnlock")
-          }`}
-          checked={assistantUnlocked ? draft.assistantEnabled : true}
-          disabled={!assistantUnlocked}
+          desc={T("pl.set.assistantDesc")}
+          checked={draft.assistantEnabled}
           onChange={(v) => updateAndSave({ assistantEnabled: v })}
         />
-        {/* 词库助手子项：主开关关闭（满级解锁态）时一并置灰，词库助手显示时始终可配置；通过缩进呈现父子层级 */}
+        {/* 词库助手子项：主开关关闭时置灰，词库助手显示时始终可配置；通过缩进呈现父子层级 */}
         <div
           style={{
             marginLeft: 22,
@@ -660,7 +646,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             label={T("pl.set.character")}
             desc={T("pl.set.characterDesc")}
             value={draft.assistantCharacter}
-            disabled={assistantUnlocked && !draft.assistantEnabled}
+            disabled={!draft.assistantEnabled}
             onChange={(v) =>
               updateAndSave({
                 assistantCharacter: v === "dshpet" ? "dshpet" : "whale",
@@ -672,6 +658,12 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             ]}
           />
         </div>
+        <ToggleRow
+          label={T("pl.set.settingsAboveMenu")}
+          desc={T("pl.set.settingsAboveMenuDesc")}
+          checked={draft.settingsAboveMenuEnabled}
+          onChange={(v) => updateAndSave({ settingsAboveMenuEnabled: v })}
+        />
         <ToggleRow
           label={T("pl.set.showComposerBtn")}
           desc={T("pl.set.showComposerBtnDesc")}

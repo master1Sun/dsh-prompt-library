@@ -12,17 +12,19 @@ interface Props {
   onClick: () => void;
   /** 无障碍标签/悬浮提示文案（如「关闭」）。 */
   label?: string;
+  /** 为 true 时不显示悬浮提示（仍保留无障碍标签）。 */
+  noTip?: boolean;
 }
 
 /** 弹窗统一关闭按钮（✕）。 */
-export function DialogCloseButton({ onClick, label = "关闭" }: Props): ReactNode {
+export function DialogCloseButton({ onClick, label = "关闭", noTip }: Props): ReactNode {
   const TONE = getTone();
   return (
     <button
       type="button"
       onClick={onClick}
       aria-label={label}
-      data-tip={label}
+      data-tip={noTip ? undefined : label}
       style={{
         flexShrink: 0,
         display: "inline-flex",

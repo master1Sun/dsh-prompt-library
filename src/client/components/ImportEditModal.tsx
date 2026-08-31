@@ -43,6 +43,13 @@ const TONE = {
   red: "var(--dsw-alias-state-error-primary, #ff6b6b)",
 } as const;
 
+/** 让 textarea 高度随内容自适应增长：先重置为 auto 再按 scrollHeight 撑高，超高后由 maxHeight 限制内部滚动。 */
+function autoGrowTextarea(el: HTMLTextAreaElement | null): void {
+  if (!el) return;
+  el.style.height = "auto";
+  el.style.height = `${el.scrollHeight}px`;
+}
+
 /** 弹窗内单条可编辑条目。 */
 interface EditableEntry {
   key: string;
@@ -443,6 +450,8 @@ export function ImportEditModal(props: {
         borderRadius: 24,
         padding: "18px 7px 18px 10px",
         boxSizing: "border-box",
+        // 覆盖 .pl-dialog * 的 scrollbar-gutter:stable：根节点无滚动条，避免右侧预留滚动条位置出现缺口
+        scrollbarGutter: "auto",
       }}
     >
         {/* 标题 + 关闭按钮（弹窗仅通过按钮手动关闭） */}
@@ -789,20 +798,28 @@ export function ImportEditModal(props: {
                   <textarea
                     ref={(el) => {
                       bodyRefs.current[selected.key] = el;
+                      autoGrowTextarea(el);
                     }}
                     value={selected.body}
-                    onChange={(e) => updateEntry(selected.key, { body: e.target.value })}
+                    onChange={(e) => {
+                      updateEntry(selected.key, { body: e.target.value });
+                      autoGrowTextarea(e.target);
+                    }}
                     placeholder={T("pl.skillModal.bodyLabel")}
                     disabled={!selected.checked}
                     spellCheck={false}
                     style={{
                       ...inputStyle,
-                      flex: 1,
-                      // 正文区下限：随可用空间由 flex 撑满；降低下限避免新增摘要列后挤压溢出被裁切
-                      minHeight: 320,
+                      flex: "0 0 auto",
+                      // 正文自适应高度：随内容自动增高，超高后内部滚动（下限保留合理高度）
+                      minHeight: 120,
+                      maxHeight: 288,
+                      height: "auto",
+                      overflowY: "auto",
                       resize: "none",
                       lineHeight: 1.6,
                       whiteSpace: "pre-wrap",
+                      alignSelf: "stretch",
                     }}
                   />
                   <Button

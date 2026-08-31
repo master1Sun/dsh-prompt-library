@@ -65,6 +65,8 @@ interface Props {
   onClose: () => void;
   /** 翻译函数。 */
   t: PLT;
+  /** 渲染容器（可选，默认 document.body）。 */
+  container?: HTMLElement;
 }
 
 /** 词库图标（服务端注入 SOUL 的同款图标，随文本色）。 */
@@ -87,7 +89,7 @@ function BookIcon({ color, size = 14 }: { color: string; size?: number }): React
   );
 }
 
-export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
+export function PersonaManagerModal({ open, onClose, t, container }: Props): ReactNode {
   useThemeSync();
   const TONE = getTone();
 
@@ -949,18 +951,17 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
       role="dialog"
       aria-modal="true"
       aria-label={t("pl.personas.title")}
-      className={PL_DIALOG_OVERLAY}
+      className={container ? undefined : PL_DIALOG_OVERLAY}
       onClick={(e) => {
         // 点击蒙层（空白处）关闭；点击对话框内部不关闭
-        if (e.target === e.currentTarget) onClose();
+        if (!container && e.target === e.currentTarget) onClose();
       }}
     >
-      <style>{PL_DIALOG_CSS}</style>
+      {!container && <style>{PL_DIALOG_CSS}</style>}
       <div
         className={PL_DIALOG}
         style={{
-          width: 800,
-          height: 800,
+          ...(container ? {} : { width: 800, height: 800 }),
           maxWidth: "calc(100vw - 40px)",
           maxHeight: "calc(100vh - 40px)",
         }}
@@ -971,7 +972,7 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
           <strong style={{ flex: 1, fontSize: 15, fontWeight: 600, color: TONE.text }}>
             {t("pl.personas.title")}
           </strong>
-          <DialogCloseButton onClick={onClose} label={t("pl.close")} />
+          {!container && <DialogCloseButton onClick={onClose} label={t("pl.close")} />}
         </div>
 
         {/* 绑定说明 */}
@@ -1442,7 +1443,7 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
         />
       </div>
       </div>,
-        document.body,
+        container || document.body,
       )}
       {/* 点击内容 → 详情查看弹窗（仅查看，编辑入口在卡片头部「编辑」按钮） */}
       {detailId
@@ -1467,11 +1468,7 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
                     <strong style={{ flex: 1, fontSize: 14, fontWeight: 600, color: TONE.text, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {detailName}
                     </strong>
-                    <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => setDetailId(null)}>
-                      <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
-                        <path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                      </svg>
-                    </Button>
+                    <DialogCloseButton noTip onClick={() => setDetailId(null)} label={t("pl.personas.detailTitle")} />
                   </div>
                   {/* 正文：只读展示，超出可滚动；右侧预留与滚动条的 10px 间距 */}
                   <div
@@ -1503,7 +1500,7 @@ export function PersonaManagerModal({ open, onClose, t }: Props): ReactNode {
                   </div>
                 </div>
               </div>,
-              document.body,
+              container || document.body,
             );
           })()
         : null}

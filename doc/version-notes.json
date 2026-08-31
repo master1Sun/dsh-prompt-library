@@ -1,5 +1,29 @@
 [
   {
+    "version": "0.10.0",
+    "date": "2026-08-31",
+    "zh": {
+      "title": "词库界面重制 · 词库按钮开关 · 正文自适应 · 详情弹窗统一",
+      "items": [
+        "词库界面重制：左侧词库按钮打开的面板改为居中「左侧导航 + 右侧内容」布局，内容平铺铺满右侧，滚动条只出现在内容列表内，并移除多余边框与投影。",
+        "词库导航优化：面板标题由「词库助手」改为「词库」，左侧导航收窄适配 4 字宽度，图标与右键菜单统一；数据管理二级面板（标签 / 回收站）背景、间距与标题均统一调整。",
+        "词库按钮开关：设置新增「左侧显示词库按钮」开关（默认开启），关闭后左侧词库按钮即时隐藏，可随时再开启。",
+        "正文自适应高度：导入导出预览与技能导入导出的正文编辑区随内容自动增高，超高后自动内部滚动，无需手动拖拽。",
+        "详情弹窗统一：技能管理与人格管理查看详情弹窗的关闭图标统一为通用样式，移除边框与悬浮提示，白天 / 黑夜模式下均清晰可见、可正常点击。"
+      ]
+    },
+    "en": {
+      "title": "Lexicon UI revamp · Library button toggle · Auto-height body · Unified detail dialogs",
+      "items": [
+        "Lexicon revamp: the panel opened from the left-side library button becomes a centered \"left nav + right content\" layout — content fills the right pane, scrolling stays inside the content list, and extra borders and shadows are removed.",
+        "Nav polish: the panel title is shortened to \"Library\", the left nav narrows to fit 4 CJK characters, and icons match the context menu; secondary data panels (tags / trash) get unified backgrounds, spacing and titles.",
+        "Library button toggle: a new \"Show library button on the left\" setting (default on) instantly hides the left-side button when disabled and brings it back when enabled.",
+        "Auto-height body: the body editor in both import-export preview and skill import/export grows with its content and scrolls internally past the cap — no manual dragging needed.",
+        "Unified detail dialogs: the close icon in skill and persona detail dialogs now matches the common style, border- and tooltip-free, clearly visible and clickable in both light and dark mode."
+      ]
+    }
+  },
+  {
     "version": "0.9.6",
     "date": "2026-08-30",
     "zh": {

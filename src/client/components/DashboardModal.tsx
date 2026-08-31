@@ -21,10 +21,12 @@ interface Props {
   onClose: () => void;
   /** 翻译函数。 */
   t: PLT;
+  /** 渲染容器（可选，默认 document.body）。 */
+  container?: HTMLElement;
 }
 
 /** 居中遮罩看板弹窗。 */
-export function DashboardModal({ open, onClose, t }: Props): ReactNode {
+export function DashboardModal({ open, onClose, t, container }: Props): ReactNode {
   useThemeSync(); // 订阅宿主主题变化，切换白天/黑夜时刷新主题色
   const TONE = getTone();
 
@@ -35,18 +37,17 @@ export function DashboardModal({ open, onClose, t }: Props): ReactNode {
       role="dialog"
       aria-modal="true"
       aria-label={t("pl.ctx.dashboard")}
-      className={PL_DIALOG_OVERLAY}
+      className={container ? undefined : PL_DIALOG_OVERLAY}
       onClick={(e) => {
         // 点击蒙层（空白处）关闭；点击对话框内部不关闭
-        if (e.target === e.currentTarget) onClose();
+        if (!container && e.target === e.currentTarget) onClose();
       }}
     >
-      <style>{PL_DIALOG_CSS}</style>
+      {!container && <style>{PL_DIALOG_CSS}</style>}
       <div
         className={PL_DIALOG}
         style={{
-          width: 800,
-          height: 800,
+          ...(container ? {} : { width: 800, height: 800 }),
           maxWidth: "calc(100vw - 40px)",
           maxHeight: "calc(100vh - 40px)",
           display: "flex",
@@ -59,7 +60,7 @@ export function DashboardModal({ open, onClose, t }: Props): ReactNode {
             <BookIcon color={TONE.accent} size={15} />
             <span style={{ minWidth: 0 }}>{t("pl.ctx.dashboard")}</span>
           </strong>
-          <DialogCloseButton onClick={onClose} label={t("pl.close")} />
+          {!container && <DialogCloseButton onClick={onClose} label={t("pl.close")} />}
         </div>
 
         {/* 说明 */}
@@ -85,6 +86,6 @@ export function DashboardModal({ open, onClose, t }: Props): ReactNode {
         </div>
       </div>
     </div>,
-    document.body,
+    container || document.body,
   );
 }

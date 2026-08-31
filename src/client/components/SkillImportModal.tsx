@@ -58,7 +58,8 @@ const TONE = {
   border: "var(--dsw-alias-border-l2, rgba(196, 211, 232, 0.16))",
   borderStrong: "var(--dsw-alias-border-l3, rgba(196, 211, 232, 0.31))",
   accent: "var(--dsw-alias-brand-primary, #8ec5ff)",
-  accentSoft: "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 18%, transparent)",
+  accentSoft:
+    "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 18%, transparent)",
   success: "var(--dsw-alias-state-success-primary, #78dda0)",
   red: "var(--dsw-alias-state-error-primary, #ff6b6b)",
 } as const;
@@ -151,16 +152,15 @@ function saveProjectPath(path: string): void {
 
 /** 把 kebab-case 技能名转成可读标题（如 prompt-writing → Prompt Writing）；空名返回空串。 */
 function readableFromName(name: string): string {
-  const words = name
-    .trim()
-    .replace(/[-_]+/g, " ")
-    .split(" ")
-    .filter(Boolean);
+  const words = name.trim().replace(/[-_]+/g, " ").split(" ").filter(Boolean);
   return words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
 
 /** 把 AI 生成失败原因码转为本地化提示文案。 */
-function skillFailReason(fail: SkillDescribeFail | undefined, T: PLTranslate): string {
+function skillFailReason(
+  fail: SkillDescribeFail | undefined,
+  T: PLTranslate,
+): string {
   switch (fail) {
     case "no-llm":
       return T("pl.skillModal.aiUnavailable");
@@ -184,15 +184,23 @@ function parseJsonSkillEntries(raw: unknown): Array<{
   body: string;
   summary?: string;
 }> {
-  const obj = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : undefined;
+  const obj =
+    raw && typeof raw === "object"
+      ? (raw as Record<string, unknown>)
+      : undefined;
   const list = Array.isArray(raw)
     ? raw
     : obj
       ? (obj.skills ?? obj.entries ?? obj.prompts)
       : undefined;
   if (!Array.isArray(list)) return [];
-  const out: Array<{ name?: string; promptId?: string; title: string; body: string; summary?: string }> =
-    [];
+  const out: Array<{
+    name?: string;
+    promptId?: string;
+    title: string;
+    body: string;
+    summary?: string;
+  }> = [];
   for (const item of list) {
     if (!item || typeof item !== "object") continue;
     const it = item as Record<string, unknown>;
@@ -201,8 +209,12 @@ function parseJsonSkillEntries(raw: unknown): Array<{
     out.push({
       title: it.title.trim(),
       body: it.body,
-      ...(typeof it.name === "string" && it.name.trim() ? { name: it.name.trim() } : {}),
-      ...(typeof it.summary === "string" && it.summary.trim() ? { summary: it.summary.trim() } : {}),
+      ...(typeof it.name === "string" && it.name.trim()
+        ? { name: it.name.trim() }
+        : {}),
+      ...(typeof it.summary === "string" && it.summary.trim()
+        ? { summary: it.summary.trim() }
+        : {}),
       ...(typeof it.promptId === "string" && it.promptId.trim()
         ? { promptId: it.promptId.trim() }
         : {}),
@@ -249,7 +261,10 @@ function fixTemplateVars(body: string, defaultVar: string): string {
 }
 
 /** 一键修复单条条目：补全空标题、修复正文模板变量；返回修复后的条目 + 修复记录。 */
-function autoFixEntry(entry: EditableEntry, T: PLT): { entry: EditableEntry; fixes: string[] } {
+function autoFixEntry(
+  entry: EditableEntry,
+  T: PLT,
+): { entry: EditableEntry; fixes: string[] } {
   const fixes: string[] = [];
   let title = entry.title.trim();
   if (!title) {
@@ -287,7 +302,15 @@ export function SkillImportModal(props: {
   /** 导入/导出成功后的汇总文案回调（由一级弹窗在左下角气泡展示，展示后关闭本弹窗）。 */
   onSaved?: (summary: string) => void;
 }): ReactNode {
-  const { open, onClose, t, mode = "import", initialEntries, onImported, onSaved } = props;
+  const {
+    open,
+    onClose,
+    t,
+    mode = "import",
+    initialEntries,
+    onImported,
+    onSaved,
+  } = props;
   const T = usePLT(t);
   const [entries, setEntries] = useState<EditableEntry[]>([]);
   const [validation, setValidation] = useState<ValidateResult | null>(null);
@@ -302,7 +325,9 @@ export function SkillImportModal(props: {
     done: number;
     errors: { title: string; reason: string }[];
   } | null>(null);
-  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(
+    null,
+  );
   // 导出模式 AI 补充进度：当前已完成条数 / 总条数（用于进度条）
   const [aiDone, setAiDone] = useState(0);
   const [aiTotal, setAiTotal] = useState(0);
@@ -314,6 +339,15 @@ export function SkillImportModal(props: {
   // 导出模式：自定义 JSON 数据文件输入
   const jsonRef = useRef<HTMLInputElement | null>(null);
   const bodyRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
+  // 让 textarea 高度随内容自适应增长：先重置为 auto 再按 scrollHeight 撑高，超高后由 maxHeight 限制内部滚动
+  const autoGrowTextarea = useCallback(
+    (el: HTMLTextAreaElement | null): void => {
+      if (!el) return;
+      el.style.height = "auto";
+      el.style.height = `${el.scrollHeight}px`;
+    },
+    [],
+  );
   const seqRef = useRef(0);
   // 右栏编辑窗口当前选中的条目 key
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -411,7 +445,10 @@ export function SkillImportModal(props: {
     }
     // 2) 浏览式目录选择（browse capability）：打开内置目录浏览弹窗
     if (!isDirectoryBrowserAvailable()) {
-      setMsg({ text: T("pl.skillModal.directoryPickerUnavailable"), error: true });
+      setMsg({
+        text: T("pl.skillModal.directoryPickerUnavailable"),
+        error: true,
+      });
       return;
     }
     setDirPickerOpen(true);
@@ -427,7 +464,9 @@ export function SkillImportModal(props: {
           const ident = it.promptId ?? it.name;
           if (
             ident &&
-            next.some((e) => e.source === it.source && (e.promptId ?? e.name) === ident)
+            next.some(
+              (e) => e.source === it.source && (e.promptId ?? e.name) === ident,
+            )
           ) {
             continue;
           }
@@ -584,7 +623,10 @@ export function SkillImportModal(props: {
           );
         },
         (err: unknown) => {
-          setMsg({ text: err instanceof Error ? err.message : String(err), error: true });
+          setMsg({
+            text: err instanceof Error ? err.message : String(err),
+            error: true,
+          });
         },
       );
     },
@@ -607,25 +649,35 @@ export function SkillImportModal(props: {
       }
     }
     if (!isDirectoryBrowserAvailable()) {
-      setMsg({ text: T("pl.skillModal.directoryPickerUnavailable"), error: true });
+      setMsg({
+        text: T("pl.skillModal.directoryPickerUnavailable"),
+        error: true,
+      });
       return;
     }
     setScanDirPickerOpen(true);
   }, [runScanDir, T]);
 
   /** 更新某条目字段；编辑会使之前的校验与修复记录失效。 */
-  const updateEntry = useCallback((key: string, patch: Partial<EditableEntry>) => {
-    setEntries((prev) => prev.map((e) => (e.key === key ? { ...e, ...patch } : e)));
-    setValidation(null);
-    setFixLog([]);
-    setFillLog([]);
-    setAiState("idle");
-    setAiResult(null);
-  }, []);
+  const updateEntry = useCallback(
+    (key: string, patch: Partial<EditableEntry>) => {
+      setEntries((prev) =>
+        prev.map((e) => (e.key === key ? { ...e, ...patch } : e)),
+      );
+      setValidation(null);
+      setFixLog([]);
+      setFillLog([]);
+      setAiState("idle");
+      setAiResult(null);
+    },
+    [],
+  );
 
   /** 勾选 / 取消勾选条目。 */
   const toggleChecked = useCallback((key: string) => {
-    setEntries((prev) => prev.map((e) => (e.key === key ? { ...e, checked: !e.checked } : e)));
+    setEntries((prev) =>
+      prev.map((e) => (e.key === key ? { ...e, checked: !e.checked } : e)),
+    );
   }, []);
 
   /** 全选 / 取消全选全部条目（全部已勾选时再点则取消全选；列表为空时无操作）。 */
@@ -702,10 +754,12 @@ export function SkillImportModal(props: {
           const start = opens.pop()!;
           const inner = body.slice(start + 2, m.index).trim();
           if (!inner) errs.push(T("pl.skillModal.varEmpty"));
-          else if (/[{}\n]/.test(inner)) errs.push(T("pl.skillModal.varInvalid", { name: inner }));
+          else if (/[{}\n]/.test(inner))
+            errs.push(T("pl.skillModal.varInvalid", { name: inner }));
         }
       }
-      if (opens.length > 0) errs.push(T("pl.skillModal.varUnclosed", { n: opens.length }));
+      if (opens.length > 0)
+        errs.push(T("pl.skillModal.varUnclosed", { n: opens.length }));
       return errs;
     },
     [T],
@@ -737,7 +791,9 @@ export function SkillImportModal(props: {
             continue;
           }
           const inner = body.slice(i + 2, close);
-          const name = inner.replace(/[{}]/g, " ").replace(/\s+/g, " ").trim() || defaultVar;
+          const name =
+            inner.replace(/[{}]/g, " ").replace(/\s+/g, " ").trim() ||
+            defaultVar;
           out += `[${name}]`;
           changes.push(`{{${inner.trim() || name}}} → [${name}]`);
           i = close + 2;
@@ -801,7 +857,11 @@ export function SkillImportModal(props: {
           issues.push({ key: e.key, entryTitle, message: m, fixable: true });
         }
       }
-      return { ok: issues.length === 0, issues, fixable: issues.some((i) => i.fixable) };
+      return {
+        ok: issues.length === 0,
+        issues,
+        fixable: issues.some((i) => i.fixable),
+      };
     },
     [T, validateTemplateVars],
   );
@@ -877,10 +937,16 @@ export function SkillImportModal(props: {
           // 技能名/摘要为空时由 AI 补全；已有内容则保留（尊重手动填写）
           updates.set(entry.key, {
             name: entry.name.trim() ? entry.name : desc.desc.name,
-            summary: entry.summary.trim() ? entry.summary : desc.desc.description,
+            summary: entry.summary.trim()
+              ? entry.summary
+              : desc.desc.description,
           });
         } else {
-          errors.push({ key: entry.key, title: entry.title, reason: skillFailReason(desc?.fail, T) });
+          errors.push({
+            key: entry.key,
+            title: entry.title,
+            reason: skillFailReason(desc?.fail, T),
+          });
         }
       } catch (err) {
         // 用户已取消：当前请求被 abort，不再将其记为失败，直接跳出
@@ -897,9 +963,11 @@ export function SkillImportModal(props: {
     // 应用 AI 结果：补全技能名/摘要，并标记失败条目（行内红色高亮 + 原因）
     const next = entries.map((e) => {
       const update = updates.get(e.key);
-      if (update) return { ...e, ...update, aiFailed: false, aiFailReason: undefined };
+      if (update)
+        return { ...e, ...update, aiFailed: false, aiFailReason: undefined };
       const error = errors.find((err) => err.key === e.key);
-      if (error && e.checked) return { ...e, aiFailed: true, aiFailReason: error.reason };
+      if (error && e.checked)
+        return { ...e, aiFailed: true, aiFailReason: error.reason };
       return e;
     });
     setEntries(next);
@@ -918,7 +986,8 @@ export function SkillImportModal(props: {
     if (!validation || validation.ok) return;
     const fixesLog: string[] = [];
     const next = entries.map((e) => {
-      if (!validation.issues.some((i) => i.key === e.key && i.fixable)) return e;
+      if (!validation.issues.some((i) => i.key === e.key && i.fixable))
+        return e;
       const res = autoFixEntry(e, T);
       for (const f of res.fixes) fixesLog.push(`「${res.entry.title}」${f}`);
       return res.entry;
@@ -953,7 +1022,10 @@ export function SkillImportModal(props: {
       },
       (err: unknown) => {
         setSaving(false);
-        setMsg({ text: err instanceof Error ? err.message : String(err), error: true });
+        setMsg({
+          text: err instanceof Error ? err.message : String(err),
+          error: true,
+        });
       },
     );
   }, [entries, onImported, onSaved, T]);
@@ -989,29 +1061,43 @@ export function SkillImportModal(props: {
         summary: e.summary,
       }));
       exportSkillEntries(payload, exportScope, rootPath).then(
-          (res) => {
-            setSaving(false);
-            // 导出成功后由一级弹窗在左下角气泡展示汇总，并关闭本弹窗
-            const errNote = res.errors.length
-              ? T("pl.skillModal.savedExportErrors", { n: res.errors.length })
-              : "";
-            const rootNote = res.root
-              ? T("pl.skillModal.exportRoot", { root: res.root })
-              : "";
-            onSaved?.(
-              `${T("pl.skillModal.savedExport", { exported: res.exported })} · ${rootNote}${errNote}`,
-            );
-          },
-          (err: unknown) => {
-            setSaving(false);
-            setMsg({ text: err instanceof Error ? err.message : String(err), error: true });
-          },
-        );
+        (res) => {
+          setSaving(false);
+          // 导出成功后由一级弹窗在左下角气泡展示汇总，并关闭本弹窗
+          const errNote = res.errors.length
+            ? T("pl.skillModal.savedExportErrors", { n: res.errors.length })
+            : "";
+          const rootNote = res.root
+            ? T("pl.skillModal.exportRoot", { root: res.root })
+            : "";
+          onSaved?.(
+            `${T("pl.skillModal.savedExport", { exported: res.exported })} · ${rootNote}${errNote}`,
+          );
+        },
+        (err: unknown) => {
+          setSaving(false);
+          setMsg({
+            text: err instanceof Error ? err.message : String(err),
+            error: true,
+          });
+        },
+      );
       return;
     }
     // 导入模式：直接执行入库
     runImport();
-  }, [validation, saving, entries, mode, exportScope, projectCwd, projectPathInput, T, onSaved, runImport]);
+  }, [
+    validation,
+    saving,
+    entries,
+    mode,
+    exportScope,
+    projectCwd,
+    projectPathInput,
+    T,
+    onSaved,
+    runImport,
+  ]);
 
   const checkedCount = entries.filter((e) => e.checked).length;
   const allChecked = entries.length > 0 && checkedCount === entries.length;
@@ -1019,7 +1105,10 @@ export function SkillImportModal(props: {
   const selected = entries.find((e) => e.key === selectedKey) ?? null;
   // 是否存在需要浮动提示的反馈内容（校验结果 / 修复记录 / 操作信息 / 导出 AI 补充）
   const hasFeedback =
-    msg != null || validation != null || fixLog.length > 0 || (mode === "export" && aiState !== "idle");
+    msg != null ||
+    validation != null ||
+    fixLog.length > 0 ||
+    (mode === "export" && aiState !== "idle");
 
   // 反馈内容变化时浮出气泡；气泡常开则启动自动消失定时
   // 依赖反馈内容本身（而非仅 hasFeedback 布尔值）：手动关闭气泡后 validation 等仍非空，
@@ -1054,7 +1143,9 @@ export function SkillImportModal(props: {
     <div
       role="dialog"
       aria-modal="true"
-      aria-label={T(mode === "export" ? "pl.skillModal.exportTitle" : "pl.skillModal.title")}
+      aria-label={T(
+        mode === "export" ? "pl.skillModal.exportTitle" : "pl.skillModal.title",
+      )}
       onClick={(e) => e.stopPropagation()}
       style={{
         position: "absolute",
@@ -1066,674 +1157,812 @@ export function SkillImportModal(props: {
         borderRadius: 24,
         padding: "18px 7px 18px 10px",
         boxSizing: "border-box",
+        // 覆盖 .pl-dialog * 的 scrollbar-gutter:stable：根节点无滚动条，避免右侧预留滚动条位置出现缺口
+        scrollbarGutter: "auto",
       }}
     >
-        {/* 标题 + 关闭按钮（弹窗仅通过按钮手动关闭） */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-          <BookIcon color={TONE.accent} />
-          <strong style={{ fontSize: 15, fontWeight: 600, flex: 1, minWidth: 0, color: TONE.text }}>
-            {T(mode === "export" ? "pl.skillModal.exportTitle" : "pl.skillModal.title")}
-          </strong>
-          <DialogCloseButton onClick={onClose} label={T("pl.close")} />
-        </div>
-        {/* 模块说明（与人格管理 / 技能管理说明框一致） */}
-        <div
+      {/* 标题 + 关闭按钮（弹窗仅通过按钮手动关闭） */}
+      <div
+        style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}
+      >
+        <BookIcon color={TONE.accent} />
+        <strong
           style={{
-            marginTop: 10,
-            fontSize: 11.5,
-            lineHeight: 1.6,
-            color: TONE.quiet,
-            background: TONE.accentSoft,
-            border: `1px solid ${TONE.border}`,
-            borderRadius: 7,
-            padding: "7px 10px",
-            flexShrink: 0,
+            fontSize: 15,
+            fontWeight: 600,
+            flex: 1,
+            minWidth: 0,
+            color: TONE.text,
           }}
         >
-          {T(mode === "export" ? "pl.skillModal.exportSubtitle" : "pl.skillModal.subtitle")}
-        </div>
+          {T(
+            mode === "export"
+              ? "pl.skillModal.exportTitle"
+              : "pl.skillModal.title",
+          )}
+        </strong>
+        <DialogCloseButton onClick={onClose} label={T("pl.close")} />
+      </div>
+      {/* 模块说明（与人格管理 / 技能管理说明框一致） */}
+      <div
+        style={{
+          marginTop: 10,
+          fontSize: 11.5,
+          lineHeight: 1.6,
+          color: TONE.quiet,
+          background: TONE.accentSoft,
+          border: `1px solid ${TONE.border}`,
+          borderRadius: 7,
+          padding: "7px 10px",
+          flexShrink: 0,
+        }}
+      >
+        {T(
+          mode === "export"
+            ? "pl.skillModal.exportSubtitle"
+            : "pl.skillModal.subtitle",
+        )}
+      </div>
 
-        {/* 左右分栏主体：左栏操作+列表 / 右栏编辑窗口 */}
-        <div style={{ flex: 1, minHeight: 0, marginTop: 10, display: "flex", gap: 12, alignItems: "stretch", position: "relative" }}>
-          {/* 左栏：模式操作区 + 紧凑条目列表 */}
-          <div
-            style={{
-              flex: "1 1 0",
-              minWidth: 0,
-              display: "flex",
-              flexDirection: "column",
-              minHeight: 0,
-              boxSizing: "border-box",
-              background: TONE.row,
-              border: `1px solid ${TONE.border}`,
-              borderRadius: 10,
-              padding: 10,
-            }}
-          >
-            {/* 工具栏（仅导入模式）：选择文件 / 扫描目录 */}
-            {mode === "import" && (
-              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flexShrink: 0, marginBottom: 8 }}>
-                <Button
-                  type="button"
-                  variant="primary"
-                  size="sm"
-                  className={plBtn("primary", "sm")}
-                  onClick={() => fileRef.current?.click()}
-                >
-                  {T("pl.skillModal.chooseFile")}
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className={plBtn("ghost", "sm")}
-                  onClick={scanSkills}
-                >
-                  {T("pl.skillModal.scanSkills")}
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className={plBtn("ghost", "sm")}
-                  onClick={scanFolder}
-                >
-                  {T("pl.skillModal.scanFolder")}
-                </Button>
+      {/* 左右分栏主体：左栏操作+列表 / 右栏编辑窗口 */}
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          marginTop: 10,
+          display: "flex",
+          gap: 12,
+          alignItems: "stretch",
+          position: "relative",
+        }}
+      >
+        {/* 左栏：模式操作区 + 紧凑条目列表 */}
+        <div
+          style={{
+            flex: "1 1 0",
+            minWidth: 0,
+            display: "flex",
+            flexDirection: "column",
+            minHeight: 0,
+            boxSizing: "border-box",
+            background: TONE.row,
+            border: `1px solid ${TONE.border}`,
+            borderRadius: 10,
+            padding: 10,
+          }}
+        >
+          {/* 工具栏（仅导入模式）：选择文件 / 扫描目录 */}
+          {mode === "import" && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                flexWrap: "wrap",
+                flexShrink: 0,
+                marginBottom: 8,
+              }}
+            >
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                className={plBtn("primary", "sm")}
+                onClick={() => fileRef.current?.click()}
+              >
+                {T("pl.skillModal.chooseFile")}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className={plBtn("ghost", "sm")}
+                onClick={scanSkills}
+              >
+                {T("pl.skillModal.scanSkills")}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className={plBtn("ghost", "sm")}
+                onClick={scanFolder}
+              >
+                {T("pl.skillModal.scanFolder")}
+              </Button>
+            </div>
+          )}
+
+          {/* 导出范围（仅导出模式）：通用 / 项目 / 私有 三选一，决定技能写盘位置与注入方式 */}
+          {mode === "export" && (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+                flexShrink: 0,
+                marginBottom: 8,
+              }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 560, color: TONE.muted }}>
+                {T("pl.skillModal.exportScope")}
               </div>
-            )}
-
-            {/* 导出范围（仅导出模式）：通用 / 项目 / 私有 三选一，决定技能写盘位置与注入方式 */}
-            {mode === "export" && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0, marginBottom: 8 }}>
-                <div style={{ fontSize: 12, fontWeight: 560, color: TONE.muted }}>
-                  {T("pl.skillModal.exportScope")}
-                </div>
-                {/* 三个导出范围选项横排：通用 / 项目 / 私有 */}
-                <div style={{ display: "flex", gap: 8, flexDirection: "row" }}>
-                  {(
-                    [
-                      {
-                        value: "global",
-                        label: T("pl.skillModal.scopeGlobal"),
-                        desc: T("pl.skillModal.scopeGlobalDesc"),
-                        path: "~/.dsh/skills/",
-                      },
-                      {
-                        value: "project",
-                        label: T("pl.skillModal.scopeProject"),
-                        desc: T("pl.skillModal.scopeProjectDesc"),
-                        path: projectCwd ? `${projectCwd}` : T("pl.skillModal.projectNoPath"),
-                      },
-                      {
-                        value: "private",
-                        label: T("pl.skillModal.scopePrivate"),
-                        desc: T("pl.skillModal.scopePrivateDesc"),
-                        path: T("pl.skillModal.scopePrivatePath"),
-                      },
-                    ] as Array<{ value: SkillExportScope; label: string; desc: string; path: string }>
-                  ).map((opt) => {
-                    const active = exportScope === opt.value;
-                    return (
-                      <button
-                        key={opt.value}
-                        type="button"
-                        onClick={() => changeScope(opt.value)}
-                        aria-pressed={active}
+              {/* 三个导出范围选项横排：通用 / 项目 / 私有 */}
+              <div style={{ display: "flex", gap: 8, flexDirection: "row" }}>
+                {(
+                  [
+                    {
+                      value: "global",
+                      label: T("pl.skillModal.scopeGlobal"),
+                      desc: T("pl.skillModal.scopeGlobalDesc"),
+                      path: "~/.dsh/skills/",
+                    },
+                    {
+                      value: "project",
+                      label: T("pl.skillModal.scopeProject"),
+                      desc: T("pl.skillModal.scopeProjectDesc"),
+                      path: projectCwd
+                        ? `${projectCwd}`
+                        : T("pl.skillModal.projectNoPath"),
+                    },
+                    {
+                      value: "private",
+                      label: T("pl.skillModal.scopePrivate"),
+                      desc: T("pl.skillModal.scopePrivateDesc"),
+                      path: T("pl.skillModal.scopePrivatePath"),
+                    },
+                  ] as Array<{
+                    value: SkillExportScope;
+                    label: string;
+                    desc: string;
+                    path: string;
+                  }>
+                ).map((opt) => {
+                  const active = exportScope === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => changeScope(opt.value)}
+                      aria-pressed={active}
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        padding: "6px 10px",
+                        textAlign: "left",
+                        borderRadius: 8,
+                        cursor: "pointer",
+                        fontFamily: MONO,
+                        background: active
+                          ? "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 10%, transparent)"
+                          : "transparent",
+                        border: `1px solid ${
+                          active
+                            ? "var(--dsw-alias-brand-primary, #8ec5ff)"
+                            : TONE.border
+                        }`,
+                        transition:
+                          "border-color .24s cubic-bezier(.22,1,.36,1), background-color .24s cubic-bezier(.22,1,.36,1)",
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!active)
+                          e.currentTarget.style.borderColor = TONE.borderStrong;
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!active)
+                          e.currentTarget.style.borderColor = TONE.border;
+                      }}
+                    >
+                      {/* 按钮内容：上方标签 + 下方说明（竖排），横排的三个按钮各自收窄为紧凑矩形，避免溢出 */}
+                      <span
                         style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "flex-start",
+                          gap: 2,
                           flex: 1,
                           minWidth: 0,
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 8,
-                          padding: "6px 10px",
-                          textAlign: "left",
-                          borderRadius: 8,
-                          cursor: "pointer",
-                          fontFamily: MONO,
-                          background: active
-                            ? "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 10%, transparent)"
-                            : "transparent",
-                          border: `1px solid ${
-                            active ? "var(--dsw-alias-brand-primary, #8ec5ff)" : TONE.border
-                          }`,
-                          transition:
-                            "border-color .24s cubic-bezier(.22,1,.36,1), background-color .24s cubic-bezier(.22,1,.36,1)",
-                        }}
-                        onMouseEnter={(e) => {
-                          if (!active) e.currentTarget.style.borderColor = TONE.borderStrong;
-                        }}
-                        onMouseLeave={(e) => {
-                          if (!active) e.currentTarget.style.borderColor = TONE.border;
                         }}
                       >
-                        {/* 按钮内容：上方标签 + 下方说明（竖排），横排的三个按钮各自收窄为紧凑矩形，避免溢出 */}
                         <span
                           style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            alignItems: "flex-start",
-                            gap: 2,
-                            flex: 1,
-                            minWidth: 0,
+                            fontSize: 12,
+                            fontWeight: 560,
+                            color: active ? TONE.accent : TONE.text,
+                            lineHeight: 1.4,
+                            maxWidth: "100%",
+                            overflow: "hidden",
+                            whiteSpace: "nowrap",
+                            textOverflow: "ellipsis",
                           }}
                         >
-                          <span
-                            style={{
-                              fontSize: 12,
-                              fontWeight: 560,
-                              color: active ? TONE.accent : TONE.text,
-                              lineHeight: 1.4,
-                              maxWidth: "100%",
-                              overflow: "hidden",
-                              whiteSpace: "nowrap",
-                              textOverflow: "ellipsis",
-                            }}
-                          >
-                            {opt.label}
-                          </span>
-                          <span
-                            style={{
-                              fontSize: 10.5,
-                              color: TONE.quiet,
-                              lineHeight: 1.4,
-                              width: "100%",
-                              minWidth: 0,
-                              wordBreak: "break-all",
-                              display: "-webkit-box",
-                              WebkitLineClamp: 3,
-                              WebkitBoxOrient: "vertical",
-                              overflow: "hidden",
-                            }}
-                          >
-                            {opt.desc}
-                          </span>
+                          {opt.label}
                         </span>
-                      </button>
-                    );
-                  })}
-                </div>
-                {/* 项目技能：始终展示路径输入框，支持手动输入或用「浏览」选择目录填充；
-                    已解析到当前项目路径时自动预填，用户可随时修改导出位置 */}
-                {/* 项目路径输入区：恒占固定高度，仅「项目」范围显示内容，切换导出范围时列表不因高度变化而跳动 */}
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 4,
-                    flexShrink: 0,
-                    height: 56,
-                    overflow: "hidden",
-                  }}
-                >
-                  {/* 非项目范围：通用/私有 展示功能说明（路径、使用方式），保持恒定区域高度 */}
-                  {exportScope === "project" ? (
-                    <>
-                      <div
-                        style={{
-                          fontSize: 11,
-                          color: projectCwdLoading
-                            ? TONE.quiet
-                            : projectCwd
-                              ? TONE.quiet
-                              : TONE.red,
-                          whiteSpace: "nowrap",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                        }}
-                      >
-                        {projectCwdLoading
-                          ? T("pl.skillModal.projectPathResolving")
-                          : projectCwd
-                            ? T("pl.skillModal.projectPathHintResolved")
-                            : T("pl.skillModal.projectPathHint")}
-                      </div>
-                      <div style={{ display: "flex", gap: 6 }}>
-                        <input
-                          type="text"
-                          value={projectPathInput || projectCwd || ""}
-                          onChange={(e) => setProjectPathInput(e.target.value)}
-                          placeholder={T("pl.skillModal.projectPathPlaceholder")}
-                          spellCheck={false}
-                          disabled={projectCwdLoading}
-                          style={inputStyle}
-                        />
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className={plBtn("ghost", "sm")}
-                          onClick={handlePickDirectory}
-                          disabled={projectCwdLoading}
-                          style={{ flexShrink: 0, minWidth: 64 }}
+                        <span
+                          style={{
+                            fontSize: 10.5,
+                            color: TONE.quiet,
+                            lineHeight: 1.4,
+                            width: "100%",
+                            minWidth: 0,
+                            wordBreak: "break-all",
+                            display: "-webkit-box",
+                            WebkitLineClamp: 3,
+                            WebkitBoxOrient: "vertical",
+                            overflow: "hidden",
+                          }}
                         >
-                          {T("pl.skillModal.browse")}
-                        </Button>
-                      </div>
-                    </>
-                  ) : (
+                          {opt.desc}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              {/* 项目技能：始终展示路径输入框，支持手动输入或用「浏览」选择目录填充；
+                    已解析到当前项目路径时自动预填，用户可随时修改导出位置 */}
+              {/* 项目路径输入区：恒占固定高度，仅「项目」范围显示内容，切换导出范围时列表不因高度变化而跳动 */}
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 4,
+                  flexShrink: 0,
+                  height: 56,
+                  overflow: "hidden",
+                }}
+              >
+                {/* 非项目范围：通用/私有 展示功能说明（路径、使用方式），保持恒定区域高度 */}
+                {exportScope === "project" ? (
+                  <>
                     <div
                       style={{
                         fontSize: 11,
-                        lineHeight: 1.6,
-                        color: TONE.quiet,
+                        color: projectCwdLoading
+                          ? TONE.quiet
+                          : projectCwd
+                            ? TONE.quiet
+                            : TONE.red,
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      {projectCwdLoading
+                        ? T("pl.skillModal.projectPathResolving")
+                        : projectCwd
+                          ? T("pl.skillModal.projectPathHintResolved")
+                          : T("pl.skillModal.projectPathHint")}
+                    </div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <input
+                        type="text"
+                        value={projectPathInput || projectCwd || ""}
+                        onChange={(e) => setProjectPathInput(e.target.value)}
+                        placeholder={T("pl.skillModal.projectPathPlaceholder")}
+                        spellCheck={false}
+                        disabled={projectCwdLoading}
+                        style={inputStyle}
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className={plBtn("ghost", "sm")}
+                        onClick={handlePickDirectory}
+                        disabled={projectCwdLoading}
+                        style={{ flexShrink: 0, minWidth: 64 }}
+                      >
+                        {T("pl.skillModal.browse")}
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <div
+                    style={{
+                      fontSize: 11,
+                      lineHeight: 1.6,
+                      color: TONE.quiet,
+                      width: "100%",
+                      minWidth: 0,
+                      wordBreak: "break-all",
+                      display: "-webkit-box",
+                      WebkitLineClamp: 3,
+                      WebkitBoxOrient: "vertical",
+                      overflow: "hidden",
+                    }}
+                  >
+                    {exportScope === "global"
+                      ? T("pl.skillModal.scopeGlobalHint")
+                      : T("pl.skillModal.scopePrivateHint")}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* 工具栏（仅导出模式）：上传自定义 JSON 数据追加技能条目 */}
+          {mode === "export" && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                flexWrap: "wrap",
+                flexShrink: 0,
+                marginBottom: 8,
+              }}
+            >
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className={plBtn("ghost", "sm")}
+                onClick={() => jsonRef.current?.click()}
+                data-tip={T("pl.skillModal.uploadJsonTitle")}
+              >
+                {T("pl.skillModal.uploadJson")}
+              </Button>
+            </div>
+          )}
+
+          {/* 全选工具栏：与导入数据页一致的复选全选 + 勾选计数（列表滚动时悬浮固定） */}
+          <div
+            style={{
+              flexShrink: 0,
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              paddingBottom: 8,
+              borderBottom: `1px solid ${TONE.border}`,
+              background: TONE.row,
+              position: "sticky",
+              top: -10,
+              zIndex: 1,
+            }}
+          >
+            <label
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                fontSize: 12,
+                color: TONE.muted,
+                cursor: "pointer",
+                userSelect: "none",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={allChecked}
+                onChange={toggleSelectAll}
+                disabled={entries.length === 0}
+              />
+              {allChecked
+                ? T("pl.importEdit.deselectAll")
+                : T("pl.exportSelectAll")}
+            </label>
+            <span
+              style={{ marginLeft: "auto", fontSize: 11, color: TONE.quiet }}
+            >
+              {T("pl.skillModal.selectHint")} · {checkedCount}/{entries.length}
+            </span>
+          </div>
+
+          {/* 紧凑条目列表 */}
+          <div
+            style={{
+              flex: 1,
+              minHeight: 0,
+              overflow: "auto",
+              paddingTop: 6,
+              display: "flex",
+              flexDirection: "column",
+              gap: 5,
+            }}
+          >
+            {entries.length === 0 ? (
+              <div
+                style={{
+                  padding: "22px 0",
+                  textAlign: "center",
+                  fontSize: 12,
+                  color: TONE.quiet,
+                  border: `1px dashed ${TONE.border}`,
+                  borderRadius: 8,
+                  marginTop: 6,
+                }}
+              >
+                {T(
+                  mode === "export"
+                    ? "pl.skillModal.noEntryExport"
+                    : "pl.skillModal.noEntry",
+                )}
+              </div>
+            ) : (
+              entries.map((entry) => (
+                <div
+                  key={entry.key}
+                  onClick={() =>
+                    setSelectedKey((cur) =>
+                      cur === entry.key ? null : entry.key,
+                    )
+                  }
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    flexWrap: "wrap",
+                    gap: 7,
+                    padding: "8px 10px",
+                    background:
+                      selectedKey === entry.key
+                        ? "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 16%, transparent)"
+                        : TONE.row,
+                    border: `1px solid ${
+                      selectedKey === entry.key
+                        ? "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 45%, transparent)"
+                        : TONE.border
+                    }`,
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    opacity: entry.checked ? 1 : 0.55,
+                    transition:
+                      "border-color .24s cubic-bezier(.22,1,.36,1), background-color .24s cubic-bezier(.22,1,.36,1), opacity .18s",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (selectedKey !== entry.key) {
+                      e.currentTarget.style.borderColor = TONE.borderStrong;
+                      e.currentTarget.style.backgroundColor =
+                        "var(--dsw-alias-interactive-bg-hover)";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (selectedKey !== entry.key) {
+                      e.currentTarget.style.borderColor = TONE.border;
+                      e.currentTarget.style.backgroundColor = TONE.row;
+                    }
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={entry.checked}
+                    onChange={(e) => {
+                      e.stopPropagation();
+                      toggleChecked(entry.key);
+                    }}
+                    data-tip={T("pl.skillModal.selectHint")}
+                    style={{
+                      flexShrink: 0,
+                      accentColor: TONE.accent,
+                      margin: 0,
+                    }}
+                  />
+                  <span
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      fontSize: 12.5,
+                      color: TONE.text,
+                      overflow: "hidden",
+                      whiteSpace: "nowrap",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {entry.title.trim() || T("pl.skillModal.nameLabel")}
+                  </span>
+                  <span
+                    style={{
+                      flexShrink: 0,
+                      fontSize: 10,
+                      lineHeight: 1,
+                      borderRadius: 4,
+                      padding: "2px 5px",
+                      color: entry.summary.trim() ? TONE.success : TONE.quiet,
+                      background: entry.summary.trim()
+                        ? "color-mix(in srgb, var(--dsw-alias-state-success-primary, #78dda0) 14%, transparent)"
+                        : "transparent",
+                      border: `1px solid ${
+                        entry.summary.trim()
+                          ? "color-mix(in srgb, var(--dsw-alias-state-success-primary, #78dda0) 45%, transparent)"
+                          : TONE.border
+                      }`,
+                    }}
+                  >
+                    {entry.summary.trim()
+                      ? T("pl.aiStateDone")
+                      : T("pl.aiStatePending")}
+                  </span>
+                  <span
+                    style={{
+                      flexShrink: 0,
+                      fontSize: 10,
+                      lineHeight: 1,
+                      color: entry.source === "disk" ? TONE.muted : TONE.accent,
+                      border: `1px solid ${
+                        entry.source === "disk"
+                          ? TONE.border
+                          : "var(--dsw-alias-brand-primary, #8ec5ff)"
+                      }`,
+                      borderRadius: 4,
+                      padding: "2px 5px",
+                    }}
+                  >
+                    {entry.source === "file"
+                      ? T("pl.skillModal.fromFile")
+                      : entry.source === "disk"
+                        ? T("pl.skillModal.fromDisk")
+                        : entry.source === "json"
+                          ? T("pl.skillModal.fromJson")
+                          : T("pl.skillModal.fromLibrary")}
+                  </span>
+                  {entry.exists && (
+                    <span
+                      style={{
+                        flexShrink: 0,
+                        fontSize: 10,
+                        lineHeight: 1,
+                        color: TONE.success,
+                        border: `1px solid color-mix(in srgb, ${TONE.success} 45%, transparent)`,
+                        borderRadius: 4,
+                        padding: "2px 5px",
+                      }}
+                    >
+                      {T("pl.skillModal.exists")}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeEntry(entry.key);
+                    }}
+                    data-tip={T("pl.skillModal.remove")}
+                    style={{
+                      flexShrink: 0,
+                      border: "none",
+                      outline: "none",
+                      background: "transparent",
+                      color: TONE.quiet,
+                      cursor: "pointer",
+                      fontSize: 13,
+                      lineHeight: 1,
+                      fontFamily: MONO,
+                      padding: "2px 4px",
+                      borderRadius: 4,
+                      transition: "color .18s, background-color .18s",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.color = TONE.red;
+                      e.currentTarget.style.backgroundColor =
+                        "var(--dsw-alias-interactive-bg-hover)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.color = TONE.quiet;
+                      e.currentTarget.style.backgroundColor = "transparent";
+                    }}
+                  >
+                    ×
+                  </button>
+                  {entry.body.trim() && (
+                    <div
+                      style={{
                         width: "100%",
+                        flexShrink: 0,
+                        marginTop: 2,
+                        fontSize: 11,
+                        lineHeight: 1.5,
+                        color: TONE.quiet,
                         minWidth: 0,
-                        wordBreak: "break-all",
+                        wordBreak: "break-word",
                         display: "-webkit-box",
-                        WebkitLineClamp: 3,
+                        WebkitLineClamp: 2,
                         WebkitBoxOrient: "vertical",
                         overflow: "hidden",
                       }}
                     >
-                      {exportScope === "global"
-                        ? T("pl.skillModal.scopeGlobalHint")
-                        : T("pl.skillModal.scopePrivateHint")}
+                      {entry.body}
                     </div>
                   )}
                 </div>
-              </div>
-            )}
-
-            {/* 工具栏（仅导出模式）：上传自定义 JSON 数据追加技能条目 */}
-            {mode === "export" && (
-              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flexShrink: 0, marginBottom: 8 }}>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className={plBtn("ghost", "sm")}
-                  onClick={() => jsonRef.current?.click()}
-                  data-tip={T("pl.skillModal.uploadJsonTitle")}
-                >
-                  {T("pl.skillModal.uploadJson")}
-                </Button>
-              </div>
-            )}
-
-            {/* 全选工具栏：与导入数据页一致的复选全选 + 勾选计数（列表滚动时悬浮固定） */}
-            <div
-              style={{
-                flexShrink: 0,
-                display: "flex",
-                alignItems: "center",
-                gap: 12,
-                paddingBottom: 8,
-                borderBottom: `1px solid ${TONE.border}`,
-                background: TONE.row,
-                position: "sticky",
-                top: -10,
-                zIndex: 1,
-              }}
-            >
-              <label
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 5,
-                  fontSize: 12,
-                  color: TONE.muted,
-                  cursor: "pointer",
-                  userSelect: "none",
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={allChecked}
-                  onChange={toggleSelectAll}
-                  disabled={entries.length === 0}
-                />
-                {allChecked ? T("pl.importEdit.deselectAll") : T("pl.exportSelectAll")}
-              </label>
-              <span style={{ marginLeft: "auto", fontSize: 11, color: TONE.quiet }}>
-                {T("pl.skillModal.selectHint")} · {checkedCount}/{entries.length}
-              </span>
-            </div>
-
-            {/* 紧凑条目列表 */}
-            <div
-              style={{
-                flex: 1,
-                minHeight: 0,
-                overflow: "auto",
-                paddingTop: 6,
-                display: "flex",
-                flexDirection: "column",
-                gap: 5,
-              }}
-            >
-              {entries.length === 0 ? (
-                <div
-                  style={{
-                    padding: "22px 0",
-                    textAlign: "center",
-                    fontSize: 12,
-                    color: TONE.quiet,
-                    border: `1px dashed ${TONE.border}`,
-                    borderRadius: 8,
-                    marginTop: 6,
-                  }}
-                >
-                  {T(mode === "export" ? "pl.skillModal.noEntryExport" : "pl.skillModal.noEntry")}
-                </div>
-              ) : (
-                entries.map((entry) => (
-                  <div
-                    key={entry.key}
-                    onClick={() =>
-                      setSelectedKey((cur) => (cur === entry.key ? null : entry.key))
-                    }
-                    style={{
-                      display: "flex",
-                      alignItems: "flex-start",
-                      flexWrap: "wrap",
-                      gap: 7,
-                      padding: "8px 10px",
-                      background:
-                        selectedKey === entry.key
-                          ? "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 16%, transparent)"
-                          : TONE.row,
-                      border: `1px solid ${
-                        selectedKey === entry.key
-                          ? "color-mix(in srgb, var(--dsw-alias-brand-primary, #8ec5ff) 45%, transparent)"
-                          : TONE.border
-                      }`,
-                      borderRadius: 8,
-                      cursor: "pointer",
-                      opacity: entry.checked ? 1 : 0.55,
-                      transition:
-                        "border-color .24s cubic-bezier(.22,1,.36,1), background-color .24s cubic-bezier(.22,1,.36,1), opacity .18s",
-                    }}
-                    onMouseEnter={(e) => {
-                      if (selectedKey !== entry.key) {
-                        e.currentTarget.style.borderColor = TONE.borderStrong;
-                        e.currentTarget.style.backgroundColor = "var(--dsw-alias-interactive-bg-hover)";
-                      }
-                    }}
-                    onMouseLeave={(e) => {
-                      if (selectedKey !== entry.key) {
-                        e.currentTarget.style.borderColor = TONE.border;
-                        e.currentTarget.style.backgroundColor = TONE.row;
-                      }
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={entry.checked}
-                      onChange={(e) => {
-                        e.stopPropagation();
-                        toggleChecked(entry.key);
-                      }}
-                      data-tip={T("pl.skillModal.selectHint")}
-                      style={{ flexShrink: 0, accentColor: TONE.accent, margin: 0 }}
-                    />
-                    <span
-                      style={{
-                        flex: 1,
-                        minWidth: 0,
-                        fontSize: 12.5,
-                        color: TONE.text,
-                        overflow: "hidden",
-                        whiteSpace: "nowrap",
-                        textOverflow: "ellipsis",
-                      }}
-                    >
-                      {entry.title.trim() || T("pl.skillModal.nameLabel")}
-                    </span>
-                    <span
-                      style={{
-                        flexShrink: 0,
-                        fontSize: 10,
-                        lineHeight: 1,
-                        borderRadius: 4,
-                        padding: "2px 5px",
-                        color: entry.summary.trim() ? TONE.success : TONE.quiet,
-                        background: entry.summary.trim()
-                          ? "color-mix(in srgb, var(--dsw-alias-state-success-primary, #78dda0) 14%, transparent)"
-                          : "transparent",
-                        border: `1px solid ${
-                          entry.summary.trim()
-                            ? "color-mix(in srgb, var(--dsw-alias-state-success-primary, #78dda0) 45%, transparent)"
-                            : TONE.border
-                        }`,
-                      }}
-                    >
-                      {entry.summary.trim() ? T("pl.aiStateDone") : T("pl.aiStatePending")}
-                    </span>
-                    <span
-                      style={{
-                        flexShrink: 0,
-                        fontSize: 10,
-                        lineHeight: 1,
-                        color: entry.source === "disk" ? TONE.muted : TONE.accent,
-                        border: `1px solid ${
-                          entry.source === "disk"
-                            ? TONE.border
-                            : "var(--dsw-alias-brand-primary, #8ec5ff)"
-                        }`,
-                        borderRadius: 4,
-                        padding: "2px 5px",
-                      }}
-                    >
-                      {entry.source === "file"
-                        ? T("pl.skillModal.fromFile")
-                        : entry.source === "disk"
-                          ? T("pl.skillModal.fromDisk")
-                          : entry.source === "json"
-                            ? T("pl.skillModal.fromJson")
-                            : T("pl.skillModal.fromLibrary")}
-                    </span>
-                    {entry.exists && (
-                      <span
-                        style={{
-                          flexShrink: 0,
-                          fontSize: 10,
-                          lineHeight: 1,
-                          color: TONE.success,
-                          border: `1px solid color-mix(in srgb, ${TONE.success} 45%, transparent)`,
-                          borderRadius: 4,
-                          padding: "2px 5px",
-                        }}
-                      >
-                        {T("pl.skillModal.exists")}
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        removeEntry(entry.key);
-                      }}
-                      data-tip={T("pl.skillModal.remove")}
-                      style={{
-                        flexShrink: 0,
-                        border: "none",
-                        outline: "none",
-                        background: "transparent",
-                        color: TONE.quiet,
-                        cursor: "pointer",
-                        fontSize: 13,
-                        lineHeight: 1,
-                        fontFamily: MONO,
-                        padding: "2px 4px",
-                        borderRadius: 4,
-                        transition: "color .18s, background-color .18s",
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.color = TONE.red;
-                        e.currentTarget.style.backgroundColor = "var(--dsw-alias-interactive-bg-hover)";
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.color = TONE.quiet;
-                        e.currentTarget.style.backgroundColor = "transparent";
-                      }}
-                    >
-                      ×
-                    </button>
-                    {entry.body.trim() && (
-                      <div
-                        style={{
-                          width: "100%",
-                          flexShrink: 0,
-                          marginTop: 2,
-                          fontSize: 11,
-                          lineHeight: 1.5,
-                          color: TONE.quiet,
-                          minWidth: 0,
-                          wordBreak: "break-word",
-                          display: "-webkit-box",
-                          WebkitLineClamp: 2,
-                          WebkitBoxOrient: "vertical",
-                          overflow: "hidden",
-                        }}
-                      >
-                        {entry.body}
-                      </div>
-                    )}
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-
-          {/* 右栏：当前选中条目的编辑窗口 */}
-          <div
-            style={{
-              flex: "1.1 1 0",
-              minWidth: 0,
-              display: "flex",
-              flexDirection: "column",
-              minHeight: 0,
-              boxSizing: "border-box",
-              background: TONE.row,
-              border: `1px solid ${TONE.border}`,
-              borderRadius: 10,
-              padding: 10,
-            }}
-          >
-            {!selected ? (
-              <div
-                style={{
-                  flex: 1,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 12,
-                  color: TONE.quiet,
-                }}
-              >
-                {T("pl.previewEmpty")}
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, minHeight: 0, flex: 1, overflow: "hidden" }}>
-                {/* 技能名（仅导出模式）：校验通过后由 AI 自动生成，也可手动修改 */}
-                {mode === "export" && (
-                  <>
-                    <span style={{ fontSize: 12, color: TONE.muted, marginTop: 2 }}>{T("pl.skillModal.nameLabel")}</span>
-                    <input
-                      type="text"
-                      value={selected.name}
-                      onChange={(e) => updateEntry(selected.key, { name: e.target.value })}
-                      placeholder={T("pl.skillModal.nameLabel")}
-                      disabled={!selected.checked}
-                      style={inputStyle}
-                    />
-                  </>
-                )}
-                <span style={{ fontSize: 12, color: TONE.muted, marginTop: 2 }}>{T("pl.skillModal.titleLabel")}</span>
-                <input
-                  type="text"
-                  value={selected.title}
-                  onChange={(e) => updateEntry(selected.key, { title: e.target.value })}
-                  placeholder={T("pl.skillModal.titleLabel")}
-                  disabled={!selected.checked}
-                  style={inputStyle}
-                />
-                <span style={{ fontSize: 12, color: TONE.muted, marginTop: 2 }}>{T("pl.skillModal.summaryLabel")}</span>
-                <input
-                  type="text"
-                  value={selected.summary}
-                  onChange={(e) => updateEntry(selected.key, { summary: e.target.value })}
-                  placeholder={T("pl.skillModal.summaryLabel")}
-                  disabled={!selected.checked}
-                  style={inputStyle}
-                />
-                <span style={{ fontSize: 12, color: TONE.muted, marginTop: 2 }}>{T("pl.skillModal.bodyLabel")}</span>
-                <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flex: 1, minHeight: 350 }}>
-                  <textarea
-                    ref={(el) => {
-                      bodyRefs.current[selected.key] = el;
-                    }}
-                    value={selected.body}
-                    onChange={(e) => updateEntry(selected.key, { body: e.target.value })}
-                    placeholder={T("pl.skillModal.bodyLabel")}
-                    disabled={!selected.checked}
-                    spellCheck={false}
-                    style={{
-                      ...inputStyle,
-                      flex: 1,
-                      minHeight: mode =="export"? 350 : 430,
-                      resize: "none",
-                      lineHeight: 1.6,
-                      whiteSpace: "pre-wrap",
-                    }}
-                  />
-                  {mode !== "export" && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className={plBtn("ghost", "sm")}
-                      onClick={() => insertVar(selected.key)}
-                      disabled={!selected.checked}
-                      data-tip={T("pl.insertVariableTitle")}
-                      style={{ flexShrink: 0 }}
-                    >
-                      {T("pl.skillModal.insertVar")}
-                    </Button>
-                  )}
-                </div>
-                {selected.aiFailed && selected.aiFailReason && (
-                  <div
-                    role="alert"
-                    style={{
-                      display: "flex",
-                      alignItems: "flex-start",
-                      gap: 6,
-                      padding: "6px 9px",
-                      borderRadius: 6,
-                      fontSize: 12,
-                      lineHeight: 1.5,
-                      color: TONE.red,
-                      background:
-                        "color-mix(in srgb, var(--dsw-alias-state-error-primary, #ff6b6b) 8%, transparent)",
-                      border:
-                        "1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary, #ff6b6b) 40%, transparent)",
-                    }}
-                  >
-                    <span style={{ flexShrink: 0 }}>{T("pl.skillModal.aiFailed")}</span>
-                    <span style={{ minWidth: 0 }}>{selected.aiFailReason}</span>
-                  </div>
-                )}
-              </div>
+              ))
             )}
           </div>
         </div>
 
-        {/* 底部操作：AI 补充（仅导出模式，放最左边）+ 校验 + 保存（仅校验通过后可用） */}
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center", flexShrink: 0, marginTop: 10, position: "relative" }}>
-
-            {/* 浮动反馈层：校验/修复/操作信息（如聊天气泡，嵌于底部按钮条上方悬浮，一段时间后自动消失） */}
-            {toastOpen && hasFeedback && (
+        {/* 右栏：当前选中条目的编辑窗口 */}
+        <div
+          style={{
+            flex: "1.1 1 0",
+            minWidth: 0,
+            display: "flex",
+            flexDirection: "column",
+            minHeight: 0,
+            boxSizing: "border-box",
+            background: TONE.row,
+            border: `1px solid ${TONE.border}`,
+            borderRadius: 10,
+            padding: 10,
+          }}
+        >
+          {!selected ? (
+            <div
+              style={{
+                flex: 1,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 12,
+                color: TONE.quiet,
+              }}
+            >
+              {T("pl.previewEmpty")}
+            </div>
+          ) : (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+                minHeight: 0,
+                flex: 1,
+                overflow: "hidden",
+              }}
+            >
+              {/* 技能名（仅导出模式）：校验通过后由 AI 自动生成，也可手动修改 */}
+              {mode === "export" && (
+                <>
+                  <span
+                    style={{ fontSize: 12, color: TONE.muted, marginTop: 2 }}
+                  >
+                    {T("pl.skillModal.nameLabel")}
+                  </span>
+                  <input
+                    type="text"
+                    value={selected.name}
+                    onChange={(e) =>
+                      updateEntry(selected.key, { name: e.target.value })
+                    }
+                    placeholder={T("pl.skillModal.nameLabel")}
+                    disabled={!selected.checked}
+                    style={inputStyle}
+                  />
+                </>
+              )}
+              <span style={{ fontSize: 12, color: TONE.muted, marginTop: 2 }}>
+                {T("pl.skillModal.titleLabel")}
+              </span>
+              <input
+                type="text"
+                value={selected.title}
+                onChange={(e) =>
+                  updateEntry(selected.key, { title: e.target.value })
+                }
+                placeholder={T("pl.skillModal.titleLabel")}
+                disabled={!selected.checked}
+                style={inputStyle}
+              />
+              <span style={{ fontSize: 12, color: TONE.muted, marginTop: 2 }}>
+                {T("pl.skillModal.summaryLabel")}
+              </span>
+              <input
+                type="text"
+                value={selected.summary}
+                onChange={(e) =>
+                  updateEntry(selected.key, { summary: e.target.value })
+                }
+                placeholder={T("pl.skillModal.summaryLabel")}
+                disabled={!selected.checked}
+                style={inputStyle}
+              />
+              <span style={{ fontSize: 12, color: TONE.muted, marginTop: 2 }}>
+                {T("pl.skillModal.bodyLabel")}
+              </span>
               <div
-                role={validation ? "alert" : undefined}
-                onMouseEnter={pauseToast}
-                onMouseLeave={resumeToast}
                 style={{
-                  position: "absolute",
-                  bottom: 2,
-                  left: 0,
-                  maxWidth: 360,
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 8,
+                  flex: 1,
+                  minHeight: 350,
+                }}
+              >
+                <textarea
+                  ref={(el) => {
+                    bodyRefs.current[selected.key] = el;
+                    autoGrowTextarea(el);
+                  }}
+                  value={selected.body}
+                  onChange={(e) => {
+                    updateEntry(selected.key, { body: e.target.value });
+                    autoGrowTextarea(e.target);
+                  }}
+                  placeholder={T("pl.skillModal.bodyLabel")}
+                  disabled={!selected.checked}
+                  spellCheck={false}
+                  style={{
+                    ...inputStyle,
+                    // 与导入导出预览的正文 textarea 高度设置保持一致
+                    flex: "0 0 auto",
+                    minHeight: 120,
+                    maxHeight: mode === "export" ? 312 : 412,
+                    height: "auto",
+                    overflowY: "auto",
+                    resize: "none",
+                    lineHeight: 1.6,
+                    whiteSpace: "pre-wrap",
+                    alignSelf: "stretch",
+                  }}
+                />
+                {mode !== "export" && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className={plBtn("ghost", "sm")}
+                    onClick={() => insertVar(selected.key)}
+                    disabled={!selected.checked}
+                    data-tip={T("pl.insertVariableTitle")}
+                    style={{ flexShrink: 0 }}
+                  >
+                    {T("pl.skillModal.insertVar")}
+                  </Button>
+                )}
+              </div>
+              {selected.aiFailed && selected.aiFailReason && (
+                <div
+                  role="alert"
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: 6,
+                    padding: "6px 9px",
+                    borderRadius: 6,
+                    fontSize: 12,
+                    lineHeight: 1.5,
+                    color: TONE.red,
+                    background:
+                      "color-mix(in srgb, var(--dsw-alias-state-error-primary, #ff6b6b) 8%, transparent)",
+                    border:
+                      "1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary, #ff6b6b) 40%, transparent)",
+                  }}
+                >
+                  <span style={{ flexShrink: 0 }}>
+                    {T("pl.skillModal.aiFailed")}
+                  </span>
+                  <span style={{ minWidth: 0 }}>{selected.aiFailReason}</span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 底部操作：AI 补充（仅导出模式，放最左边）+ 校验 + 保存（仅校验通过后可用） */}
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          justifyContent: "flex-end",
+          alignItems: "center",
+          flexShrink: 0,
+          marginTop: 10,
+          position: "relative",
+        }}
+      >
+        {/* 浮动反馈层：校验/修复/操作信息（如聊天气泡，嵌于底部按钮条上方悬浮，一段时间后自动消失） */}
+        {toastOpen && hasFeedback && (
+          <div
+            role={validation ? "alert" : undefined}
+            onMouseEnter={pauseToast}
+            onMouseLeave={resumeToast}
+            style={{
+              position: "absolute",
+              bottom: 2,
+              left: 0,
+              maxWidth: 360,
               maxHeight: 230,
               overflow: "hidden",
               zIndex: 20,
@@ -1746,15 +1975,25 @@ export function SkillImportModal(props: {
               fontSize: 12,
               lineHeight: 1.5,
               color: TONE.text,
-              background: "color-mix(in srgb, var(--dsw-alias-bg-layer-1, #171f2b) 78%, transparent)",
+              background:
+                "color-mix(in srgb, var(--dsw-alias-bg-layer-1, #171f2b) 78%, transparent)",
               WebkitBackdropFilter: "blur(12px)",
               backdropFilter: "blur(12px)",
               border: `1px solid ${TONE.borderStrong}`,
               boxShadow: "0 8px 24px rgba(0, 0, 0, .22)",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-              <span style={{ fontWeight: 560, fontSize: 12, flex: 1, minWidth: 0 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                flexShrink: 0,
+              }}
+            >
+              <span
+                style={{ fontWeight: 560, fontSize: 12, flex: 1, minWidth: 0 }}
+              >
                 {T("pl.skillModal.notice")}
               </span>
               <button
@@ -1788,242 +2027,269 @@ export function SkillImportModal(props: {
                 overflowY: "auto",
               }}
             >
-            {msg && (
-              <div style={{ color: msg.error ? TONE.red : TONE.text }}>{msg.text}</div>
-            )}
+              {msg && (
+                <div style={{ color: msg.error ? TONE.red : TONE.text }}>
+                  {msg.text}
+                </div>
+              )}
 
-            {validation &&
-              (validation.ok ? (
-                <div style={{ color: TONE.success }}>{T("pl.skillModal.validatePass")}</div>
-              ) : (
-                <>
-                  <div style={{ color: TONE.red }}>{T("pl.skillModal.issueCount", { count: validation.issues.length })}</div>
-                  <ul
-                    style={{
-                      margin: 0,
-                      paddingLeft: 18,
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 3,
-                      color: TONE.red,
-                    }}
-                  >
-                    {validation.issues.map((issue, idx) => (
-                      <li key={idx}>
-                        「{issue.entryTitle}」{issue.message}
-                      </li>
-                    ))}
-                  </ul>
-                  {validation.fixable && (
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <Button
-                        type="button"
-                        variant="primary"
-                        size="sm"
-                        className={plBtn("primary", "sm")}
-                        onClick={handleFix}
-                        data-tip={T("pl.skillModal.fixAll")}
-                      >
-                        {T("pl.skillModal.fixAll")}
-                      </Button>
-                      <span style={{ color: TONE.muted }}>
-                        {T("pl.skillModal.fixHint", {
-                          fixable: validation.issues.filter((i) => i.fixable).length,
-                        })}
-                      </span>
-                    </div>
-                  )}
-                </>
-              ))}
-
-            {fixLog.length > 0 && (
-              <div style={{ color: TONE.success }}>
-                <div>{T("pl.skillModal.fixDone", { count: fixLog.length })}</div>
-                <ul
-                  style={{
-                    margin: "2px 0 0",
-                    paddingLeft: 18,
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 3,
-                  }}
-                >
-                  {fixLog.map((f, idx) => (
-                    <li key={idx}>{f}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {fillLog.length > 0 && (
-              <div style={{ color: TONE.accent }}>
-                <div>{T("pl.skillModal.fillDone", { count: fillLog.length })}</div>
-                <ul
-                  style={{
-                    margin: "2px 0 0 8px",
-                    padding: 0,
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 3,
-                  }}
-                >
-                  {fillLog.map((f, idx) => (
-                    <li key={idx} style={{ listStyle: "none" }}>
-                      {f}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {mode === "export" && aiState !== "idle" && (
-              <div
-                style={{
-                  color:
-                    aiState === "running"
-                      ? TONE.accent
-                      : aiResult && aiResult.errors.length > 0
-                        ? TONE.red
-                        : TONE.success,
-                }}
-              >
-                {aiState === "running" ? (
-                  <div
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 8,
-                      alignItems: "stretch",
-                    }}
-                  >
-                    {/* 进度提示行：文案 + 取消按钮 */}
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                      }}
-                    >
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        {T("pl.skillModal.aiEnhancing", {
-                          done: aiDone,
-                          total: aiTotal,
-                        })}
-                      </div>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className={plBtn("ghost", "sm")}
-                        onClick={() => {
-                          // 立即中断当前请求 + 标记跳过剩余条目
-                          aiCancelRef.current = true;
-                          aiAbortRef.current?.abort();
-                        }}
-                      >
-                        {T("pl.cancel")}
-                      </Button>
-                    </div>
-                    {/* 进度条 */}
-                    <div
-                      style={{
-                        height: 6,
-                        borderRadius: 3,
-                        background: TONE.row,
-                        border: `1px solid ${TONE.border}`,
-                        overflow: "hidden",
-                        flexShrink: 0,
-                      }}
-                    >
-                      <div
-                        style={{
-                          height: "100%",
-                          width: `${
-                            aiTotal > 0
-                              ? Math.min(100, Math.round((aiDone / aiTotal) * 100))
-                              : 0
-                          }%`,
-                          borderRadius: 3,
-                          background: TONE.accent,
-                          transition: "width .3s ease",
-                        }}
-                      />
-                    </div>
+              {validation &&
+                (validation.ok ? (
+                  <div style={{ color: TONE.success }}>
+                    {T("pl.skillModal.validatePass")}
                   </div>
-                ) : aiResult && aiResult.errors.length > 0 ? (
+                ) : (
                   <>
-                    <div>
-                      {T("pl.skillModal.aiDoneErrors", {
-                        done: aiResult.done,
-                        n: aiResult.errors.length,
+                    <div style={{ color: TONE.red }}>
+                      {T("pl.skillModal.issueCount", {
+                        count: validation.issues.length,
                       })}
                     </div>
                     <ul
                       style={{
-                        margin: "2px 0 0",
+                        margin: 0,
                         paddingLeft: 18,
                         display: "flex",
                         flexDirection: "column",
                         gap: 3,
+                        color: TONE.red,
                       }}
                     >
-                      {aiResult.errors.map((err, idx) => (
+                      {validation.issues.map((issue, idx) => (
                         <li key={idx}>
-                          「{err.title}」{err.reason}
+                          「{issue.entryTitle}」{issue.message}
                         </li>
                       ))}
                     </ul>
+                    {validation.fixable && (
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                        }}
+                      >
+                        <Button
+                          type="button"
+                          variant="primary"
+                          size="sm"
+                          className={plBtn("primary", "sm")}
+                          onClick={handleFix}
+                          data-tip={T("pl.skillModal.fixAll")}
+                        >
+                          {T("pl.skillModal.fixAll")}
+                        </Button>
+                        <span style={{ color: TONE.muted }}>
+                          {T("pl.skillModal.fixHint", {
+                            fixable: validation.issues.filter((i) => i.fixable)
+                              .length,
+                          })}
+                        </span>
+                      </div>
+                    )}
                   </>
-                ) : (
-                  <div>{T("pl.skillModal.aiDone", { done: aiResult?.done ?? 0 })}</div>
-                )}
-              </div>
-            )}
+                ))}
+
+              {fixLog.length > 0 && (
+                <div style={{ color: TONE.success }}>
+                  <div>
+                    {T("pl.skillModal.fixDone", { count: fixLog.length })}
+                  </div>
+                  <ul
+                    style={{
+                      margin: "2px 0 0",
+                      paddingLeft: 18,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 3,
+                    }}
+                  >
+                    {fixLog.map((f, idx) => (
+                      <li key={idx}>{f}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {fillLog.length > 0 && (
+                <div style={{ color: TONE.accent }}>
+                  <div>
+                    {T("pl.skillModal.fillDone", { count: fillLog.length })}
+                  </div>
+                  <ul
+                    style={{
+                      margin: "2px 0 0 8px",
+                      padding: 0,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 3,
+                    }}
+                  >
+                    {fillLog.map((f, idx) => (
+                      <li key={idx} style={{ listStyle: "none" }}>
+                        {f}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {mode === "export" && aiState !== "idle" && (
+                <div
+                  style={{
+                    color:
+                      aiState === "running"
+                        ? TONE.accent
+                        : aiResult && aiResult.errors.length > 0
+                          ? TONE.red
+                          : TONE.success,
+                  }}
+                >
+                  {aiState === "running" ? (
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 8,
+                        alignItems: "stretch",
+                      }}
+                    >
+                      {/* 进度提示行：文案 + 取消按钮 */}
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                        }}
+                      >
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          {T("pl.skillModal.aiEnhancing", {
+                            done: aiDone,
+                            total: aiTotal,
+                          })}
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className={plBtn("ghost", "sm")}
+                          onClick={() => {
+                            // 立即中断当前请求 + 标记跳过剩余条目
+                            aiCancelRef.current = true;
+                            aiAbortRef.current?.abort();
+                          }}
+                        >
+                          {T("pl.cancel")}
+                        </Button>
+                      </div>
+                      {/* 进度条 */}
+                      <div
+                        style={{
+                          height: 6,
+                          borderRadius: 3,
+                          background: TONE.row,
+                          border: `1px solid ${TONE.border}`,
+                          overflow: "hidden",
+                          flexShrink: 0,
+                        }}
+                      >
+                        <div
+                          style={{
+                            height: "100%",
+                            width: `${
+                              aiTotal > 0
+                                ? Math.min(
+                                    100,
+                                    Math.round((aiDone / aiTotal) * 100),
+                                  )
+                                : 0
+                            }%`,
+                            borderRadius: 3,
+                            background: TONE.accent,
+                            transition: "width .3s ease",
+                          }}
+                        />
+                      </div>
+                    </div>
+                  ) : aiResult && aiResult.errors.length > 0 ? (
+                    <>
+                      <div>
+                        {T("pl.skillModal.aiDoneErrors", {
+                          done: aiResult.done,
+                          n: aiResult.errors.length,
+                        })}
+                      </div>
+                      <ul
+                        style={{
+                          margin: "2px 0 0",
+                          paddingLeft: 18,
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 3,
+                        }}
+                      >
+                        {aiResult.errors.map((err, idx) => (
+                          <li key={idx}>
+                            「{err.title}」{err.reason}
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  ) : (
+                    <div>
+                      {T("pl.skillModal.aiDone", { done: aiResult?.done ?? 0 })}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}
 
-            {mode === "export" && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className={plBtn("ghost", "sm")}
-                onClick={handleAiEnhance}
-                disabled={aiState === "running"}
-                data-tip={T("pl.skillModal.aiEnhanceHint")}
-              >
-                {T("pl.skillModal.aiEnhance")}
-              </Button>
-            )}
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className={plBtn("ghost", "sm")}
-              onClick={handleValidate}
-            >
-              {T("pl.skillModal.validate")}
-            </Button>
-            <Button
-              type="button"
-              variant="primary"
-              size="sm"
-              className={plBtn("primary", "sm")}
-              onClick={handleSave}
-              disabled={
-                !validation?.ok || saving || checkedCount === 0 || (mode === "export" && aiState === "running")
-              }
-            >
-              {saving
-                ? T("pl.skillModal.saving")
-                : mode === "export"
-                  ? T("pl.skillModal.saveExport")
-                  : T("pl.skillModal.save")}
-            </Button>
-        </div>
+        {mode === "export" && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className={plBtn("ghost", "sm")}
+            onClick={handleAiEnhance}
+            disabled={aiState === "running"}
+            data-tip={T("pl.skillModal.aiEnhanceHint")}
+          >
+            {T("pl.skillModal.aiEnhance")}
+          </Button>
+        )}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className={plBtn("ghost", "sm")}
+          onClick={handleValidate}
+        >
+          {T("pl.skillModal.validate")}
+        </Button>
+        <Button
+          type="button"
+          variant="primary"
+          size="sm"
+          className={plBtn("primary", "sm")}
+          onClick={handleSave}
+          disabled={
+            !validation?.ok ||
+            saving ||
+            checkedCount === 0 ||
+            (mode === "export" && aiState === "running")
+          }
+        >
+          {saving
+            ? T("pl.skillModal.saving")
+            : mode === "export"
+              ? T("pl.skillModal.saveExport")
+              : T("pl.skillModal.save")}
+        </Button>
+      </div>
 
-        {/* 选择本地 md 文件用的隐藏文件输入 */}
+      {/* 选择本地 md 文件用的隐藏文件输入 */}
       <input
         ref={fileRef}
         type="file"

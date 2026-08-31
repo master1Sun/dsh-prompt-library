@@ -83,8 +83,8 @@ import {
   setSessionPromptBindingForSession,
 } from "./session-prompts.js";
 import { checkUpdate, getUpgradeState, getVersionInfo, restartService, startUpgrade } from "./update.js";
-import { getActivity } from "./activity.js";
-import { buildAssistantStatus, computeAchievementProgress } from "./gamification.js";
+import { getActivity, onActivityChange } from "./activity.js";
+import { buildAssistantStatus, computeAchievementProgress, emitStatusChange, onStatusChange } from "./gamification.js";
 import { getAnnouncement } from "./announcement.js";
 import { getIssue, listIssueDates } from "./daily.js";
 import { deleteBackup, listBackups, restoreBackup, runBackup, type BackupFormat } from "./backup.js";
@@ -399,6 +399,7 @@ export function makePromptRoutes(): WebRoute[] {
         const body = await readJsonBody(req);
         if (!isInput(body)) return json(res, 400, { ok: false, error: "invalid body: {title, body}" });
         const prompt: Prompt = await createPrompt(body);
+        emitStatusChange(); // 新增提示词会改变积分/成就
         return json(res, 201, { ok: true, data: prompt });
       }
 
@@ -437,6 +438,7 @@ export function makePromptRoutes(): WebRoute[] {
       // POST /prompts/:id/refine — 重新触发某条提示词的 AI 完善（查看详情「重新完善」入口）
       if (method === "POST" && segments[0] === "prompts" && segments[2] === "refine" && segments.length === 3) {
         const ok = await refinePrompt(segments[1] ?? "");
+        if (ok) emitStatusChange(); // AI 完善会改变积分/成就
         return json(res, ok ? 200 : 404, { ok, data: { ok } });
       }
 
@@ -444,6 +446,7 @@ export function makePromptRoutes(): WebRoute[] {
       if (method === "POST" && promptId) {
         const updated = await recordUsage(promptId);
         if (!updated) return json(res, 404, { ok: false, error: "not found" });
+        emitStatusChange(); // 使用提示词会改变积分/成就
         return json(res, 200, { ok: true, data: updated });
       }
 
@@ -500,6 +503,7 @@ export function makePromptRoutes(): WebRoute[] {
       if (method === "POST" && segments[0] === "import" && segments.length === 1) {
         const body = await readJsonBody(req);
         const result = await importPrompts(body);
+        emitStatusChange(); // 导入提示词会改变积分/成就
         return json(res, 200, { ok: true, data: result });
       }
 
@@ -919,6 +923,46 @@ export function makePromptRoutes(): WebRoute[] {
         return json(res, 200, { ok: true, data });
       }
 
+      // GET /activity/stream — SSE 实时订阅活动状态流（替代轮询）。
+      // 客户端建立连接后立即收到当前状态，之后每次状态变化时推送新快照。
+      // 支持 lang 查询参数控制文案语言。
+      if (method === "GET" && tail === "/activity/stream") {
+        let lang = "zh";
+        try {
+          const raw = req.url ?? "";
+          const q = raw.includes("?") ? raw.slice(raw.indexOf("?") + 1) : "";
+          const lv = new URLSearchParams(q).get("lang");
+          if (lv) lang = lv;
+        } catch {
+          /* 解析失败用默认 zh */
+        }
+        const langNorm = lang.toLowerCase().startsWith("en") ? "en" : "zh";
+
+        // 设置 SSE 响应头
+        res.writeHead(200, {
+          "content-type": "text/event-stream",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+
+        // 发送初始状态
+        const initial = getActivity(langNorm);
+        res.write(`data: ${JSON.stringify(initial)}\n\n`);
+
+        // 订阅状态变化
+        const unsubscribe = onActivityChange((snapshot) => {
+          res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
+        });
+
+        // 客户端断开时清理
+        req.on("close", () => {
+          unsubscribe();
+          res.end();
+        });
+
+        return;
+      }
+
       // GET /assistant/status — 词库助手游戏化快照：等级 + 成就 + 时间/节日彩蛋，
       // 驱动助手等级徽章、成就解锁气泡与应景彩蛋；支持 lang 查询参数
       if (method === "GET" && tail === "/assistant/status") {
@@ -946,6 +990,63 @@ export function makePromptRoutes(): WebRoute[] {
         const progress = syncAchievementProgress(computeAchievementProgress(stats, streak));
         const data = buildAssistantStatus(stats, streak, lang.toLowerCase().startsWith("en") ? "en" : "zh", points, progress);
         return json(res, 200, { ok: true, data });
+      }
+
+      // GET /assistant/status/stream — SSE 实时订阅游戏化状态流（替代轮询）。
+      // 客户端建立连接后立即收到当前状态，之后每次关键操作（使用/创建/AI完善/导入提示词）时推送新快照。
+      // 支持 lang 查询参数控制文案语言。
+      if (method === "GET" && tail === "/assistant/status/stream") {
+        let lang = "zh";
+        try {
+          const raw = req.url ?? "";
+          const q = raw.includes("?") ? raw.slice(raw.indexOf("?") + 1) : "";
+          const lv = new URLSearchParams(q).get("lang");
+          if (lv) lang = lv;
+        } catch {
+          /* 解析失败用默认 zh */
+        }
+        const langNorm = lang.toLowerCase().startsWith("en") ? "en" : "zh";
+
+        // 设置 SSE 响应头
+        res.writeHead(200, {
+          "content-type": "text/event-stream",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+
+        // 构建并发送初始状态
+        const buildStatus = async () => {
+          const [stats, streak, points] = await Promise.all([
+            computeLibraryStats().catch(() => undefined),
+            computeStreak().catch(() => 0),
+            computePoints().catch(() => ({
+              gross: 0,
+              decay: 0,
+              net: 0,
+              inactiveDays: 0,
+              lastActiveAt: 0,
+            })),
+          ]);
+          const progress = syncAchievementProgress(computeAchievementProgress(stats, streak));
+          return buildAssistantStatus(stats, streak, langNorm, points, progress);
+        };
+
+        const initial = await buildStatus();
+        res.write(`data: ${JSON.stringify(initial)}\n\n`);
+
+        // 订阅状态变化
+        const unsubscribe = onStatusChange(async () => {
+          const status = await buildStatus();
+          res.write(`data: ${JSON.stringify(status)}\n\n`);
+        });
+
+        // 客户端断开时清理
+        req.on("close", () => {
+          unsubscribe();
+          res.end();
+        });
+
+        return;
       }
 
       // GET /deepseek/balance — 判断当前是否在使用 DeepSeek API，并在配置了 DeepSeek API Key 时

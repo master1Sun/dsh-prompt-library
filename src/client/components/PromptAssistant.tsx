@@ -23,6 +23,8 @@ import {
   getActivity,
   getAssistantStatus,
   getDeepSeekBalance,
+  subscribeActivity,
+  subscribeAssistantStatus,
   type ActivityPhase,
   type ActivitySnapshot,
   type AssistantStatus,
@@ -404,20 +406,18 @@ export function PromptAssistant(props: Props): ReactNode {
       .startsWith("en")
       ? "en"
       : "zh";
-    const tick = () => {
-      getActivity(lang)
-        .then((snap) => {
-          if (!cancelled) setActivity(snap);
-        })
-        .catch(() => {
-          /* 轮询失败忽略，保持上次状态 */
-        });
-    };
-    tick();
-    const iv = window.setInterval(tick, 1200);
+
+    // 使用 SSE 实时订阅状态变化（替代轮询）
+    const unsubscribe = subscribeActivity(
+      (snap) => {
+        if (!cancelled) setActivity(snap);
+      },
+      lang,
+    );
+
     return () => {
       cancelled = true;
-      window.clearInterval(iv);
+      unsubscribe();
     };
   }, []);
 
@@ -519,63 +519,61 @@ export function PromptAssistant(props: Props): ReactNode {
       .startsWith("en")
       ? "en"
       : "zh";
-    const tick = () => {
-      getAssistantStatus(lang)
-        .then((s) => {
-          if (cancelled) return;
-          setStatus(s);
-          statusRef.current = s;
-          // 首次进入：把当前已解锁成就全部标记为已播报，避免历史成就一次性弹窗
-          if (!statusInitedRef.current) {
-            statusInitedRef.current = true;
-            for (const a of s.achievements)
-              if (a.achieved) announcedRef.current.add(a.id);
-            try {
-              localStorage.setItem(
-                "pl:achievements-announced",
-                JSON.stringify([...announcedRef.current]),
-              );
-            } catch {
-              /* 忽略存储失败 */
-            }
-            return;
+
+    // 使用 SSE 实时订阅游戏化状态（替代轮询）
+    const unsubscribe = subscribeAssistantStatus(
+      (s) => {
+        if (cancelled) return;
+        setStatus(s);
+        statusRef.current = s;
+        // 首次进入：把当前已解锁成就全部标记为已播报，避免历史成就一次性弹窗
+        if (!statusInitedRef.current) {
+          statusInitedRef.current = true;
+          for (const a of s.achievements)
+            if (a.achieved) announcedRef.current.add(a.id);
+          try {
+            localStorage.setItem(
+              "pl:achievements-announced",
+              JSON.stringify([...announcedRef.current]),
+            );
+          } catch {
+            /* 忽略存储失败 */
           }
-          // 新解锁的成就：只播报第一条，避免多条连发；
-          // 无论「我的等级公告」是否开启都标记已播报，避免日后开启时补发历史播报
-          const fresh = s.achievements.find(
-            (a) => a.achieved && !announcedRef.current.has(a.id),
-          );
-          if (fresh) {
-            announcedRef.current.add(fresh.id);
-            try {
-              localStorage.setItem(
-                "pl:achievements-announced",
-                JSON.stringify([...announcedRef.current]),
-              );
-            } catch {
-              /* 忽略存储失败 */
-            }
-            const levelAnnouncement =
-              settingsRef.current?.levelAnnouncementEnabled ??
-              DEFAULT_SETTINGS.levelAnnouncementEnabled;
-            if (levelAnnouncement) {
-              showToast({
-                kind: "achievement",
-                title: tRef.current("pl.gamification.unlockTitle"),
-                text: `${fresh.title}：${fresh.desc}`,
-              });
-            }
+          return;
+        }
+        // 新解锁的成就：只播报第一条，避免多条连发；
+        // 无论「我的等级公告」是否开启都标记已播报，避免日后开启时补发历史播报
+        const fresh = s.achievements.find(
+          (a) => a.achieved && !announcedRef.current.has(a.id),
+        );
+        if (fresh) {
+          announcedRef.current.add(fresh.id);
+          try {
+            localStorage.setItem(
+              "pl:achievements-announced",
+              JSON.stringify([...announcedRef.current]),
+            );
+          } catch {
+            /* 忽略存储失败 */
           }
-        })
-        .catch(() => {
-          /* 轮询失败忽略，保持上次状态 */
-        });
-    };
-    tick();
-    const iv = window.setInterval(tick, 8000);
+          const levelAnnouncement =
+            settingsRef.current?.levelAnnouncementEnabled ??
+            DEFAULT_SETTINGS.levelAnnouncementEnabled;
+          if (levelAnnouncement) {
+            showToast({
+              kind: "achievement",
+              title: tRef.current("pl.gamification.unlockTitle"),
+              text: `${fresh.title}：${fresh.desc}`,
+            });
+          }
+        }
+      },
+      lang,
+    );
+
     return () => {
       cancelled = true;
-      window.clearInterval(iv);
+      unsubscribe();
     };
   }, [showToast]);
 

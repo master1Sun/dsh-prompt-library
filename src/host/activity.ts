@@ -2,8 +2,8 @@
  * 词库助手「活动状态机」— 把官方 DSH 会话活动投影成可驱动助手动画的 phase。
  *
  * 监听 `session/event` 官方事件，投影为 thinking / waiting / tool / review /
- * done / failed / idle 七个阶段，客户端轮询 `GET /api/prompt-library/activity`
- * 拿到当前 phase 后驱动蓝脸助手动画。
+ * done / failed / idle 七个阶段，客户端通过 SSE 订阅 `GET /api/prompt-library/activity/stream`
+ * 或在无 SSE 支持时轮询 `GET /api/prompt-library/activity` 拿到当前 phase 后驱动蓝脸助手动画。
  *
  * 同时按最近聊天内容粗分类「聊天主题风格」（code/writing/translate/qa/general），
  * 从 host 端文案表（见 phrases.ts）挑选与主题、阶段、语言匹配的一条文案随快照返回，
@@ -12,6 +12,7 @@
  * 本模块是纯函数 + 单例内存状态；模块级单例由宿主 apply 时注册监听更新。
  */
 import type { Context } from "@deepseek-ai/cordis";
+import { EventEmitter } from "node:events";
 import {
   classifyTopic,
   pickPhaseCopy,
@@ -226,6 +227,9 @@ function extractTopicText(event: SessionEventLike): string {
 let displayMachine: ActivityMachine | undefined;
 /** 是否仍有活跃会话。 */
 let displayActive = false;
+/** SSE 事件发射器：状态变化时通知所有订阅者。 */
+const sseEmitter = new EventEmitter();
+sseEmitter.setMaxListeners(100);
 
 /** 读取当前活动快照（供路由返回给客户端；lang 决定文案语言）。 */
 export function getActivity(lang: CopyLang = "zh"): ActivitySnapshot {
@@ -239,6 +243,26 @@ export function getActivity(lang: CopyLang = "zh"): ActivitySnapshot {
   }
   // 无活跃会话时强制 idle；有会话则按机器决策返回。
   return displayActive ? displayMachine.render(lang) : { phase: "idle", sessionActive: false, topic: "general", text: pickPhaseCopy(lang, "idle", 0) };
+}
+
+/** 订阅活动状态流：每次状态变化时调用回调。返回取消订阅函数。 */
+export function onActivityChange(
+  callback: (snapshot: ActivitySnapshot) => void,
+): () => void {
+  const handler = (lang: CopyLang) => {
+    callback(getActivity(lang));
+  };
+  sseEmitter.on("change", handler);
+  // 立即发送当前状态
+  callback(getActivity("zh"));
+  return () => {
+    sseEmitter.off("change", handler);
+  };
+}
+
+/** 内部：触发状态变化事件，通知所有 SSE 订阅者。 */
+function emitActivityChange(): void {
+  sseEmitter.emit("change");
 }
 
 /**
@@ -273,6 +297,8 @@ export function registerActivity(ctx: Context): () => void {
     displayActive = true;
     displayMachine?.onInput(next);
     displayMachine?.onSessionActive();
+    // 状态变化后通知所有 SSE 订阅者
+    emitActivityChange();
   };
 
   const onDisposed = (session: { id: string }): void => {
@@ -280,6 +306,8 @@ export function registerActivity(ctx: Context): () => void {
     if (perSession.size === 0) {
       displayActive = false;
       displayMachine?.onSessionDisposed();
+      // 会话全部销毁时也通知订阅者
+      emitActivityChange();
     }
   };
 

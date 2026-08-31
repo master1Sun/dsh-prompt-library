@@ -650,6 +650,41 @@ export function getActivity(lang?: string): Promise<ActivitySnapshot> {
   return send<ActivitySnapshot>("GET", `/api/prompt-library/activity${q}`);
 }
 
+/**
+ * SSE 订阅活动状态流：建立与服务器的长连接，实时接收状态变化。
+ * 返回取消订阅函数，调用后关闭连接并停止接收更新。
+ * @param callback 每次收到新快照时的回调
+ * @param lang 文案语言（zh/en）
+ */
+export function subscribeActivity(
+  callback: (snapshot: ActivitySnapshot) => void,
+  lang?: string,
+): () => void {
+  const q = lang ? `?lang=${encodeURIComponent(lang)}` : "";
+  const url = `/api/prompt-library/activity/stream${q}`;
+
+  // 使用原生 EventSource API（浏览器内置支持 SSE）
+  const eventSource = new EventSource(url);
+
+  eventSource.onmessage = (event) => {
+    try {
+      const snapshot: ActivitySnapshot = JSON.parse(event.data);
+      callback(snapshot);
+    } catch {
+      // 解析失败忽略
+    }
+  };
+
+  eventSource.onerror = () => {
+    // SSE 连接错误时自动关闭，避免无限重试
+    eventSource.close();
+  };
+
+  return () => {
+    eventSource.close();
+  };
+}
+
 // ── DeepSeek 余额判断 ─────────────────────────────────────────────
 
 /** DeepSeek 余额信息（未接入真实查询前由 host 返回 null 占位）。 */
@@ -773,6 +808,41 @@ export interface AssistantStatus {
 export function getAssistantStatus(lang?: string): Promise<AssistantStatus> {
   const q = lang ? `?lang=${encodeURIComponent(lang)}` : "";
   return send<AssistantStatus>("GET", `/api/prompt-library/assistant/status${q}`);
+}
+
+/**
+ * SSE 订阅游戏化状态流：建立与服务器的长连接，实时接收等级/成就变化。
+ * 返回取消订阅函数，调用后关闭连接并停止接收更新。
+ * @param callback 每次收到新快照时的回调
+ * @param lang 文案语言（zh/en）
+ */
+export function subscribeAssistantStatus(
+  callback: (status: AssistantStatus) => void,
+  lang?: string,
+): () => void {
+  const q = lang ? `?lang=${encodeURIComponent(lang)}` : "";
+  const url = `/api/prompt-library/assistant/status/stream${q}`;
+
+  // 使用原生 EventSource API（浏览器内置支持 SSE）
+  const eventSource = new EventSource(url);
+
+  eventSource.onmessage = (event) => {
+    try {
+      const status: AssistantStatus = JSON.parse(event.data);
+      callback(status);
+    } catch {
+      // 解析失败忽略
+    }
+  };
+
+  eventSource.onerror = () => {
+    // SSE 连接错误时自动关闭，避免无限重试
+    eventSource.close();
+  };
+
+  return () => {
+    eventSource.close();
+  };
 }
 
 // ── 公告通告 ────────────────────────────────────────────────────────────

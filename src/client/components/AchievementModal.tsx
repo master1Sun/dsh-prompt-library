@@ -1641,7 +1641,7 @@ export function AchievementModal({ open, onClose, t, container }: Props): ReactN
             flex: 1,
             minHeight: 0,
             display: "flex",
-            gap: 14,
+            gap: 2,
             marginTop: 10,
           }}
         >

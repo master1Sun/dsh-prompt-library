@@ -569,7 +569,7 @@ export function ImportExportModal(props: {
             flex: 1,
             minHeight: 0,
             display: "flex",
-            gap: 14,
+            gap: 2,
             paddingTop: 14,
             paddingBottom: 4,
             marginTop: -8,
@@ -1140,7 +1140,7 @@ export function ImportExportModal(props: {
           {/* 右栏：预览窗口（点击列表项后在此查看详情） */}
           <div
             style={{
-              flex: "1.15 1 0",
+              flex: "1 1 0",
               minWidth: 0,
               minHeight: 0,
               height: "100%",

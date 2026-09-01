@@ -470,7 +470,7 @@ export function AnnouncementModal({ open, onClose, t, container }: Props): React
           <div
             key={daily?.date ?? currentDate}
             className="pl-page-turn"
-            style={{ display: "flex", flex: 1, minHeight: 0, gap: 14 }}
+            style={{ display: "flex", flex: 1, minHeight: 0, gap: 2 }}
           >
             {/* 左栏：每日日报 + 科技快讯（独立滚动） */}
             <div

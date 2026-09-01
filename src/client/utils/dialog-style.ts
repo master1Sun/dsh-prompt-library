@@ -17,10 +17,27 @@ export const PL_DIALOG = "pl-dialog";
 /** 弹窗遮罩容器类名（固定居中 + 半透明遮罩）。 */
 export const PL_DIALOG_OVERLAY = "pl-dialog-overlay";
 
+import type { CSSProperties } from "react";
+
+/**
+ * 容器内嵌浮层样式 — 在容器（词库左键面板的右侧内容区）内铺满覆盖，
+ * 无半透明遮罩背景：供人格/技能管理详情弹窗、技能开关在左侧词库面板内嵌时使用，
+ * 使其铺满右栏展示（由子面板自设尺寸），而非整屏浮层。
+ */
+export const PL_DIALOG_EMBED_OVERLAY: CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  zIndex: 10,
+  boxSizing: "border-box",
+  overflow: "hidden",
+  background: "transparent",
+  display: "flex",
+};
+
 /** 全项目统一的弹窗表面 + 遮罩 CSS（组件内 `<style>` 注入，遵循按钮样式注入约定）。 */
 export const PL_DIALOG_CSS = `
 .pl-dialog{box-sizing:border-box;display:flex;flex-direction:column;overflow:hidden;border-radius:24px;background:var(--dsw-specific-sidebar-fill,#f5f6f7);padding:18px 7px 18px 10px;color:var(--dsw-alias-label-primary,#f2f6fc);font-family:var(--dsw-font-family,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif)}
-.pl-dialog-overlay{position:fixed;inset:0;z-index:2147483647;box-sizing:border-box;display:flex;align-items:center;justify-content:center;padding:20px;overflow:hidden;background:rgba(0,0,0,.35)}
+.pl-dialog-overlay{position:fixed;inset:0;z-index:2147483647;box-sizing:border-box;display:flex;align-items:center;justify-content:center;padding:20px;overflow:hidden;background:rgba(0,0,0,.35);backdrop-filter:var(--dsw-mask-blur,blur(12px));-webkit-backdrop-filter:var(--dsw-mask-blur,blur(12px))}
 /* 解锁塔罗牌：卡片表面流动高光扫光 */
 .pl-card-sheen{position:absolute;inset:0;border-radius:11px;pointer-events:none;overflow:hidden;background:linear-gradient(115deg,transparent 40%,rgba(255,255,255,.5) 50%,transparent 60%);background-size:250% 250%;animation:plCardSheen 4.2s ease-in-out infinite;z-index:3}
 @keyframes plCardSheen{0%{background-position:130% 0}62%{background-position:-130% 0}100%{background-position:-130% 0}}

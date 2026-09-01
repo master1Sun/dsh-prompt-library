@@ -28,7 +28,14 @@ import type {
   UserMessageNode,
 } from "@deepseek-ai/dsh-client-runtime/client";
 import type { PLTranslate } from "../utils/i18n.js";
-import { diagSession, listPersonas, listSessionPrompts, type ScopeDiag } from "../utils/api.js";
+import { SessionHeatmap } from "./SessionHeatmap.js";
+import {
+  checkPromptLibraryInstalled,
+  diagSession,
+  listPersonas,
+  listSessionPrompts,
+  type ScopeDiag,
+} from "../utils/api.js";
 import { useDataChanged } from "../utils/data-sync.js";
 
 /** `conversation.view` 的宿主标准运行时套件（会话轨迹亦依赖同一套注入）。 */
@@ -179,6 +186,47 @@ function Donut({
       </svg>
       {center && <div className={`${S}-donutCenter`}>{center}</div>}
     </div>
+  );
+}
+
+/** SVG 折线图：展示时间序列数据（如 token 流速），带填充区域。 */
+interface SparklineProps {
+  data: number[];
+  width?: number;
+  height?: number;
+  color?: string;
+  fillColor?: string;
+}
+
+function Sparkline({ data, width = 300, height = 60, color = "#60a5fa", fillColor = "rgba(96, 165, 250, 0.1)" }: SparklineProps) {
+  if (data.length < 2) return <div style={{ height }} />;
+
+  const max = Math.max(...data, 1);
+  const min = Math.min(...data, 0);
+  const range = max - min || 1;
+
+  // 生成路径点
+  const points = data.map((val, i) => {
+    const x = (i / (data.length - 1)) * width;
+    const y = height - ((val - min) / range) * height;
+    return `${x},${y}`;
+  }).join(" ");
+
+  // 填充区域路径（闭合到基线）
+  const fillPath = `M 0,${height} L ${points.replace(/ /g, " L ")} L ${width},${height} Z`;
+
+  return (
+    <svg width={width} height={height} style={{ display: "block" }}>
+      <path d={fillPath} fill={fillColor} />
+      <polyline
+        points={points}
+        fill="none"
+        stroke={color}
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 
@@ -339,6 +387,27 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
   const useProjection = props.useProjection;
   if (!useSession || !useProjection) return null;
 
+  // 检测 dsh-prompt-library 插件是否已安装（通过后端 API）
+  const [hasPromptAssistant, setHasPromptAssistant] = useState<boolean | null>(null);
+  
+  useEffect(() => {
+    let cancelled = false;
+    checkPromptLibraryInstalled()
+      .then((result) => {
+        if (!cancelled) {
+          setHasPromptAssistant(result.installed);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setHasPromptAssistant(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const running = useSession((s) => s.running) ?? false;
   const openState = useSession((s) => s.openState);
 
@@ -371,34 +440,6 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
   const endResize = () => {
     resizeDrag.current = null;
   };
-
-  const nodes = useSession((s) => s.chat.legacy.nodes) as readonly ConversationNode[] | undefined;
-
-  // 会话注入信息：读取 trajectory 投影里的最近一次请求（系统提示 + 工具 schema）。
-  // trajectory 插件未加载时 `views.get` 返回 undefined，相应子块自动隐藏。
-  const trajectory = useSession(
-    (s) => (s.views as unknown as Map<string, TrajectorySnapshotView | undefined>).get("trajectory"),
-  ) as TrajectorySnapshotView | undefined;
-  const latestRequest = useMemo(() => {
-    if (!trajectory?.requests) return undefined;
-    let last: TrajectoryRequestView | undefined;
-    for (const r of trajectory.requests) if (r.prompt) last = r;
-    return last;
-  }, [trajectory]);
-  const injectedTools = useMemo(() => {
-    const tools = latestRequest?.prompt?.tools ?? [];
-    const seen = new Set<string>();
-    const out: Array<{ name: string; schema: TrajectoryToolView }> = [];
-    for (const t of tools) {
-      const name = t.name;
-      if (name && !seen.has(name)) {
-        seen.add(name);
-        out.push({ name, schema: t });
-      }
-    }
-    return out;
-  }, [latestRequest]);
-  const systemPrompt = latestRequest?.prompt?.system ?? "";
 
   // 实时注入解析：轮询后端诊断端点（与注入同一会话口径），直接展示当前会话实际命中的
   // 人格与技能。trajectory 快照在未发新消息前可能是旧的，本块保证「系统提示区块」始终
@@ -482,6 +523,50 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
       : src === "path"
         ? (T?.("pl.monitor.srcPath") ?? "工作区")
         : (T?.("pl.monitor.srcDefault") ?? "默认");
+
+  const nodes = useSession((s) => s.chat.legacy.nodes) as readonly ConversationNode[] | undefined;
+
+  // Token 流速历史：记录每轮对话的输入/输出 token 数，用于绘制折线图（最多保留 50 轮）
+  interface TokenVelocityPoint {
+    turnIndex: number;
+    inputTokens: number;
+    outputTokens: number;
+  }
+  const [velocityHistory, setVelocityHistory] = useState<TokenVelocityPoint[]>([]);
+
+  // 异常检测标记
+  interface AnomalyMarker {
+    turnIndex: number;
+    type: "retry" | "max_tokens" | "error" | "slow_response";
+    severity: "warning" | "error";
+    message: string;
+  }
+
+  // 会话注入信息：读取 trajectory 投影里的最近一次请求（系统提示 + 工具 schema）。
+  // trajectory 插件未加载时 `views.get` 返回 undefined，相应子块自动隐藏。
+  const trajectory = useSession(
+    (s) => (s.views as unknown as Map<string, TrajectorySnapshotView | undefined>).get("trajectory"),
+  ) as TrajectorySnapshotView | undefined;
+  const latestRequest = useMemo(() => {
+    if (!trajectory?.requests) return undefined;
+    let last: TrajectoryRequestView | undefined;
+    for (const r of trajectory.requests) if (r.prompt) last = r;
+    return last;
+  }, [trajectory]);
+  const injectedTools = useMemo(() => {
+    const tools = latestRequest?.prompt?.tools ?? [];
+    const seen = new Set<string>();
+    const out: Array<{ name: string; schema: TrajectoryToolView }> = [];
+    for (const t of tools) {
+      const name = t.name;
+      if (name && !seen.has(name)) {
+        seen.add(name);
+        out.push({ name, schema: t });
+      }
+    }
+    return out;
+  }, [latestRequest]);
+  const systemPrompt = latestRequest?.prompt?.system ?? "";
 
   const usage = useProjection<TokenUsage>("tokenUsage");
   const pressure = useProjection<ContextPressure>("contextPressure");
@@ -623,6 +708,102 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
         }
         return items;
       });
+  }, [nodes, T]);
+
+  // Token 流速历史收集：每当 nodes 变化时，提取最新一轮的 token 统计并追加到历史
+  useEffect(() => {
+    if (!nodes) return;
+
+    // 找到最新的 assistant 节点（代表刚完成的回合）
+    let latestAssistant: AssistantMessageNode | null = null;
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      if (nodes[i].kind === "assistant") {
+        latestAssistant = nodes[i] as AssistantMessageNode;
+        break;
+      }
+    }
+    if (!latestAssistant) return;
+
+    const outTokens = usageOutputTokens(latestAssistant.usage) ?? 0;
+    // 估算输入 token（4 字符 ≈ 1 token）
+    const userText = nodes
+      .filter((n): n is UserMessageNode => n.kind === "user")
+      .map((n) => textOf(n.content))
+      .join("\n");
+    const inTokens = Math.max(0, Math.ceil(userText.length / 4));
+    const duration = assistantDuration(latestAssistant.timing) ?? 0;
+
+    setVelocityHistory((prev) => {
+      const newPoint: TokenVelocityPoint = {
+        turnIndex: prev.length + 1,
+        inputTokens: inTokens,
+        outputTokens: outTokens,
+      };
+      const updated = [...prev, newPoint];
+      return updated.slice(-50); // 保留最近 50 轮
+    });
+  }, [nodes]);
+
+  // 异常检测：扫描所有节点，标记重试、截断、错误、慢响应等异常事件
+  const anomalies = useMemo(() => {
+    if (!nodes) return [];
+
+    const markers: AnomalyMarker[] = [];
+    let turnIndex = 0;
+
+    for (const node of nodes) {
+      if (node.kind === "user") {
+        turnIndex++;
+      }
+
+      // 高频重试
+      if (node.kind === "model-retry" && node.retryState !== "cancelled") {
+        markers.push({
+          turnIndex,
+          type: "retry",
+          severity: "warning",
+          message:
+            node.attempt != null
+              ? `第 ${node.attempt} 次重试`
+              : (T?.("pl.monitor.kindRetry") ?? "重试"),
+        });
+      }
+
+      // Max tokens 截断
+      if (node.kind === "turn-max-tokens") {
+        markers.push({
+          turnIndex,
+          type: "max_tokens",
+          severity: "warning",
+          message: T?.("pl.monitor.truncated") ?? "输出被截断（max_tokens）",
+        });
+      }
+
+      // 错误
+      if (node.kind === "turn-error") {
+        markers.push({
+          turnIndex,
+          type: "error",
+          severity: "error",
+          message: node.message ?? (T?.("pl.monitor.error") ?? "未知错误"),
+        });
+      }
+
+      // 慢响应（>30s）
+      if (node.kind === "assistant" && node.timing) {
+        const duration = assistantDuration(node.timing);
+        if (duration > 30000) {
+          markers.push({
+            turnIndex,
+            type: "slow_response",
+            severity: "warning",
+            message: `${T?.("pl.monitor.slowResponse") ?? "响应缓慢"} (${formatDuration(duration)})`,
+          });
+        }
+      }
+    }
+
+    return markers;
   }, [nodes, T]);
 
   // 最近一次 LLM 调用的模型（用于成本估算）
@@ -848,10 +1029,13 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
         .${S}-contextBody{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
         .${S}-contextHead{display:flex;align-items:center;gap:6px;font-weight:500;color:var(--dsw-alias-label-primary)} 
         .${S}-formBadge{font-style:normal;font-size:10.5px;line-height:16px;padding:0 6px;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-tertiary);font-weight:500}
-        .${S}-manage{flex:none;align-self:center;cursor:pointer;border:0;background:transparent;padding:0;font-size:10.5px;line-height:16px;color:#a78bfa;font-weight:600;text-decoration:none;transition:opacity .24s ease}
+        .${S}-manage{flex:none;align-self:center;margin-left:auto;cursor:pointer;border:0;background:transparent;padding:0;font-size:10.5px;line-height:16px;color:#a78bfa;font-weight:600;text-decoration:none;transition:opacity .24s ease}
         .${S}-manage.skill{color:#60a5fa}
         .${S}-manage:hover{opacity:.72}
         .${S}-manage:focus-visible{outline:none}
+        .${S}-live{flex:1;min-width:0;align-self:center;font-size:11px;line-height:20px;color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:default}
+        .${S}-live.clickable{cursor:pointer;color:var(--dsw-alias-label-primary)}
+        .${S}-live.clickable:hover{color:var(--dsw-static-blue-450)}
         .${S}-clickable{cursor:pointer;transition:background-color .24s ease}
         .${S}-clickable:hover{background:var(--dsw-alias-interactive-bg-hover)}
         .${S}-chip.clickable:hover{border-color:var(--dsw-alias-border-strong)} 
@@ -917,6 +1101,22 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
         .${S}-tk{color:var(--dsw-alias-label-secondary);font-weight:500;margin-right:2px}
         .${S}-jidx{color:var(--dsw-alias-label-tertiary);font-weight:400;margin-right:5px}
         .${S}-hint{color:var(--dsw-alias-label-tertiary);font-size:10.5px}
+        
+        /* Token 流速折线图 */
+        .${S}-sparkline{display:block;margin:4px 0}
+        
+        /* 异常检测列表 */
+        .${S}-anomalyList{display:flex;flex-direction:column;gap:6px}
+        .${S}-anomalyItem{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:6px;cursor:default;transition:background-color .2s ease}
+        .${S}-anomalyItem:hover{background:var(--dsw-alias-bg-hover)}
+        .${S}-anomalyItem.warning{background:rgba(245, 158, 11, 0.08);border-left:3px solid #f59e0b}
+        .${S}-anomalyItem.error{background:rgba(239, 68, 68, 0.08);border-left:3px solid #ef4444}
+        .${S}-anomalyIcon{font-size:14px;flex:none}
+        .${S}-anomalyText{font-size:12px;color:var(--dsw-alias-label-primary);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        
+        /* Badge 徽章 */
+        .${S}-badge{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:var(--dsw-alias-bg-accent);color:var(--dsw-alias-label-inverse);font-size:11px;font-weight:600;margin-left:8px}
+        
         @media (width<=760px){.${S}-details{z-index:5;position:absolute;top:0;bottom:0;right:0;width:min(92%,420px);max-width:92%;border-left-color:var(--dsw-alias-border-l3);box-shadow:-12px 0 32px #00000024}}
       `}</style>
 
@@ -1058,6 +1258,64 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
         </div>
       )}
 
+      {/* 会话活动热力图 */}
+      <div className={`${S}-card`}>
+        <h4 className={`${S}-cardTitle`}>{T?.("pl.monitor.activityHeatmap") ?? "会话活动热力图"}</h4>
+        <SessionHeatmap nodes={nodes} />
+      </div>
+
+      {/* Token 流速 */}
+      {velocityHistory.length >= 2 && (
+        <div className={`${S}-card`}>
+          <h4 className={`${S}-cardTitle`}>{T?.("pl.monitor.tokenVelocity") ?? "Token 流速"}</h4>
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ fontSize: 12, color: "var(--dsw-alias-label-secondary)", marginBottom: 4 }}>
+              {T?.("pl.monitor.inputPerTurn") ?? "输入 token / 轮"}
+            </div>
+            <Sparkline 
+              data={velocityHistory.map(p => p.inputTokens)} 
+              color="#f59e0b"
+              fillColor="rgba(245, 158, 11, 0.1)"
+            />
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: "var(--dsw-alias-label-secondary)", marginBottom: 4 }}>
+              {T?.("pl.monitor.outputPerTurn") ?? "输出 token / 轮"}
+            </div>
+            <Sparkline 
+              data={velocityHistory.map(p => p.outputTokens)} 
+              color="#60a5fa"
+              fillColor="rgba(96, 165, 250, 0.1)"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* 异常检测 */}
+      {anomalies.length > 0 && (
+        <div className={`${S}-card`}>
+          <h4 className={`${S}-cardTitle`}>
+            {T?.("pl.monitor.anomalies") ?? "异常检测"}
+            <span className={`${S}-badge`}>{anomalies.length}</span>
+          </h4>
+          <div className={`${S}-anomalyList`}>
+            {anomalies.map((a, i) => (
+              <div 
+                key={i} 
+                className={`${S}-anomalyItem ${a.severity}`}
+              >
+                <span className={`${S}-anomalyIcon`}>
+                  {a.type === "error" ? "⚠️" : "⚡"}
+                </span>
+                <span className={`${S}-anomalyText`}>
+                  {T?.("pl.monitor.turnLabel", { turn: a.turnIndex }) ?? `第 ${a.turnIndex} 轮`}: {a.message}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* 上下文占用 */}
       {showPressure && (
         <div className={`${S}-card`}>
@@ -1114,59 +1372,59 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
       {/* 注入信息 */}
       {(contextInjections.length > 0 ||
         injectedTools.length > 0 ||
-        systemPrompt ||
-        (injectDiag && (injectDiag.personaName || injectDiag.promptTitles.length > 0))) && (
+        systemPrompt) && (
         <div className={`${S}-card`}>
           <h4 className={`${S}-cardTitle`}>
             {T?.("pl.monitor.sectionInjection") ?? "会话注入"}
           </h4>
 
-          {/* 实时注入解析：当前会话命中的 人格 + 技能（独立于 trajectory 快照） */}
-          {injectDiag && (injectDiag.personaName || injectDiag.promptTitles.length > 0) && (
+          {/* 实时注入解析：仅保留「人格管理」「技能管理」入口（跨项目联动，词库插件监听事件打开） */}
+          {hasPromptAssistant && (
             <div className={`${S}-block`}>
               <div className={`${S}-blockTitle`}>
                 {T?.("pl.monitor.injectLive") ?? "实时注入解析"}
               </div>
               <div className={`${S}-list`}>
-                <div className={`${S}-row clickable`} onClick={openPersonaDetail}>
+                <div className={`${S}-row`}>
                   <span className={`${S}-role persona`}>{T?.("pl.monitor.persona") ?? "人格"}</span>
-                  <span className={`${S}-contextBody`}>
-                    <span className={`${S}-contextHead`}>
-                      {injectDiag.personaName || (T?.("pl.monitor.none") ?? "无")}
-                      <em className={`${S}-formBadge`}>{personaSourceLabel(injectDiag.personaSource)}</em>
-                    </span>
+                  {/* 实时命中的人格：点击打开右侧详情抽屉（默认人格/工作区/单会话来源） */}
+                  <span
+                    className={`${S}-live${injectDiag?.personaName ? " clickable" : ""}`}
+                    title={injectDiag?.personaName ?? ""}
+                    onClick={openPersonaDetail}
+                  >
+                    {injectDiag?.personaName ?? (T?.("pl.monitor.none") ?? "无")}
                   </span>
-                  {/* 点击打开「人格管理」弹窗（PromptAssistant 监听事件后打开）；阻止冒泡避免误触详情 */}
+                  {/* 点击打开「人格管理」弹窗（PromptAssistant 监听事件后打开） */}
                   <button
                     type="button"
                     className={`${S}-manage`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      window.dispatchEvent(new CustomEvent("pl:open-persona-manager"));
-                    }}
+                    onClick={() => window.dispatchEvent(new CustomEvent("pl:open-persona-manager"))}
                   >
                     {T?.("pl.monitor.manage") ?? "管理"}
                   </button>
                 </div>
-                {injectDiag.promptTitles.length > 0 && (
-                  <div className={`${S}-row clickable`} onClick={openSkillDetail}>
-                    <span className={`${S}-role skill`}>{T?.("pl.monitor.skills") ?? "技能"}</span>
-                    <span className={`${S}-contextBody`}>
-                      <span className={`${S}-contextHead`}>{injectDiag.promptTitles.join("、")}</span>
-                    </span>
-                    {/* 点击打开「技能管理」弹窗（PromptAssistant 监听事件后打开）；阻止冒泡避免误触详情 */}
-                    <button
-                      type="button"
-                      className={`${S}-manage skill`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        window.dispatchEvent(new CustomEvent("pl:open-skill-manager"));
-                      }}
-                    >
-                      {T?.("pl.monitor.manage") ?? "管理"}
-                    </button>
-                  </div>
-                )}
+                <div className={`${S}-row`}>
+                  <span className={`${S}-role skill`}>{T?.("pl.monitor.skills") ?? "技能"}</span>
+                  {/* 实时命中的技能：点击打开右侧详情抽屉展示其 TOP 正文 */}
+                  <span
+                    className={`${S}-live${injectDiag?.promptTitles?.length ? " clickable" : ""}`}
+                    title={injectDiag?.promptTitles?.join("、") ?? ""}
+                    onClick={openSkillDetail}
+                  >
+                    {injectDiag?.promptTitles?.length
+                      ? injectDiag.promptTitles.join("、")
+                      : (T?.("pl.monitor.none") ?? "无")}
+                  </span>
+                  {/* 点击打开「技能管理」弹窗（PromptAssistant 监听事件后打开） */}
+                  <button
+                    type="button"
+                    className={`${S}-manage skill`}
+                    onClick={() => window.dispatchEvent(new CustomEvent("pl:open-skill-manager"))}
+                  >
+                    {T?.("pl.monitor.manage") ?? "管理"}
+                  </button>
+                </div>
               </div>
             </div>
           )}

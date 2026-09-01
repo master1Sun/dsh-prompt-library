@@ -17,7 +17,7 @@ import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { listHarnessSkillToggles, setHarnessSkillToggle, deleteHarnessSkill, type HarnessSkillItem } from "../utils/api.js";
 import { plBtn } from "../utils/button-style.js";
 import { getTone, useThemeSync } from "../utils/theme.js";
-import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../utils/dialog-style.js";
+import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_EMBED_OVERLAY, PL_DIALOG_OVERLAY } from "../utils/dialog-style.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
 import { DialogCloseButton } from "./DialogCloseButton.js";
 import { BookIcon } from "./BookIcon.js";
@@ -30,9 +30,11 @@ interface Props {
   onClose: () => void;
   /** 翻译函数。 */
   t: PLT;
+  /** 容器：传入时视为左侧词库面板内嵌，弹窗局限于容器（右栏）内展示，而非全屏浮层。 */
+  container?: HTMLElement;
 }
 
-export function HarnessSkillPanel({ open, onClose, t }: Props): ReactNode {
+export function HarnessSkillPanel({ open, onClose, t, container }: Props): ReactNode {
   useThemeSync();
   const TONE = getTone();
 
@@ -288,20 +290,19 @@ export function HarnessSkillPanel({ open, onClose, t }: Props): ReactNode {
       role="dialog"
       aria-modal="true"
       aria-label={t("pl.harnessSkill.title")}
-      className={PL_DIALOG_OVERLAY}
+      className={container ? undefined : PL_DIALOG_OVERLAY}
+      style={container ? PL_DIALOG_EMBED_OVERLAY : undefined}
       onClick={(e) => e.stopPropagation()}
     >
       <style>{PL_DIALOG_CSS}</style>
-      {/* 弹窗主体：固定 800×800，小视口随窗口缩小；顶部标题/说明/通知吸顶固定，内容区独立滚动 */}
+      {/* 弹窗主体：独立弹窗固定 800×800 随视口缩小；容器内嵌时铺满右栏（100%） */}
       <div
         className={PL_DIALOG}
-        style={{
-          width: 800,
-          height: 800,
-          maxWidth: "calc(100vw - 40px)",
-          maxHeight: "calc(100vh - 40px)",
-          padding: "16px 18px",
-        }}
+        style={
+          container
+            ? { width: "100%", height: "100%", maxWidth: "100%", maxHeight: "100%", padding: "16px 18px", background: TONE.panel }
+            : { width: 800, height: 800, maxWidth: "calc(100vw - 40px)", maxHeight: "calc(100vh - 40px)", padding: "16px 18px" }
+        }
       >
         {/* 标题行 + 刷新 + 右上角关闭按钮（吸顶固定） */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
@@ -431,6 +432,6 @@ export function HarnessSkillPanel({ open, onClose, t }: Props): ReactNode {
         />
       </div>
     </div>,
-    document.body,
+    container || document.body,
   );
 }

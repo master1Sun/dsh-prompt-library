@@ -1103,3 +1103,21 @@ export function readPreviewFile(
     `/api/prompt-library/preview/read?path=${encodeURIComponent(path)}`,
   );
 }
+
+/** 取当前会话 id（预览面板回退源：useSession 不可用时轮询此端点）。 */
+export function getActiveSessionId(): Promise<{ sessid: string }> {
+  return send<{ sessid: string }>("GET", "/api/prompt-library/preview/active");
+}
+
+/** 保存预览文件内容。 */
+export function savePreviewFile(
+  path: string,
+  content: string,
+): Promise<{ success: boolean }> {
+  return send<{ success: boolean }>("POST", "/api/prompt-library/preview/save", { path, content });
+}
+
+/** 检测 dsh-prompt-library 插件是否已安装（预览/监控并入本插件，恒为已安装）。 */
+export function checkPromptLibraryInstalled(): Promise<{ installed: boolean }> {
+  return send<{ installed: boolean }>("GET", "/api/prompt-library/plugins/prompt-library");
+}

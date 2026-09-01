@@ -1579,6 +1579,39 @@ export function makePromptRoutes(): WebRoute[] {
         }
       }
 
+      // GET /preview/active — 取当前会话 id（预览面板回退源：useSession 不可用时轮询此端点）。
+      if (method === "GET" && segments[0] === "preview" && segments[1] === "active" && segments.length === 2) {
+        return json(res, 200, { ok: true, data: { sessid: getCurrentSessionScope() ?? "" } });
+      }
+
+      // POST /preview/save — 保存文件内容（预览面板右侧「保存」按钮回写磁盘）。
+      if (method === "POST" && segments[0] === "preview" && segments[1] === "save" && segments.length === 2) {
+        const body = await readJsonBody(req).catch(() => null);
+        const data = (body ?? {}) as { path?: unknown; content?: unknown };
+        const path = typeof data.path === "string" ? data.path : "";
+        if (!path || typeof data.content !== "string") {
+          return json(res, 400, { ok: false, error: "invalid request: path and content required" });
+        }
+        // 安全检查：拒绝路径穿越
+        if (path.includes("..")) {
+          return json(res, 403, { ok: false, error: "path traversal not allowed" });
+        }
+        try {
+          await writeFile(path, data.content, "utf8");
+          return json(res, 200, { ok: true, data: { success: true } });
+        } catch (err) {
+          return json(res, 500, {
+            ok: false,
+            error: err instanceof Error ? err.message : "write failed",
+          });
+        }
+      }
+
+      // GET /plugins/prompt-library — 检测 dsh-prompt-library 是否已安装（当前宿主即该插件，恒为已安装）。
+      if (method === "GET" && segments[0] === "plugins" && segments[1] === "prompt-library" && segments.length === 2) {
+        return json(res, 200, { ok: true, data: { installed: true } });
+      }
+
       return json(res, 404, { ok: false, error: `no route ${method} ${tail}` });
     } catch (err) {
       return json(res, 500, { ok: false, error: "internal error" });

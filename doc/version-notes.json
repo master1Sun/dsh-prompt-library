@@ -1,5 +1,27 @@
 [
   {
+    "version": "0.11.0",
+    "date": "2026-09-01",
+    "zh": {
+      "title": "监控文案补全 · 工作区树顺序与简化 · 弹窗毛玻璃遮罩",
+      "items": [
+        "监控文案补全：补齐 Token 流速 / 输入每轮 / 活动热力图 / 异常检测等缺失文案，并修复异常条目重试次数为问号时显示「第 ? 次重试」的问题。",
+        "工作区树顺序：人格 / 技能管理的右侧工作区列表按当前右侧会话出现顺序排列，命中当前会话的工作区主动靠前。",
+        "工作区树简化：去掉中间「项目」层，工作区下直接展示其会话；历史项目级绑定在运行时仍生效，仅不再在树中展示与编辑。",
+        "弹窗毛玻璃遮罩：词库弹窗与词库助手内各弹窗的遮罩背景增加毛玻璃模糊（backdrop-filter），层次更通透。"
+      ]
+    },
+    "en": {
+      "title": "Monitor copy fixes · Workspace tree order & simplification · Frosted-glass dialog mask",
+      "items": [
+        "Monitor copy: filled in missing strings (token velocity, input per turn, activity heatmap, anomalies) and fixed retry anomalies rendering \"retry #?\" when the attempt number is absent.",
+        "Workspace order: the right-side workspace list in persona / skill managers now follows the current session order on the panel, keeping the active session's workspace near the top.",
+        "Workspace simplification: removed the intermediate \"project\" level, so workspaces list their sessions directly; legacy project-level bindings still apply at runtime, just no longer shown or editable in the tree.",
+        "Frosted-glass mask: the dimming background of library and assistant dialogs now uses a backdrop blur for a cleaner layering effect."
+      ]
+    }
+  },
+  {
     "version": "0.10.0",
     "date": "2026-08-31",
     "zh": {

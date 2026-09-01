@@ -9,7 +9,7 @@
  * - json：以对象（可折叠树）展示；txt：纯文本；csv：解析为表格。
  *
  * 会话 id 优先取宿主注入的 `useSession`（当前被查看的会话，无论是否运行都实时跟随），
- * 未注入时回退到后端诊断端点 `diagSession()` 轮询（最近活跃会话，与会话监控同口径）；
+ * 未注入时回退到后端「当前会话」端点 `getActiveSessionId()` 轮询（最近活跃会话，与会话监控同口径）；
  * 文件列表通过后端 `preview/list`（后端解析会话工作目录并递归扫描）、内容经 `preview/read` 读取。
  * 头部提供「打开文件夹」按钮：调用宿主原生目录选择器手动指定目录，直接以该目录为根预览
  * （手动模式覆盖会话派生目录，且不随会话切换改变），再次点击可更换目录。
@@ -18,17 +18,36 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ConversationSnapshot } from "@deepseek-ai/dsh-client-runtime/client";
 import type { PLTranslate } from "../utils/i18n.js";
 import {
-  diagSession,
+  getActiveSessionId,
   listPreviewFiles,
   listPreviewFilesByDir,
   readPreviewFile,
+  savePreviewFile,
   type PreviewFileEntry,
   type PreviewFileType,
 } from "../utils/api.js";
 import { isDirectoryBrowserAvailable, isDirectoryPickerAvailable, pickExportDirectory } from "../utils/workspace-picker.js";
 import { DirectoryPickerModal } from "./DirectoryPickerModal.js";
+import { CodeHighlight } from "./CodeHighlight.js";
+import { ArtifactExporter } from "./ArtifactExporter.js";
 // 聊天结果「产物文件」卡片跳转预览面板的目标路径信号
 import { consumePendingPreviewPath, PREVIEW_OPEN_EVENT_NAME } from "../utils/preview-target.js";
+
+/** Prism 语言标识映射：将文件类型映射到 Prism 支持的语言名。 */
+const PRISM_LANG_MAP: Record<string, string> = {
+  ts: "typescript",
+  js: "javascript",
+  py: "python",
+  go: "go",
+  rs: "rust",
+  java: "java",
+  c: "c",
+  cpp: "cpp",
+  yml: "yaml",
+  yaml: "yaml",
+  toml: "toml",
+  xml: "markup",
+};
 
 /** `conversation.view` 的宿主运行时套件（此视图仅依赖翻译座位与会话快照钩子）。 */
 interface PreviewProps {
@@ -71,6 +90,28 @@ const TYPE_META: Record<PreviewFileType, { label: string; color: string }> = {
   json: { label: "json", color: "#f59e0b" },
   txt: { label: "txt", color: "#94a3b8" },
   csv: { label: "csv", color: "#34d399" },
+  // Programming languages
+  ts: { label: "ts", color: "#3178c6" },
+  js: { label: "js", color: "#f7df1e" },
+  py: { label: "py", color: "#3776ab" },
+  go: { label: "go", color: "#00add8" },
+  rs: { label: "rs", color: "#dea584" },
+  java: { label: "java", color: "#f89820" },
+  c: { label: "c", color: "#a8b9cc" },
+  cpp: { label: "cpp", color: "#00599c" },
+  // Config files
+  yml: { label: "yml", color: "#cb171f" },
+  yaml: { label: "yaml", color: "#cb171f" },
+  toml: { label: "toml", color: "#9c4121" },
+  xml: { label: "xml", color: "#e37933" },
+  // Log files
+  log: { label: "log", color: "#6b7280" },
+  // Images
+  png: { label: "png", color: "#a855f7" },
+  jpg: { label: "jpg", color: "#a855f7" },
+  jpeg: { label: "jpeg", color: "#a855f7" },
+  gif: { label: "gif", color: "#a855f7" },
+  svg: { label: "svg", color: "#ffb13b" },
 };
 
 /** 各类型分组标题的 i18n 键。 */
@@ -79,6 +120,24 @@ const GROUP_LABEL_KEY: Record<PreviewFileType, string> = {
   json: "pl.preview.group.json",
   txt: "pl.preview.group.txt",
   csv: "pl.preview.group.csv",
+  ts: "pl.preview.type.ts",
+  js: "pl.preview.type.js",
+  py: "pl.preview.type.py",
+  go: "pl.preview.type.go",
+  rs: "pl.preview.type.rs",
+  java: "pl.preview.type.java",
+  c: "pl.preview.type.c",
+  cpp: "pl.preview.type.cpp",
+  yml: "pl.preview.type.yml",
+  yaml: "pl.preview.type.yaml",
+  toml: "pl.preview.type.toml",
+  xml: "pl.preview.type.xml",
+  log: "pl.preview.type.log",
+  png: "pl.preview.type.image",
+  jpg: "pl.preview.type.image",
+  jpeg: "pl.preview.type.image",
+  gif: "pl.preview.type.image",
+  svg: "pl.preview.type.image",
 };
 
 /** 生成唯一锚点 id：英文/中文/数字保留，其余转短横线；重复时追加序号。 */
@@ -364,6 +423,38 @@ function renderMd(text: string): { outline: OutlineItem[]; body: ReactNode[] } {
   return { outline, body: out };
 }
 
+/** 格式化文件大小：B / KB / MB */
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** 格式化修改时间：相对时间（如 "2小时前"）或绝对时间 */
+function formatModified(ms: number | undefined): string {
+  if (!ms) return "—";
+  const now = Date.now();
+  const diff = now - ms;
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+  
+  if (minutes < 1) return "刚刚";
+  if (minutes < 60) return `${minutes}分钟前`;
+  if (hours < 24) return `${hours}小时前`;
+  if (days < 7) return `${days}天前`;
+  
+  const date = new Date(ms);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+/** 判断文件是否过大（需要警告） */
+function isLargeFile(size: number): "warning" | "error" | null {
+  if (size > 1024 * 1024) return "error"; // > 1MB
+  if (size > 500 * 1024) return "warning"; // > 500KB
+  return null;
+}
+
 /** 把扁平文件列表组装成嵌套树（目录优先、按名排序；目录节点 path 为相对路径）。 */
 function buildTree(files: PreviewFileEntry[]): FileTreeNode[] {
   const root: FileTreeNode = { name: "", children: [] };
@@ -634,17 +725,19 @@ export function PreviewView(props: PreviewProps): ReactNode {
   const T: PLTranslate = props?.t ?? ((k: string): string => k);
 
   // 当前会话 id：优先取宿主注入的 useSession（当前被查看的会话，切换会话无论是否运行都即时跟随），
-  // 未注入或取不到时回退到后端诊断端点轮询（最近活跃会话）。后端再据此解析会话所属文件夹。
+  // 未注入或取不到时回退到后端「当前会话」端点轮询（最近活跃会话）。后端再据此解析会话所属文件夹。
   const useSession = props?.useSession;
   const viewedSessionId =
     typeof useSession === "function" ? (useSession((s) => s.sessionId) ?? "") : "";
-  const [diagSessid, setDiagSessid] = useState<string>("");
-  const sessid = viewedSessionId || diagSessid;
+  const [activeSessid, setActiveSessid] = useState<string>("");
+  const sessid = viewedSessionId || activeSessid;
 
   // 解析出的会话所属文件夹（后端返回的根目录，用于头部展示）
   const [dir, setDir] = useState<string>("");
   // 手动选择的预览目录（「打开文件夹」选择后覆盖会话派生目录；null 表示跟随会话）
   const [manualDir, setManualDir] = useState<string | null>(null);
+  // 刷新动画状态：点击刷新时 ⟳ 旋转一圈，动画结束后复位
+  const [spinning, setSpinning] = useState(false);
   // 浏览式目录选择弹窗（桌面端原生选择器不可用时的回退选择方案）
   const [dirPickerOpen, setDirPickerOpen] = useState(false);
   // 所属文件夹下可预览文件列表
@@ -653,10 +746,51 @@ export function PreviewView(props: PreviewProps): ReactNode {
   const [activePath, setActivePath] = useState<string | null>(null);
   // 当前文件正文
   const [content, setContent] = useState<string | null>(null);
+  // 编辑模式：是否处于编辑状态
+  const [editing, setEditing] = useState(false);
+  // 编辑中的内容（与 content 分离，避免未保存时污染原始内容）
+  const [editContent, setEditContent] = useState<string>("");
+  // 保存状态
+  const [saving, setSaving] = useState(false);
+  // Toast 提示
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+  // 日志文件截断标志和总行数
+  const [truncated, setTruncated] = useState<boolean | undefined>(undefined);
+  const [totalLines, setTotalLines] = useState<number | undefined>(undefined);
   // 大纲当前高亮项
   const [activeId, setActiveId] = useState<string>("");
   // 已折叠的目录相对路径集合（默认全部展开）
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
+    // 从 localStorage 读取上次的折叠状态
+    try {
+      const saved = localStorage.getItem("pl-preview-collapsed");
+      if (saved) {
+        const arr = JSON.parse(saved) as string[];
+        return new Set(arr);
+      }
+    } catch {}
+    return new Set();
+  });
+  // 当前激活的 Tab（文件类型）
+  const [activeTab, setActiveTab] = useState<PreviewFileType | "all">("all");
+  // 列表显示模式：grouped（分组视图）或 list（列表视图）
+  type ViewMode = "grouped" | "list";
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    // 从 localStorage 读取上次选择的视图模式
+    try {
+      const saved = localStorage.getItem("pl-preview-viewMode");
+      if (saved === "grouped" || saved === "list") return saved;
+    } catch {}
+    return "grouped"; // 默认分组视图
+  });
+  // 是否启用智能分类
+  const [smartClassify, setSmartClassify] = useState(false);
+  // 搜索关键词
+  const [searchQuery, setSearchQuery] = useState("");
+  // 排序方式
+  type SortMode = "name" | "size" | "type" | "modified";
+  const [sortMode, setSortMode] = useState<SortMode>("name");
+  const [sortAsc, setSortAsc] = useState(true);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   // 待定位的目标文件（来自聊天结果「产物文件」卡片跳转）：持久保存到文件列表就绪后再定位。
   // 注意：不能用 state 的 activePath 直接存，因为要在文件列表加载完成的效果里消费。
@@ -690,15 +824,17 @@ export function PreviewView(props: PreviewProps): ReactNode {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- files/manualDir 由下方列表效果与 apply 共同驱动
   }, [files, manualDir]);
 
-  // 回退源：轮询后端诊断端点的最近活跃会话 id（useSession 不可用时兜底）
+  // 回退源：仅当宿主未注入 useSession 时，轮询后端「当前会话」端点获取会话 id。
+  // useSession 存在时 viewedSessionId 由宿主订阅驱动、随会话切换即时更新，无需轮询。
   useEffect(() => {
+    if (useSession) return;
     let alive = true;
     const load = () =>
-      diagSession()
+      getActiveSessionId()
         .then((d) => {
           if (!alive) return;
           const next = d.sessid || "";
-          setDiagSessid((prev) => (prev === next ? prev : next));
+          setActiveSessid((prev) => (prev === next ? prev : next));
         })
         .catch(() => {
           /* 后端未就绪时静默，下次轮询再试 */
@@ -709,7 +845,21 @@ export function PreviewView(props: PreviewProps): ReactNode {
       alive = false;
       window.clearInterval(id);
     };
-  }, []);
+  }, [useSession]);
+
+  // 持久化：视图模式变化时保存到 localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem("pl-preview-viewMode", viewMode);
+    } catch {}
+  }, [viewMode]);
+
+  // 持久化：折叠状态变化时保存到 localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem("pl-preview-collapsed", JSON.stringify([...collapsed]));
+    } catch {}
+  }, [collapsed]);
 
   // 会话/手动目录变化 → 重新列出文件，保持当前选中（仍存在）或回落第一个。
   // 手动选择的目录优先于会话派生目录（用户显式指定，不随会话切换而改变）。
@@ -718,7 +868,7 @@ export function PreviewView(props: PreviewProps): ReactNode {
       setDir("");
       setFiles([]);
       setActivePath(null);
-      setCollapsed(new Set());
+      // 不重置 collapsed，保留用户的折叠偏好
       return;
     }
     let alive = true;
@@ -728,7 +878,7 @@ export function PreviewView(props: PreviewProps): ReactNode {
         if (!alive) return;
         setDir(root);
         setFiles(list);
-        setCollapsed(new Set());
+        // 不重置 collapsed，保留用户的折叠偏好
         setActivePath((prev) =>
           prev && list.some((f) => f.path === prev) ? prev : (list[0]?.path ?? null),
         );
@@ -749,18 +899,34 @@ export function PreviewView(props: PreviewProps): ReactNode {
   useEffect(() => {
     if (!activePath) {
       setContent(null);
+      setTruncated(undefined);
+      setTotalLines(undefined);
       return;
     }
+    
+    // 立即清空旧内容，避免显示错误类型的内容
+    setContent(null);
+    setTruncated(undefined);
+    setTotalLines(undefined);
+    setEditing(false);
+    setEditContent("");
+    
     let alive = true;
     readPreviewFile(activePath)
       .then((d) => {
         if (alive) {
           setContent(d.content);
+          setTruncated(d.truncated);
+          setTotalLines(d.totalLines);
           setActiveId("");
         }
       })
       .catch(() => {
-        if (alive) setContent(null);
+        if (alive) {
+          setContent(null);
+          setTruncated(undefined);
+          setTotalLines(undefined);
+        }
       });
     return () => {
       alive = false;
@@ -773,6 +939,7 @@ export function PreviewView(props: PreviewProps): ReactNode {
 
   // 解析 json 正文：对象 + 是否解析失败
   const activeFile = files.find((f) => f.path === activePath) ?? null;
+  
   const { jsonValue, jsonError } = useMemo(() => {
     if (activeFile?.type !== "json" || content === null) return { jsonValue: null, jsonError: false };
     try {
@@ -782,7 +949,7 @@ export function PreviewView(props: PreviewProps): ReactNode {
     }
   }, [activeFile, content]);
 
-  // 按类型分组 + 构建树
+  // 按类型分组 + 构建树（保留用于向后兼容）
   const groups = useMemo<TypeGroup[]>(() => {
     const order: PreviewFileType[] = ["md", "json", "txt", "csv"];
     const byType = new Map<PreviewFileType, PreviewFileEntry[]>();
@@ -801,18 +968,190 @@ export function PreviewView(props: PreviewProps): ReactNode {
     return out;
   }, [files, T]);
 
+  // 智能文件分类：基于文件名、路径和内容特征
+  type SmartCategory = "docs" | "config" | "test" | "business" | "styles" | "data" | "other";
+  
+  function classifyFile(file: PreviewFileEntry): SmartCategory {
+    const name = file.name.toLowerCase();
+    const path = file.path.toLowerCase();
+    
+    // 文档
+    if (name.includes("readme") || name.includes("changelog") || name.includes("license") ||
+        path.includes("/docs/") || path.includes("/documentation/")) {
+      return "docs";
+    }
+    
+    // 配置文件
+    if (name.includes("package.json") || name.includes("tsconfig") || name.includes(".env") ||
+        name.includes("dockerfile") || name.includes(".gitignore") || name.includes("webpack") ||
+        name.includes("vite.config") || name.includes("eslint") || name.includes("prettier") ||
+        file.type === "yml" || file.type === "yaml" || file.type === "toml" || file.type === "xml") {
+      return "config";
+    }
+    
+    // 测试文件
+    if (name.includes(".test.") || name.includes(".spec.") || name.includes("__tests__") ||
+        path.includes("/test/") || path.includes("/tests/") || path.includes("/__tests__/")) {
+      return "test";
+    }
+    
+    // 样式文件
+    if (name.endsWith(".css") || name.endsWith(".scss") || name.endsWith(".sass") ||
+        name.endsWith(".less") || name.includes("tailwind") || name.includes("style")) {
+      return "styles";
+    }
+    
+    // 数据文件
+    if (file.type === "json" || file.type === "csv") {
+      return "data";
+    }
+    
+    // 业务代码
+    if (["ts", "js", "py", "go", "rs", "java", "c", "cpp"].includes(file.type) &&
+        !name.includes(".test.") && !name.includes(".spec.")) {
+      return "business";
+    }
+    
+    return "other";
+  }
+  
+  const CATEGORY_LABELS: Record<SmartCategory, string> = {
+    docs: "📝 文档",
+    config: "🔧 配置",
+    test: "🧪 测试",
+    business: "💼 业务代码",
+    styles: "🎨 样式",
+    data: "📊 数据",
+    other: "📦 其他",
+  };
+  
+  const CATEGORY_COLORS: Record<SmartCategory, string> = {
+    docs: "#60a5fa",
+    config: "#f59e0b",
+    test: "#10b981",
+    business: "#8b5cf6",
+    styles: "#ec4899",
+    data: "#14b8a6",
+    other: "#6b7280",
+  };
+
+  // Tab 标签页：统计每种类型的文件数量
+  const tabCounts = useMemo(() => {
+    const counts = new Map<PreviewFileType, number>();
+    for (const f of files) {
+      counts.set(f.type, (counts.get(f.type) || 0) + 1);
+    }
+    return counts;
+  }, [files]);
+
+  // 智能分类统计
+  const smartCategoryCounts = useMemo(() => {
+    const counts = new Map<SmartCategory, number>();
+    for (const f of files) {
+      const category = classifyFile(f);
+      counts.set(category, (counts.get(category) || 0) + 1);
+    }
+    return counts;
+  }, [files]);
+
+  // 过滤和排序后的文件列表
+  const filteredFiles = useMemo(() => {
+    let result = files;
+    
+    // 按 Tab 过滤（支持智能分类）
+    if (activeTab !== "all") {
+      if (smartClassify) {
+        // 智能分类模式：按分类过滤
+        result = result.filter((f) => classifyFile(f) === activeTab);
+      } else {
+        // 普通模式：按文件类型过滤
+        result = result.filter((f) => f.type === activeTab);
+      }
+    }
+    
+    // 按搜索关键词过滤
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      result = result.filter((f) => f.name.toLowerCase().includes(query));
+    }
+    
+    // 排序
+    result = [...result].sort((a, b) => {
+      let cmp = 0;
+      switch (sortMode) {
+        case "name":
+          cmp = a.name.localeCompare(b.name);
+          break;
+        case "size":
+          cmp = a.size - b.size;
+          break;
+        case "type":
+          cmp = a.type.localeCompare(b.type);
+          break;
+        case "modified":
+          cmp = (a.modified || 0) - (b.modified || 0);
+          break;
+      }
+      return sortAsc ? cmp : -cmp;
+    });
+    
+    return result;
+  }, [files, activeTab, searchQuery, sortMode, sortAsc]);
+
+  // 树形视图数据：按当前 Tab 过滤后构建
+  const treeNodes = useMemo(() => {
+    const filtered = activeTab === "all" ? files : files.filter((f) => f.type === activeTab);
+    return buildTree(filtered);
+  }, [files, activeTab]);
+
   const showFiles = files.length > 1;
   const showToc = activeFile?.type === "md" && outline.length > 0;
 
+  // 编辑功能
+  /** 进入编辑模式 */
+  const startEditing = () => {
+    if (content !== null) {
+      setEditContent(content);
+      setEditing(true);
+    }
+  };
+
+  /** 取消编辑 */
+  const cancelEditing = () => {
+    setEditing(false);
+    setEditContent("");
+  };
+
+  /** 保存文件 */
+  const handleSave = async () => {
+    if (!activePath || !editContent) return;
+    
+    setSaving(true);
+    try {
+      await savePreviewFile(activePath, editContent);
+      setContent(editContent);
+      setEditing(false);
+      setToast({ message: "保存成功", type: "success" });
+      setTimeout(() => setToast(null), 2000);
+    } catch (err) {
+      console.error("Save failed:", err);
+      setToast({ message: "保存失败，请重试", type: "error" });
+      setTimeout(() => setToast(null), 3000);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   // 手动刷新：重列文件 + 重载当前正文（跟随会话或手动目录）
   const refresh = () => {
+    setSpinning(true);
     if (!sessid && !manualDir) return;
     const load = manualDir ? listPreviewFilesByDir(manualDir) : listPreviewFiles(sessid);
     load
       .then(({ dir: root, files: list }) => {
         setDir(root);
         setFiles(list);
-        setCollapsed(new Set());
+        // 不重置 collapsed，保留用户的折叠偏好
         setActivePath((prev) =>
           prev && list.some((f) => f.path === prev) ? prev : (list[0]?.path ?? null),
         );
@@ -919,12 +1258,60 @@ export function PreviewView(props: PreviewProps): ReactNode {
         .${S}-count{flex:none;color:var(--dsw-alias-label-tertiary);font-size:11px;font-variant-numeric:tabular-nums}
         .${S}-refresh{flex:none;width:26px;height:26px;border:0;background:transparent;color:var(--dsw-alias-label-secondary);border-radius:6px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:15px;line-height:15px;transition:color .24s,background-color .24s}
         .${S}-refresh:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
-        .${S}-openFolder{flex:none;display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 11px;border:0;border-radius:13px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:11.5px;line-height:1;cursor:pointer;white-space:nowrap;transition:background-color .24s,color .24s}
-        .${S}-openFolder:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
-        .${S}-openFolder.active{color:var(--dsw-static-blue-450);background:color-mix(in srgb,var(--dsw-static-blue-450) 14%,transparent)}
+        .${S}-refresh.spinning{animation:${S}-spin .5s ease}
+        @keyframes ${S}-spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+        .${S}-openFolder{flex:none;display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 11px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:11.5px;line-height:1;cursor:pointer;white-space:nowrap;transition:background-color .24s,color .24s,border-color .24s}
+        .${S}-openFolder:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-static-blue-450)}
+        .${S}-openFolder.active{color:var(--dsw-static-blue-450);background:color-mix(in srgb,var(--dsw-static-blue-450) 14%,transparent);border-color:var(--dsw-static-blue-450)}
         .${S}-body{flex:1;min-height:0;display:flex;flex-direction:row;align-items:stretch;overflow:hidden}
-        .${S}-files{flex:none;width:220px;min-width:170px;box-sizing:border-box;border-right:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);display:flex;flex-direction:column;overflow:hidden}
-        .${S}-filesHead{flex:none;padding:8px 12px 6px;font-size:11px;color:var(--dsw-alias-label-tertiary);font-weight:600}
+        .${S}-files{flex:none;width:280px;min-width:220px;box-sizing:border-box;border-right:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);display:flex;flex-direction:column;overflow:hidden}
+        
+        /* Tab 标签页 */
+        .${S}-tabs{flex:none;display:flex;gap:4px;padding:8px 8px 4px;overflow-x:auto;border-bottom:1px solid var(--dsw-alias-border-l2)}
+        .${S}-tab{flex:none;display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font-size:11px;cursor:pointer;white-space:nowrap;transition:background-color .2s,color .2s}
+        .${S}-tab:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+        .${S}-tab.active{background:var(--dsw-alias-bg-accent);color:var(--dsw-alias-label-inverse);font-weight:600}
+        .${S}-tabDot{flex:none;width:6px;height:6px;border-radius:50%}
+        .${S}-tabCount{margin-left:2px;font-size:10px;opacity:.8}
+        
+        /* 搜索框 */
+        .${S}-searchBox{flex:none;padding:6px 8px;position:relative}
+        .${S}-searchInput{width:100%;max-width:240px;padding:5px 28px 5px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-size:12px;outline:none;transition:border-color .2s;box-sizing:border-box}
+        .${S}-searchInput:focus{border-color:var(--dsw-static-blue-450)}
+        .${S}-searchInput::placeholder{color:var(--dsw-alias-label-tertiary)}
+        .${S}-searchClear{position:absolute;right:12px;top:50%;transform:translateY(-50%);border:0;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;font-size:12px;padding:2px 4px;border-radius:4px;line-height:1}
+        .${S}-searchClear:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
+        
+        /* 排序栏 */
+        .${S}-sortBar{flex:none;display:flex;gap:4px;padding:4px 8px 6px;border-bottom:1px solid var(--dsw-alias-border-l2);overflow-x:auto}
+        .${S}-sortBtn{flex:none;padding:3px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:4px;background:transparent;color:var(--dsw-alias-label-secondary);font-size:10px;cursor:pointer;white-space:nowrap;transition:all .2s}
+        .${S}-sortBtn:hover{border-color:var(--dsw-static-blue-450);color:var(--dsw-static-blue-450)}
+        .${S}-sortToggle{flex:none;width:24px;height:24px;border:1px solid var(--dsw-alias-border-l2);border-radius:4px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:11px;display:flex;align-items:center;justify-content:center;transition:all .2s}
+        .${S}-sortToggle:hover{border-color:var(--dsw-static-blue-450);color:var(--dsw-static-blue-450)}
+        
+        /* 视图模式切换按钮 */
+        .${S}-viewToggle{flex:none;width:28px;height:24px;border:1px solid var(--dsw-alias-border-l2);border-radius:4px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .2s;margin-right:2px}
+        .${S}-viewToggle:hover{border-color:var(--dsw-static-blue-450);color:var(--dsw-static-blue-450)}
+        .${S}-viewToggle.active{background:var(--dsw-static-blue-450);border-color:var(--dsw-static-blue-450);color:#fff}
+        
+        /* 扁平文件列表 */
+        .${S}-fileListFlat{flex:1;min-height:0;overflow-y:auto;padding:4px 8px 8px;display:flex;flex-direction:column;gap:2px}
+        .${S}-fileItem{display:flex;align-items:center;gap:6px;padding:5px 8px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font-size:11.5px;cursor:pointer;text-align:left;width:100%;min-width:0;transition:background-color .2s,color .2s}
+        .${S}-fileItem:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+        .${S}-fileItem.active{background:var(--dsw-alias-bg-accent);color:var(--dsw-alias-label-inverse);font-weight:600}
+        .${S}-fileItem.warning{border-left:2px solid #f59e0b}
+        .${S}-fileItem.error{border-left:2px solid #ef4444}
+        .${S}-fileTypeBadge{flex:none;font-size:9px;line-height:14px;font-weight:600;color:#fff;border-radius:3px;padding:0 4px;min-width:24px;text-align:center}
+        .${S}-fileName{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .${S}-fileMeta{flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:1px}
+        .${S}-fileSize{font-size:10px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
+        .${S}-fileModified{font-size:9px;color:var(--dsw-alias-label-tertiary);opacity:.7}
+        .${S}-emptyList{flex:1;display:flex;align-items:center;justify-content:center;color:var(--dsw-alias-label-tertiary);font-size:12px;padding:24px;text-align:center}
+        
+        /* 树形文件列表 */
+        .${S}-fileListTree{flex:1;min-height:0;overflow-y:auto;padding:4px 8px 8px}
+        
+        /* 保留旧的树形样式（向后兼容） */
         .${S}-fileList{flex:1;min-height:0;overflow-y:auto;padding:0 8px 8px;display:flex;flex-direction:column;gap:2px}
         .${S}-group{display:flex;flex-direction:column;gap:1px}
         .${S}-groupHead{flex:none;display:flex;align-items:center;gap:6px;padding:6px 8px 3px;font-size:11px;color:var(--dsw-alias-label-secondary);font-weight:600}
@@ -995,8 +1382,42 @@ export function PreviewView(props: PreviewProps): ReactNode {
         .${S}-csvTable th,.${S}-csvTable td{border:1px solid var(--dsw-alias-border-l2);padding:4px 8px;text-align:left;vertical-align:top;white-space:nowrap;max-width:360px;overflow:hidden;text-overflow:ellipsis}
         .${S}-csvTable th{background:var(--dsw-alias-bg-layer-2);font-weight:600;color:var(--dsw-alias-label-secondary);position:sticky;top:0}
         .${S}-csvTable td{color:var(--dsw-alias-label-primary)}
+        
+        /* 代码高亮容器 */
+        .${S}-codeBody{flex:1;min-width:0;min-height:100px;height:100%;overflow:auto;padding:14px 18px;background:var(--dsw-alias-bg-subtle);border-radius:8px;font-family:var(--ds-font-family-code,ui-monospace,Consolas,monospace);font-size:13px;line-height:1.6}
+        .${S}-codeBody pre[class*="language-"]{margin:0;padding:12px;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:6px;font-family:inherit;font-size:inherit;line-height:inherit;white-space:pre;overflow-x:auto}
+        .${S}-codeBody code[class*="language-"],.${S}-codeBody pre[class*="language-"]{text-shadow:none !important;color:var(--dsw-alias-label-primary)}
+        
+        /* 日志文件 */
+        .${S}-logBody{flex:1;min-width:0;min-height:0;overflow:auto;padding:14px 18px;margin:0;background:var(--dsw-alias-bg-subtle);border-radius:8px;font-family:var(--ds-font-family-code,ui-monospace,Consolas,monospace);font-size:12px;line-height:1.5;color:var(--dsw-alias-label-primary);white-space:pre-wrap;word-break:break-word}
+        .${S}-logBody pre{margin:0;padding:0;background:none;border:none;font-family:inherit;font-size:inherit;line-height:inherit;color:inherit;white-space:inherit;word-break:inherit}
+        .${S}-logTruncated{margin-top:8px;padding:8px;text-align:center;color:var(--dsw-alias-label-secondary);font-size:12px;border-top:1px solid var(--dsw-alias-border-l2);font-style:italic}
+        
+        /* 图片预览 */
+        .${S}-imgBody{flex:1;min-width:0;min-height:0;display:flex;justify-content:center;align-items:center;padding:14px 18px;overflow:auto;background:var(--dsw-alias-bg-subtle);border-radius:8px}
+        .${S}-imgBody img{max-width:100%;max-height:70vh;object-fit:contain;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+        
         .${S}-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;flex:1;min-height:0;color:var(--dsw-alias-label-tertiary);font-size:12.5px;padding:24px;text-align:center}
         .${S}-emptyNote{font-size:11px;opacity:.85}
+        
+        /* 编辑按钮 */
+        .${S}-editBtn,.${S}-cancelBtn,.${S}-saveBtn{padding:4px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:12px;cursor:pointer;transition:all .2s}
+        .${S}-editBtn:hover{border-color:var(--dsw-static-blue-450);background:var(--dsw-alias-interactive-bg-hover)}
+        .${S}-cancelBtn:hover:not(:disabled){background:var(--dsw-alias-bg-hover)}
+        .${S}-saveBtn{background:var(--dsw-static-blue-450);color:#fff;border-color:var(--dsw-static-blue-450)}
+        .${S}-saveBtn:hover:not(:disabled){opacity:.9}
+        .${S}-saveBtn:disabled,.${S}-cancelBtn:disabled{opacity:.5;cursor:not-allowed}
+        
+        /* 编辑器 */
+        .${S}-editorBody{flex:1;display:flex;flex-direction:column;padding:12px;overflow:hidden;background:var(--dsw-alias-bg-subtle);border-radius:8px;min-height:0}
+        .${S}-editorTextarea{flex:1;width:100%;padding:12px;border:none;background:transparent;color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-mono);font-size:13px;line-height:1.6;resize:none;outline:none;tab-size:2;overflow:auto}
+        .${S}-editorTextarea:focus{outline:none}
+        
+        /* Toast 提示 */
+        .${S}-toast{position:fixed;top:20px;right:20px;padding:12px 20px;border-radius:8px;color:#fff;font-size:13px;font-weight:500;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.15);animation:slideIn .3s ease-out}
+        .${S}-toast.success{background:#10b981}
+        .${S}-toast.error{background:#ef4444}
+        @keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
       `}</style>
 
         {/* 头部：标题 + 打开文件夹 + 当前目录 + 文件数 + 刷新 */}
@@ -1021,37 +1442,249 @@ export function PreviewView(props: PreviewProps): ReactNode {
           {files.length > 0 && (
             <span className={`${S}-count`}>{files.length}</span>
           )}
-          <button type="button" className={`${S}-refresh`} title={T?.("pl.preview.refresh") ?? "刷新"} onClick={refresh}>
+          
+          {/* 导出按钮 */}
+          {files.length > 0 && (
+            <ArtifactExporter files={files} sessionTitle={dir?.split("/").pop()} />
+          )}
+          
+          {/* 编辑按钮（仅当有选中文件且不是二进制文件时显示） */}
+          {activeFile && !["png", "jpg", "jpeg", "gif", "svg"].includes(activeFile.type) && (
+            <>
+              {!editing ? (
+                <button
+                  type="button"
+                  className={`${S}-editBtn`}
+                  onClick={startEditing}
+                  title="编辑文件"
+                >
+                  ✏️ 编辑
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className={`${S}-cancelBtn`}
+                    onClick={cancelEditing}
+                    disabled={saving}
+                    title="取消编辑"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    className={`${S}-saveBtn`}
+                    onClick={handleSave}
+                    disabled={saving}
+                    title="保存文件"
+                  >
+                    {saving ? "保存中..." : "💾 保存"}
+                  </button>
+                </>
+              )}
+            </>
+          )}
+          
+          <button type="button" className={`${S}-refresh${spinning ? " spinning" : ""}`} title={T?.("pl.preview.refresh") ?? "刷新"} onClick={refresh} onAnimationEnd={() => setSpinning(false)}>
             ⟳
           </button>
         </div>
 
         <div className={`${S}-body`}>
-          {/* 多个文件：左侧按类型分组 + 树形节点 */}
+          {/* 多个文件：Tab 标签页 + 搜索过滤 + 排序 + 扁平列表 */}
           {showFiles && (
             <div className={`${S}-files`}>
-              <div className={`${S}-filesHead`}>
-                {T?.("pl.preview.files") ?? "文件"} · {files.length}
+              {/* Tab 标签页 */}
+              <div className={`${S}-tabs`}>
+                {/* 智能分类切换按钮 */}
+                <button
+                  type="button"
+                  className={`${S}-tab${smartClassify ? " smart-active" : ""}`}
+                  onClick={() => {
+                    setSmartClassify(!smartClassify);
+                    setActiveTab("all"); // 切换模式时重置为全部
+                  }}
+                  title="智能分类"
+                >
+                  🤖 {smartClassify ? "智能" : "类型"}
+                </button>
+                
+                <button
+                  type="button"
+                  className={`${S}-tab${activeTab === "all" ? " active" : ""}`}
+                  onClick={() => setActiveTab("all")}
+                >
+                  全部
+                  <span className={`${S}-tabCount`}>{files.length}</span>
+                </button>
+                
+                {smartClassify ? (
+                  // 智能分类 Tab
+                  Array.from(smartCategoryCounts.entries()).map(([category, count]) => (
+                    <button
+                      key={category}
+                      type="button"
+                      className={`${S}-tab${activeTab === category ? " active" : ""}`}
+                      onClick={() => setActiveTab(category)}
+                    >
+                      <span className={`${S}-tabDot`} style={{ background: CATEGORY_COLORS[category] }} />
+                      {CATEGORY_LABELS[category]}
+                      <span className={`${S}-tabCount`}>{count}</span>
+                    </button>
+                  ))
+                ) : (
+                  // 普通文件类型 Tab
+                  Array.from(tabCounts.entries()).map(([type, count]) => (
+                    <button
+                      key={type}
+                      type="button"
+                      className={`${S}-tab${activeTab === type ? " active" : ""}`}
+                      onClick={() => setActiveTab(type)}
+                    >
+                      <span className={`${S}-tabDot`} style={{ background: TYPE_META[type].color }} />
+                      {TYPE_META[type].label}
+                      <span className={`${S}-tabCount`}>{count}</span>
+                    </button>
+                  ))
+                )}
               </div>
-              <div className={`${S}-fileList`}>
-                {groups.map((g) => (
-                  <div key={g.type} className={`${S}-group`}>
-                    <div className={`${S}-groupHead`}>
-                      <span className={`${S}-groupDot`} style={{ background: TYPE_META[g.type].color }} />
-                      <span className={`${S}-groupLabel`}>{g.label}</span>
-                      <span className={`${S}-groupCount`}>{g.nodes.length}</span>
+
+              {/* 搜索框 */}
+              <div className={`${S}-searchBox`}>
+                <input
+                  type="text"
+                  className={`${S}-searchInput`}
+                  placeholder="搜索文件名..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    className={`${S}-searchClear`}
+                    onClick={() => setSearchQuery("")}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+
+              {/* 视图模式切换 + 排序按钮 */}
+              <div className={`${S}-sortBar`}>
+                {/* 视图模式切换 */}
+                <button
+                  type="button"
+                  className={`${S}-viewToggle${viewMode === "grouped" ? " active" : ""}`}
+                  onClick={() => setViewMode("grouped")}
+                  title="分组视图"
+                >
+                  ▤
+                </button>
+                <button
+                  type="button"
+                  className={`${S}-viewToggle${viewMode === "list" ? " active" : ""}`}
+                  onClick={() => setViewMode("list")}
+                  title="列表视图"
+                >
+                  ☰
+                </button>
+                
+                {/* 仅在列表模式下显示排序按钮 */}
+                {viewMode === "list" && (
+                  <>
+                    <button
+                      type="button"
+                      className={`${S}-sortBtn`}
+                      onClick={() => setSortMode("name")}
+                    >
+                      名称 {sortMode === "name" && (sortAsc ? "↑" : "↓")}
+                    </button>
+                    <button
+                      type="button"
+                      className={`${S}-sortBtn`}
+                      onClick={() => setSortMode("size")}
+                    >
+                      大小 {sortMode === "size" && (sortAsc ? "↑" : "↓")}
+                    </button>
+                    <button
+                      type="button"
+                      className={`${S}-sortBtn`}
+                      onClick={() => {
+                        setSortMode("modified");
+                        setSortAsc(false); // 默认最新在前
+                      }}
+                    >
+                      修改时间 {sortMode === "modified" && (sortAsc ? "↑" : "↓")}
+                    </button>
+                    <button
+                      type="button"
+                      className={`${S}-sortToggle`}
+                      onClick={() => setSortAsc(!sortAsc)}
+                      title="切换升序/降序"
+                    >
+                      {sortAsc ? "↑" : "↓"}
+                    </button>
+                  </>
+                )}
+              </div>
+
+              {/* 文件列表：根据视图模式渲染 */}
+              {viewMode === "list" && (
+                <div className={`${S}-fileListFlat`}>
+                  {filteredFiles.length === 0 ? (
+                    <div className={`${S}-emptyList`}>
+                      {searchQuery ? "未找到匹配的文件" : "此类型下没有文件"}
                     </div>
+                  ) : (
+                    filteredFiles.map((f) => {
+                      const sizeWarning = isLargeFile(f.size);
+                      return (
+                        <button
+                          key={f.path}
+                          type="button"
+                          className={`${S}-fileItem${activePath === f.path ? " active" : ""}${sizeWarning ? ` ${sizeWarning}` : ""}`}
+                          onClick={() => setActivePath(f.path)}
+                          title={f.name}
+                        >
+                          <span
+                            className={`${S}-fileTypeBadge`}
+                            style={{ background: TYPE_META[f.type].color }}
+                          >
+                            {TYPE_META[f.type].label}
+                          </span>
+                          <span className={`${S}-fileName`}>{f.name.split("/").pop()}</span>
+                          <span className={`${S}-fileMeta`}>
+                            <span className={`${S}-fileSize`}>{formatFileSize(f.size)}</span>
+                            {f.modified && (
+                              <span className={`${S}-fileModified`}>{formatModified(f.modified)}</span>
+                            )}
+                          </span>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+              
+              {/* 分组视图 */}
+              {viewMode === "grouped" && (
+                <div className={`${S}-fileListTree`}>
+                  {treeNodes.length === 0 ? (
+                    <div className={`${S}-emptyList`}>
+                      {searchQuery ? "未找到匹配的文件" : "此类型下没有文件"}
+                    </div>
+                  ) : (
                     <TreeNodes
-                      nodes={g.nodes}
+                      nodes={treeNodes}
                       depth={0}
                       collapsed={collapsed}
                       onToggle={toggleDir}
                       activePath={activePath}
-                      onSelect={(p) => setActivePath(p)}
+                      onSelect={setActivePath}
                     />
-                  </div>
-                ))}
-              </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -1080,7 +1713,16 @@ export function PreviewView(props: PreviewProps): ReactNode {
 
             {/* 正文渲染：按类型 */}
             {activePath && content !== null && activeFile ? (
-              activeFile.type === "md" ? (
+              editing ? (
+                <div className={`${S}-editorBody`} ref={bodyRef}>
+                  <textarea
+                    className={`${S}-editorTextarea`}
+                    value={editContent}
+                    onChange={(e) => setEditContent(e.target.value)}
+                    spellCheck={false}
+                  />
+                </div>
+              ) : activeFile.type === "md" ? (
                 <div className={`${S}-mdBody`} ref={bodyRef} onScroll={onBodyScroll}>
                   {parsed.body}
                 </div>
@@ -1096,6 +1738,34 @@ export function PreviewView(props: PreviewProps): ReactNode {
                 )
               ) : activeFile.type === "csv" ? (
                 <CsvTable rows={parseCsv(content)} />
+              ) : activeFile.type === "ts" || activeFile.type === "js" || activeFile.type === "py" ||
+                  activeFile.type === "go" || activeFile.type === "rs" || activeFile.type === "java" ||
+                  activeFile.type === "c" || activeFile.type === "cpp" ? (
+                <div className={`${S}-codeBody`}>
+                  <CodeHighlight code={content} language={PRISM_LANG_MAP[activeFile.type]} />
+                </div>
+              ) : activeFile.type === "yml" || activeFile.type === "yaml" || activeFile.type === "toml" ||
+                  activeFile.type === "xml" ? (
+                <div className={`${S}-codeBody`}>
+                  <CodeHighlight code={content} language={PRISM_LANG_MAP[activeFile.type]} />
+                </div>
+              ) : activeFile.type === "log" ? (
+                <div className={`${S}-logBody`}>
+                  <pre>{content}</pre>
+                  {truncated && (
+                    <div className={`${S}-logTruncated`}>
+                      （已截断，显示最后 500 行 / 共 {totalLines ?? "?"} 行）
+                    </div>
+                  )}
+                </div>
+              ) : activeFile.type === "png" || activeFile.type === "jpg" || activeFile.type === "jpeg" ||
+                  activeFile.type === "gif" || activeFile.type === "svg" ? (
+                <div className={`${S}-imgBody`}>
+                  <img
+                    src={`data:image/${activeFile.type === "jpg" ? "jpeg" : activeFile.type};base64,${content}`}
+                    alt={activeFile.name}
+                  />
+                </div>
               ) : (
                 <pre className={`${S}-txtBody`}>{content}</pre>
               )
@@ -1128,6 +1798,13 @@ export function PreviewView(props: PreviewProps): ReactNode {
           onClose={() => setDirPickerOpen(false)}
           t={T}
         />
+        
+        {/* Toast 提示 */}
+        {toast && (
+          <div className={`${S}-toast ${toast.type}`}>
+            {toast.type === "success" ? "✓" : "✗"} {toast.message}
+          </div>
+        )}
       </div>
     </div>
   );

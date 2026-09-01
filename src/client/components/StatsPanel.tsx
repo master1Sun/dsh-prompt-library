@@ -749,7 +749,7 @@ function StatsDashboard({
         flex: 1,
         minHeight: 0,
         display: "flex",
-        gap: 14,
+        gap: 2,
       }}
     >
       {/* 左栏：总览核心（独立滚动） */}

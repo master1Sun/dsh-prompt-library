@@ -63,7 +63,67 @@ export async function listSessionRecords(): Promise<SessionQueryRecord[]> {
 export async function listSessionScopeTree(): Promise<ScopeNode[]> {
   const [tree, sessions] = await Promise.all([listPathScopeTree(), listSessionRecords()]);
   attachSessionsToTree(tree, sessions);
+  flattenProjects(tree);
+  orderTreeBySessionAppearance(tree, sessions);
   return tree;
+}
+
+/**
+ * 去掉「项目」层：把工作区下所有项目（含递归）挂载的会话全部合并到所属工作区节点，
+ * 并将工作区的 children 清空，使树简化为「工作区 → 会话」。
+ * 历史数据里已有的项目级绑定仍在运行时解析生效，只是不再在树中展示/编辑。
+ */
+function flattenProjects(tree: ScopeNode[]): void {
+  const flatten = (node: ScopeNode): void => {
+    const merged: ScopeNode["sessions"] = node.sessions ? [...node.sessions] : undefined;
+    const collect = (n: ScopeNode): void => {
+      for (const child of n.children) {
+        if (child.sessions) merged?.push(...child.sessions);
+        collect(child);
+      }
+    };
+    collect(node);
+    if (merged && merged.length > 0) node.sessions = merged;
+    node.children = [];
+  };
+  for (const ws of tree) flatten(ws);
+}
+
+/**
+ * 按「右侧会话出现顺序」排序工作区树：每个节点以其所含（含后代节点）会话里、
+ * 在全局会话列表顺序中下标最靠前者作为排序键；工作区与子项目都据此排序。
+ * 无任何会话的节点键为 Infinity，稳定排序下保持原有相对顺序、排在末尾。
+ */
+function orderTreeBySessionAppearance(tree: ScopeNode[], sessions: SessionQueryRecord[]): void {
+  const idx = new Map<string, number>();
+  sessions.forEach((s, i) => idx.set(s.id, i));
+
+  // 缓存每个节点的排序键，避免重复递归
+  const cache = new Map<ScopeNode, number>();
+  const key = (node: ScopeNode): number => {
+    const cached = cache.get(node);
+    if (cached !== undefined) return cached;
+    let best = Infinity;
+    if (node.sessions) {
+      for (const s of node.sessions) {
+        const k = idx.get(s.id);
+        if (k !== undefined && k < best) best = k;
+      }
+    }
+    for (const child of node.children) {
+      const k = key(child);
+      if (k < best) best = k;
+    }
+    cache.set(node, best);
+    return best;
+  };
+
+  const sortNodes = (nodes: ScopeNode[]): void => {
+    nodes.sort((a, b) => key(a) - key(b));
+    for (const n of nodes) sortNodes(n.children);
+  };
+
+  sortNodes(tree);
 }
 
 /** 路径归一化：统一正斜杠、去尾分隔符；Windows 下转小写（与人格/技能绑定解析一致）。 */

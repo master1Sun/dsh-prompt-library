@@ -12,18 +12,18 @@
 
 /** 注入到 document.head 的面板样式。 */
 export const SETTINGS_ABOVE_CSS = `
-.pl-sa-backdrop{position:fixed;inset:0;z-index:2147483646;background:rgba(0,0,0,.35);animation:pl-sa-fade-in .15s ease}
+.pl-sa-backdrop{position:fixed;inset:0;z-index:2147483646;background:rgba(0,0,0,.35);backdrop-filter:var(--dsw-mask-blur,blur(12px));-webkit-backdrop-filter:var(--dsw-mask-blur,blur(12px));animation:pl-sa-fade-in .15s ease}
 @keyframes pl-sa-fade-in{from{opacity:0}to{opacity:1}}
 .pl-sa-panel{position:fixed;z-index:2147483647;background:var(--dsw-specific-sidebar-fill,#f5f6f7);box-shadow:0 10px 32px rgba(2,6,23,.2),0 2px 8px rgba(2,6,23,.1);opacity:0;transition:opacity .15s ease}
 .pl-sa-panel-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;flex-shrink:0}
 .pl-sa-close-btn{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border:none;border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary,#1f2937);cursor:pointer;transition:background .12s ease}
 .pl-sa-close-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.08))}
-.pl-sa-sidebar{width:140px;flex-shrink:0;overflow-y:auto;padding:8px 6px}
+.pl-sa-sidebar{width:115px;flex-shrink:0;overflow-y:auto;padding:8px 6px}
 .pl-sa-nav-item{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;cursor:pointer;user-select:none;color:var(--dsw-alias-label-primary,#1f2937);transition:background .12s ease}
 .pl-sa-nav-item:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.08))}
 .pl-sa-nav-item.active{background:var(--dsw-alias-interactive-bg-active,rgba(127,127,127,.14))}
 .pl-sa-nav-icon{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;flex-shrink:0}
-.pl-sa-content-area{flex:1;overflow:hidden;padding:5px;min-width:0;display:flex;flex-direction:column}
+.pl-sa-content-area{flex:1;overflow:hidden;padding:5px;min-width:0;position:relative;display:flex;flex-direction:column}
 .pl-sa-content-area > [role="dialog"]{flex:1;min-height:0;display:flex;flex-direction:column}
 .pl-sa-content-area > [role="dialog"] > .pl-dialog{flex:1;min-height:0;height:auto}
 ${PL_DIALOG_CSS}
@@ -175,7 +175,7 @@ export function registerSettingsAboveMenu(
     panel.style.bottom = "auto";
     panel.style.right = "auto";
     panel.style.transform = "translate(-50%, -50%)";
-    panel.style.width = "min(800px, calc(100vw - 40px))";
+    panel.style.width = "min(850px, calc(100vw - 40px))";
     panel.style.height = "min(800px, calc(100vh - 40px))";
     panel.style.borderRadius = "24px";
     panel.style.display = "flex";

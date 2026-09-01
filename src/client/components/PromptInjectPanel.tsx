@@ -38,7 +38,7 @@ import {
 import { notifyDataChanged } from "../utils/data-sync.js";
 import { plBtn } from "../utils/button-style.js";
 import { getTone, useThemeSync } from "../utils/theme.js";
-import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../utils/dialog-style.js";
+import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_EMBED_OVERLAY, PL_DIALOG_OVERLAY } from "../utils/dialog-style.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
 import { DialogCloseButton } from "./DialogCloseButton.js";
 import { ImportConfirmModal } from "./ImportConfirmModal.js";
@@ -331,8 +331,9 @@ export function PromptInjectPanel({ open, onClose, t, container }: Props): React
   if (!open) return null;
 
   // 技能开关弹窗打开时，只渲染该模态弹窗，隐藏其后的技能管理弹窗（不叠模态）。
+  // 容器模式（左侧词库面板内嵌）下传给 container，使其在右栏内展示而非全屏浮层。
   if (harnessOpen) {
-    return <HarnessSkillPanel open t={t} onClose={() => setHarnessOpen(false)} />;
+    return <HarnessSkillPanel open t={t} container={container} onClose={() => setHarnessOpen(false)} />;
   }
 
   // 刷新技能列表：剔除已被删除技能的绑定引用
@@ -1326,7 +1327,7 @@ export function PromptInjectPanel({ open, onClose, t, container }: Props): React
                 flex: 1,
                 minHeight: 0,
                 display: "flex",
-                gap: 14,
+                gap: 2,
                 paddingTop: 14,
                 paddingBottom: 4,
                 marginTop: -8,
@@ -1435,7 +1436,7 @@ export function PromptInjectPanel({ open, onClose, t, container }: Props): React
               {/* 右栏：项目绑定工作区（技能开关改在独立弹窗中打开） */}
               <div
                 style={{
-                  flex: "1.15 1 0",
+                  flex: "1 1 0",
                   minWidth: 0,
                   height: "100%",
                   boxSizing: "border-box",
@@ -1708,11 +1709,12 @@ export function PromptInjectPanel({ open, onClose, t, container }: Props): React
                 role="dialog"
                 aria-modal="true"
                 aria-label={t("pl.inject.detailTitle")}
-                className={PL_DIALOG_OVERLAY}
+                className={container ? undefined : PL_DIALOG_OVERLAY}
+                style={container ? PL_DIALOG_EMBED_OVERLAY : undefined}
                 onClick={(e) => e.stopPropagation()}
               >
                 <style>{PL_DIALOG_CSS}</style>
-                <div className={PL_DIALOG} style={{ width: 480, maxWidth: "calc(100vw - 40px)", maxHeight: "min(520px, calc(100vh - 40px))", gap: 10 }}>
+                <div className={PL_DIALOG} style={container ? { width: "100%", height: "100%", gap: 10, borderRadius: 12, background: TONE.panel } : { width: 480, maxWidth: "calc(100vw - 40px)", maxHeight: "min(520px, calc(100vh - 40px))", gap: 10 }}>
                   {/* 标题行 + 右上角关闭按钮 */}
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                     <BookIcon color={TONE.accent} />

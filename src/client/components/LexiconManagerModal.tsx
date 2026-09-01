@@ -1427,7 +1427,7 @@ export function LexiconManagerModal(props: {
             flex: 1,
             minHeight: 0,
             display: "flex",
-            gap: 14,
+            gap: 2,
             paddingTop: 14,
             paddingBottom: 4,
             marginTop: -8,
@@ -1913,7 +1913,7 @@ export function LexiconManagerModal(props: {
           <div
             style={{
               position: "relative",
-              flex: "1.15 1 0",
+              flex: "1 1 0",
               minWidth: 0,
               height: "100%",
               boxSizing: "border-box",

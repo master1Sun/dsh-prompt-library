@@ -230,6 +230,10 @@ export interface PluginSettings {
   backupFormat: "db" | "json";
   /** 词库助手助手形象：whale（鲸鱼款，静态雪碧图）/ dshpet（鲸鱼款，dsh-pet 动态动画）。 */
   assistantCharacter: "whale" | "dshpet";
+  /** 是否启用「会话监控」视图标签（conversation.view）。默认开启。 */
+  monitorEnabled: boolean;
+  /** 是否启用「会话预览」视图标签（conversation.view，预览会话工作目录下的文件）。默认开启。 */
+  previewEnabled: boolean;
 }
 
 /** 设置的默认值。 */
@@ -267,4 +271,6 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   dashboardEnabled: true, // 看板：词库助手右键菜单展示「看板」入口（统计可视化）
   dataManagementEnabled: true, // 数据管理：词库助手右键菜单展示「数据管理」入口
   backupEnabled: true, // 是否启用自动备份（启动时及按周期备份数据库）
+  monitorEnabled: true, // 会话监控视图标签：控制 conversation.view 顶部「监控」显隐
+  previewEnabled: true, // 会话预览视图标签：控制 conversation.view 顶部「预览」显隐
 };

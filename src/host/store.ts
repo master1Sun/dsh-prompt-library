@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 // 惰性加载 node:sqlite（屏蔽实验特性警告），DatabaseSync 仅作类型使用
 import { createDatabase } from "./node-sqlite.js";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { load, dump } from "js-yaml";
 import type { PluginSettings, Prompt, TrashItem } from "../types.js";
 import { clampTitle, DEFAULT_SETTINGS, TITLE_MAX_LEN } from "../types.js";
@@ -2960,4 +2960,231 @@ export function clearAllSessionPersonaBindings(): void {
   } catch {
     /* 更新失败静默 */
   }
+}
+
+// ── 数据库可视化（浏览 + 常规增删改查 prompt.db）────────────────────────
+
+/** 单张表的列定义（来自 PRAGMA table_info）。 */
+export interface DbColumnInfo {
+  name: string;
+  type: string;
+  /** 主键序号；0 表示非主键，>0 为复合主键中的顺序。 */
+  pk: number;
+  /** 是否 NOT NULL（1/0）。 */
+  notnull: number;
+  /** 列默认值原文（可能为 null）。 */
+  dflt: string | null;
+}
+
+/** 单张表的预览信息：表名 + 行数 + 列定义 + 可编辑标识。 */
+export interface DbTableInfo {
+  name: string;
+  /** 表内行数。 */
+  rows: number;
+  /** 列定义（按序号排列）。 */
+  columns: DbColumnInfo[];
+  /** 用于定位行的主键列名（复合主键按次序）；无显式主键且为 rowid 表时回退为 ["rowid"]。 */
+  key: string[];
+  /** 是否可从可视化面板做增删改。false 表示无主键且无 rowid，无法安全定位单行。 */
+  editable: boolean;
+}
+
+/** 列出词库数据库中的全部业务表（跳过 sqlite_* 内部表）。 */
+export function listDbTables(): DbTableInfo[] {
+  const cur = getDb();
+  const names = (
+    cur
+      .prepare(
+        "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+      )
+      .all() as Array<{ name: string; sql: string | null }>
+  ).map((r) => r);
+  const result: DbTableInfo[] = [];
+  for (const { name, sql } of names) {
+    const columns = (
+      cur.prepare(`PRAGMA table_info(${quoteIdent(name)})`).all() as Array<{
+        name: string;
+        type: string;
+        pk: number;
+        notnull: number;
+        dflt_value: string | null;
+      }>
+    ).map((c) => ({
+      name: c.name,
+      type: c.type,
+      pk: c.pk,
+      notnull: c.notnull,
+      dflt: c.dflt_value,
+    }));
+    const { rows } = cur
+      .prepare(`SELECT COUNT(*) AS rows FROM ${quoteIdent(name)}`)
+      .get() as { rows: number };
+    // 主键：显式 pk>0 的列，其次 rowid（非 WITHOUT ROWID 表）
+    const pkCols = columns.filter((c) => c.pk > 0).sort((a, b) => a.pk - b.pk);
+    const withoutRowid = /without\s+rowid/i.test(sql ?? "");
+    const key =
+      pkCols.length > 0
+        ? pkCols.map((c) => c.name)
+        : withoutRowid
+          ? []
+          : ["rowid"];
+    result.push({
+      name,
+      rows,
+      columns,
+      key,
+      editable: key.length > 0,
+    });
+  }
+  return result;
+}
+
+/** 查询某张表的列定义（内部使用）。 */
+function tableColumns(cur: unknown, table: string): DbColumnInfo[] {
+  return (cur as ReturnType<typeof getDb>)
+    .prepare(`PRAGMA table_info(${quoteIdent(table)})`)
+    .all() as unknown as DbColumnInfo[];
+}
+
+/** 引用标识符（列 / 表名），用双引号包裹并转义内部引号。 */
+function quoteIdent(id: string): string {
+  return `"${String(id).replace(/"/g, '""')}"`;
+}
+
+/** 校验表名是否为纯标识符，防止 SQL 注入。 */
+function assertPlainTable(table: string): void {
+  if (typeof table !== "string" || !/^[A-Za-z0-9_]+$/.test(table)) {
+    throw new Error("非法的表名");
+  }
+}
+
+/** 把未知类型的写入值规整为 node:sqlite 接受的输入类型（对象/数组转为 JSON 字符串）。 */
+function toSqlValue(v: unknown): SQLInputValue {
+  if (v === undefined || v === null) return null;
+  if (typeof v === "number" || typeof v === "bigint" || typeof v === "string") return v;
+  if (typeof v === "boolean") return v ? 1 : 0;
+  return JSON.stringify(v);
+}
+
+/** 常规单行写入的通用入参。 */
+export interface DbRowPayload {
+  table: string;
+  /** 主键定位（列名 → 值），用于 update/delete。 */
+  pk?: Array<{ name: string; value: unknown }>;
+  /** 待写入的列值（列名 → 值）。 */
+  record?: Record<string, unknown>;
+}
+
+/** 新增一行；返回受影响行数。 */
+export function insertDbRow(payload: DbRowPayload): number {
+  assertPlainTable(payload.table);
+  const cur = getDb();
+  const valid = new Set(tableColumns(cur, payload.table).map((c) => c.name));
+  const entries = Object.entries(payload.record ?? {}).filter(([k]) =>
+    valid.has(k),
+  );
+  if (entries.length === 0) throw new Error("没有可写入的字段");
+  const cols = entries.map(([k]) => quoteIdent(k)).join(", ");
+  const placeholders = entries.map(() => "?").join(", ");
+  const values = entries.map(([, v]) => toSqlValue(v));
+  cur
+    .prepare(`INSERT INTO ${quoteIdent(payload.table)} (${cols}) VALUES (${placeholders})`)
+    .run(...values);
+  return 1;
+}
+
+/** 更新一行（由主键定位）；返回受影响行数。 */
+export function updateDbRow(payload: DbRowPayload): number {
+  assertPlainTable(payload.table);
+  const pk = payload.pk ?? [];
+  if (pk.length === 0) throw new Error("缺少主键定位，无法更新");
+  const cur = getDb();
+  const valid = new Set(tableColumns(cur, payload.table).map((c) => c.name));
+  const pkNames = new Set(pk.map((k) => k.name));
+  // 仅更新不属于主键的字段
+  const setEntries = Object.entries(payload.record ?? {}).filter(
+    ([k]) => valid.has(k) && !pkNames.has(k),
+  );
+  if (setEntries.length === 0) throw new Error("没有可更新的字段");
+  const setClauses: string[] = [];
+  for (const [k] of setEntries) {
+    setClauses.push(`${quoteIdent(k)} = ?`);
+  }
+  const whereClauses = pk.map(() => "?");
+  const values = [
+    ...setEntries.map(([, v]) => toSqlValue(v)),
+    ...pk.map((k) => toSqlValue(k.value)),
+  ];
+  const res = cur
+    .prepare(
+      `UPDATE ${quoteIdent(payload.table)} SET ${setClauses.join(", ")} WHERE ${whereClauses.join(" AND ")}`,
+    )
+    .run(...values);
+  return Number(res.changes);
+}
+
+/** 删除一行（由主键定位）；返回受影响行数。 */
+export function deleteDbRow(payload: DbRowPayload): number {
+  assertPlainTable(payload.table);
+  const pk = payload.pk ?? [];
+  if (pk.length === 0) throw new Error("缺少主键定位，无法删除");
+  const cur = getDb();
+  let i = 1;
+  const whereClauses = pk.map((k) => `${quoteIdent(k.name)} = ?${i++}`);
+  const values = pk.map((k) => toSqlValue(k.value));
+  const res = cur
+    .prepare(`DELETE FROM ${quoteIdent(payload.table)} WHERE ${whereClauses.join(" AND ")}`)
+    .run(...values);
+  return Number(res.changes);
+}
+
+/** 安全的只读查询结果。 */
+export interface DbQueryResult {
+  /** 返回的行。 */
+  rows: Record<string, unknown>[];
+  /** 列名（按查询结果的列顺序）。 */
+  columns: string[];
+  /** 是否因行数上限被截断。 */
+  truncated: boolean;
+}
+
+/** 单次查询最大返回行数，避免一次性拉取超大表拖垮前端。 */
+const DB_QUERY_ROW_LIMIT = 500;
+
+/**
+ * 执行一条 SQL 并返回结果（开发者模式下不限制语句类型，支持读与写）。
+ * - 按分号切割逐条执行；
+ * - 对未显式加 LIMIT 的 SELECT / WITH 自动追加 `LIMIT ${DB_QUERY_ROW_LIMIT}` 防爆界面；
+ * - PRAGMA / EXPLAIN 等无结果集的语句以空数组呈现。
+ */
+export function queryDb(rawSql: string): DbQueryResult {
+  const sql = String(rawSql ?? "").trim();
+  if (!sql) throw new Error("SQL 为空");
+  // 按分号切割语句
+  const statements = sql
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (statements.length === 0) throw new Error("SQL 为空");
+  // 对于未带上限的 SELECT / WITH，追加 LIMIT 兜底防爆
+  let bounded = sql;
+  const top = statements[0];
+  if (/^\s*(select|with)\b/i.test(top) && !/\blimit\b/i.test(top.replace(/["'`].*?["'`]/g, ""))) {
+    bounded += ` LIMIT ${DB_QUERY_ROW_LIMIT}`;
+  }
+  const cur = getDb();
+  let rows: Record<string, unknown>[] = [];
+  let truncated = false;
+  for (const stmt of statements) {
+    if (/^\s*(pragma|explain)\b/i.test(stmt)) continue;
+    let data = cur.prepare(stmt).all() as Record<string, unknown>[];
+    if (data.length > DB_QUERY_ROW_LIMIT) {
+      data = data.slice(0, DB_QUERY_ROW_LIMIT);
+      truncated = true;
+    }
+    rows = data;
+  }
+  // PRAGMA 等没有结果集的语句以空数组呈现
+  const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
+  return { rows, columns, truncated };
 }

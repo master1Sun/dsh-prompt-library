@@ -1,5 +1,31 @@
 [
   {
+    "version": "0.12.0",
+    "date": "2026-09-02",
+    "zh": {
+      "title": "数据库行内编辑 · 开发者模式 · 预览/监控开关 · 国际化补全",
+      "items": [
+        "数据库行内编辑：新增 / 编辑直接在表格行内操作（单元格变输入框），不再弹出底部表单，并移除每行末尾的操作列，界面更简洁；顶部提供 新增 / 编辑 / 删除 / 保存 / 取消 一组操作。",
+        "开发者模式：数据库面板默认隐藏「新增」工具条与「SQL 条件运行」两行，点击右上角「开发者模式」开关后才显示，日常浏览更清爽。",
+        "表描述国际化：数据表列表显示每张业务表的描述，支持中 / 英随界面语言自动切换，未收录的表不显示描述。",
+        "预览导出产物：会话预览新增「导出产物」按钮与文件 / 文件夹右键「导出」，可将当前会话工作目录下的文件（含子目录）勾选打包为 ZIP 下载，便于收敛与沉淀会话产物。",
+        "国际化补全：左侧词库名称、预览界面按钮文案、导出产物弹窗均接入多语言，并随语言切换即时刷新。",
+        "视图显隐开关：设置 - 显示与交互 新增「显示会话监控」「显示会话预览」，关闭后对应会话顶部标签即时隐藏，可随时再开启。"
+      ]
+    },
+    "en": {
+      "title": "DB inline editing · Developer mode · Monitor/Preview toggles · i18n completion",
+      "items": [
+        "Inline DB editing: add / edit happen directly in table rows (cells turn into inputs) instead of a bottom form, and the per-row action column is removed for a cleaner look; the toolbar provides Add / Edit / Delete / Save / Cancel.",
+        "Developer mode: the database panel hides the \"Add\" toolbar and the SQL run row by default; both appear only after toggling the \"Developer mode\" switch at the top right.",
+        "Localized table descriptions: the table list shows a description for each business table, switching with the UI language; unmapped tables show no description.",
+        "Preview artifact export: the preview view adds an \"Export artifacts\" button plus a right-click \"Export\" on files / folders — pick the files (including subdirectories) you want and download them as a single ZIP, great for collecting a session's artifacts.",
+        "i18n completion: the left-side library label, preview buttons and the export-artifacts dialog are now localized, refreshing instantly on language change.",
+        "View visibility toggles: new \"Show conversation monitor\" and \"Show conversation preview\" settings under Display & Interaction; turning them off hides the corresponding tabs at the top of conversations right away."
+      ]
+    }
+  },
+  {
     "version": "0.11.0",
     "date": "2026-09-01",
     "zh": {

@@ -39,6 +39,9 @@ import { WhaleStage } from "./WhaleStage.js";
 import { DashboardModal } from "./DashboardModal.js";
 import { ImportExportModal } from "./ImportExportModal.js";
 import { LexiconManagerModal } from "./LexiconManagerModal.js";
+import { DbPreviewPanel } from "./DbPreviewPanel.js";
+import { TagManagePanel } from "./TagManagePanel.js";
+import { RecycleManagePanel } from "./RecycleManagePanel.js";
 import {
   HOVER_SEQUENCE,
   SEQUENCES,
@@ -1585,6 +1588,12 @@ export function PromptAssistant(props: Props): ReactNode {
                 return <AchievementModal open onClose={closePanelContent} t={T} container={container} />;
               case "announce":
                 return <AnnouncementModal open onClose={closePanelContent} t={T} container={container} />;
+              case "dbPreview":
+                return <DbPreviewPanel t={T} />;
+              case "tags":
+                return <TagManagePanel t={T} />;
+              case "trash":
+                return <RecycleManagePanel t={T} />;
               default:
                 return null;
             }

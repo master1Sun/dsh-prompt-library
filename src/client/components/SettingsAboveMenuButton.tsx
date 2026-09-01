@@ -59,6 +59,20 @@ const NAV_ITEMS: NavItem[] = [
     iconBody: '<path d="M8 12V4M8 4L5 7M8 4l3 3M8 12l-3-3M8 12l3-3"/>',
   },
   {
+    id: "tags",
+    labelKey: "pl.ctx.tags",
+    iconBg: "rgba(234, 88, 12, .12)",
+    iconColor: "#ea580c",
+    iconBody: '<path d="M3 5.5A2.5 2.5 0 0 1 5.5 3h4.6c.4 0 .8.15 1.1.44l7 6.1a1.6 1.6 0 0 1 0 2.34l-5.7 5.7a1.6 1.6 0 0 1-2.34 0l-6.1-7A2.5 2.5 0 0 1 3 9.1V5.5Z"/><circle cx="7.4" cy="7.4" r="1.2"/>',
+  },
+  {
+    id: "trash",
+    labelKey: "pl.ctx.trash",
+    iconBg: "rgba(220, 38, 38, .1)",
+    iconColor: "var(--dsw-alias-state-error-primary,#dc2626)",
+    iconBody: '<path d="M5 6.5h14M9 6.5V4.8A.8.8 0 0 1 9.8 4h4.4a.8.8 0 0 1 .8.8v1.7M6.5 6.5l.7 12a1 1 0 0 0 1 .9h7.6a1 1 0 0 0 1-.9l.7-12M9.5 10v5M14.5 10v5"/>',
+  },
+  {
     id: "persona",
     labelKey: "pl.ctx.personas",
     iconBg: "rgba(139, 92, 246, .12)",
@@ -93,6 +107,13 @@ const NAV_ITEMS: NavItem[] = [
     iconColor: "var(--dsw-alias-state-error-primary,#dc2626)",
     iconBody: '<path d="M3 8.5V7a1.5 1.5 0 0 1 1.5-1.5h1L10 3.5v9l-4.5-2H4.5A1.5 1.5 0 0 1 3 9v-.5Z"/><path d="M11 6.5a2.6 2.6 0 0 1 0 3"/>',
   },
+  {
+    id: "dbPreview",
+    labelKey: "pl.ctx.dbPreview",
+    iconBg: "rgba(13, 148, 136, .12)",
+    iconColor: "#0d9488",
+    iconBody: '<ellipse cx="8" cy="4" rx="5" ry="1.8"/><path d="M3 4v5.5c0 1 2.2 1.8 5 1.8s5-.8 5-1.8V4"/><path d="M3 9.5V15c0 1 2.2 1.8 5 1.8s5-.8 5-1.8V9.5"/>',
+  },
 ];
 
 /** 各导航项对应的功能类型（与 PromptAssistant panelNavKey 值一致）。 */
@@ -104,6 +125,9 @@ const PANEL_TYPE_MAP: Record<string, string> = {
   dashboard: "dashboard",
   achievement: "achievement",
   announce: "announce",
+  tags: "tags",
+  trash: "trash",
+  dbPreview: "dbPreview",
 };
 
 let pendingPanelType: string | null = null;
@@ -131,7 +155,7 @@ function schedulePanelContent(container: HTMLElement, type: string): void {
  */
 export function registerSettingsAboveMenu(
   getTranslation: (key: string) => string,
-  _getSettingsEnabled: () => Record<string, boolean>,
+  _getSettingsEnabled: () => Record<string, boolean> | Promise<Record<string, boolean>>,
   getEnabled: () => Promise<boolean> = async () => true,
 ): () => void {
   let disposed = false;
@@ -188,12 +212,12 @@ export function registerSettingsAboveMenu(
     const header = document.createElement("div");
     header.className = "pl-sa-panel-header";
     const titleSpan = document.createElement("span");
-    titleSpan.textContent = "词库";
+    titleSpan.textContent = getTranslation("pl.title");
     titleSpan.style.cssText = "font-size:14px;font-weight:600;color:var(--dsw-alias-label-primary,#1f2937);";
     const closeBtn = document.createElement("button");
     closeBtn.type = "button";
     closeBtn.className = "pl-sa-close-btn";
-    closeBtn.setAttribute("aria-label", "关闭");
+    closeBtn.setAttribute("aria-label", getTranslation("pl.close"));
     closeBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"/></svg>';
     closeBtn.addEventListener("click", closePanel);
     header.appendChild(titleSpan);
@@ -295,7 +319,7 @@ export function registerSettingsAboveMenu(
 
     const menuBtn = document.createElement("button");
     menuBtn.type = "button";
-    menuBtn.title = "词库";
+    menuBtn.title = getTranslation("pl.title");
     menuBtn.style.cssText = [
       "box-sizing:border-box;cursor:pointer;width:calc(100% + 4px);height:42px;",
       "color:var(--dsw-alias-label-primary);background:0 0;border:none;border-radius:12px;",
@@ -310,15 +334,17 @@ export function registerSettingsAboveMenu(
     svg.setAttribute("viewBox", "0 0 24 24");
     svg.setAttribute("fill", "none");
     svg.setAttribute("stroke", "currentColor");
-    svg.setAttribute("stroke-width", "2");
+    svg.setAttribute("stroke-width", "1.6");
     svg.setAttribute("stroke-linecap", "round");
     svg.setAttribute("stroke-linejoin", "round");
     svg.setAttribute("aria-hidden", "true");
-    svg.innerHTML = '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M8 7h8M8 11h6"/>';
+    // 与设置面板「词库」导航同款图标（文件/文本式）
+    svg.innerHTML = '<path d="M4 5h11a3 3 0 0 1 3 3v11l-3-2-3 2V8a3 3 0 0 0-3-3H4Z"/><path d="M8 9h3M8 12h3"/>';
     menuBtn.appendChild(svg);
 
     const label = document.createElement("span");
-    label.textContent = "词库";
+    label.className = "pl-sa-btn-label";
+    label.textContent = getTranslation("pl.title");
     label.style.cssText = "font-size:14px;";
     menuBtn.appendChild(label);
 
@@ -415,6 +441,20 @@ export function registerSettingsAboveMenu(
   };
   window.addEventListener("pl:settings-changed", onSettingsChanged);
 
+  // 语言切换时刷新菜单按钮文字（已注入的 DOM 不随语言自动更新）
+  const langObserver = new MutationObserver(() => {
+    if (disposed) return;
+    document.querySelectorAll<HTMLElement>(".pl-sa-btn-label").forEach((el) => {
+      el.textContent = getTranslation("pl.title");
+      const btn = el.closest("button");
+      if (btn) btn.title = getTranslation("pl.title");
+    });
+  });
+  langObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["lang", "class"],
+  });
+
   // 初始拉取一次开关 + 立即注入
   refreshEnabled();
   doInject();
@@ -422,6 +462,7 @@ export function registerSettingsAboveMenu(
   return () => {
     disposed = true;
     observer.disconnect();
+    langObserver.disconnect();
     window.removeEventListener("pl:settings-changed", onSettingsChanged);
     closePanel();
     const wrapper = document.querySelector("[data-pl-sa-wrap]");

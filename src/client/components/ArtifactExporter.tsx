@@ -8,10 +8,12 @@ import { useState } from "react";
 import JSZip from "jszip";
 import type { PreviewFileEntry } from "../utils/api.js";
 import { readPreviewFile } from "../utils/api.js";
+import { type PLTranslate, usePLT } from "../utils/i18n.js";
 
 interface ArtifactExporterProps {
   files: PreviewFileEntry[];
   sessionTitle?: string;
+  t?: PLTranslate;
 }
 
 /** 需要排除的路径模式 */
@@ -63,7 +65,8 @@ function getTypeIcon(type: string): string {
   return icons[type] || "📄";
 }
 
-export function ArtifactExporter({ files, sessionTitle }: ArtifactExporterProps) {
+export function ArtifactExporter({ files, sessionTitle, t }: ArtifactExporterProps) {
+  const T = usePLT(t);
   const [exporting, setExporting] = useState(false);
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
   const [showSelector, setShowSelector] = useState(false);
@@ -103,7 +106,7 @@ export function ArtifactExporter({ files, sessionTitle }: ArtifactExporterProps)
 
   const handleExport = async () => {
     if (selectedFiles.size === 0) {
-      alert("请至少选择一个文件");
+      alert(T("pl.exporter.noSelection"));
       return;
     }
     
@@ -171,7 +174,7 @@ export function ArtifactExporter({ files, sessionTitle }: ArtifactExporterProps)
       setProgress(null);
     } catch (err) {
       console.error("Export failed:", err);
-      alert("导出失败，请重试");
+      alert(T("pl.exporter.fail"));
     } finally {
       setExporting(false);
       setProgress(null);
@@ -188,9 +191,9 @@ export function ArtifactExporter({ files, sessionTitle }: ArtifactExporterProps)
         className="export-btn"
         onClick={initializeSelection}
         disabled={exportableCount === 0}
-        title={`从 ${exportableCount} 个文件中选择导出`}
+        title={T("pl.exporter.selectHint", { count: String(exportableCount) })}
       >
-        📦 导出产物
+        {T("pl.exporter.btn")}
         {selectedCount > 0 && selectedCount < exportableCount && (
           <span className="badge">{selectedCount}</span>
         )}
@@ -201,12 +204,12 @@ export function ArtifactExporter({ files, sessionTitle }: ArtifactExporterProps)
         <div className="selector-overlay" onClick={() => setShowSelector(false)}>
           <div className="selector-panel" onClick={(e) => e.stopPropagation()}>
             <div className="selector-header">
-              <h4>选择要导出的文件</h4>
+              <h4>{T("pl.exporter.title")}</h4>
               <button
                 type="button"
                 className="close-btn"
                 onClick={() => setShowSelector(false)}
-                title="关闭"
+                title={T("pl.close")}
               >
                 ✕
               </button>
@@ -218,10 +221,15 @@ export function ArtifactExporter({ files, sessionTitle }: ArtifactExporterProps)
                 className="action-btn"
                 onClick={toggleAll}
               >
-                {selectedFiles.size === exportableFiles.length ? "取消全选" : "全选"}
+                {selectedFiles.size === exportableFiles.length
+                  ? T("pl.exporter.deselectAll")
+                  : T("pl.exportSelectAll")}
               </button>
               <span className="counter">
-                已选 {selectedFiles.size} / {exportableFiles.length}
+                {T("pl.exporter.selected", {
+                  selected: String(selectedFiles.size),
+                  total: String(exportableFiles.length),
+                })}
               </span>
             </div>
             
@@ -255,7 +263,7 @@ export function ArtifactExporter({ files, sessionTitle }: ArtifactExporterProps)
                 className="cancel-btn"
                 onClick={() => setShowSelector(false)}
               >
-                取消
+                {T("pl.cancel")}
               </button>
               <button
                 type="button"
@@ -263,7 +271,9 @@ export function ArtifactExporter({ files, sessionTitle }: ArtifactExporterProps)
                 onClick={handleExport}
                 disabled={selectedFiles.size === 0 || exporting}
               >
-                {exporting ? "导出中..." : `导出 (${selectedFiles.size})`}
+                {exporting
+                  ? T("pl.exporter.exporting")
+                  : T("pl.exporter.export", { count: String(selectedFiles.size) })}
               </button>
             </div>
           </div>

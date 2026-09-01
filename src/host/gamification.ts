@@ -708,7 +708,7 @@ statusEmitter.setMaxListeners(100);
 export function onStatusChange(
   callback: (status: AssistantStatus) => void,
 ): () => void {
-  const handler = (lang: GamifyLang) => {
+  const handler = (_lang: GamifyLang) => {
     // 注意：这里不直接发送，由路由层构建完整快照
     callback({} as AssistantStatus); // 占位，实际由路由层处理
   };

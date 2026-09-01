@@ -15,12 +15,19 @@
  * （手动模式覆盖会话派生目录，且不随会话切换改变），再次点击可更换目录。
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import JSZip from "jszip";
 import type { ConversationSnapshot } from "@deepseek-ai/dsh-client-runtime/client";
 import type { PLTranslate } from "../utils/i18n.js";
 import {
   getActiveSessionId,
   listPreviewFiles,
   listPreviewFilesByDir,
+  downloadPreviewFile,
+  previewDelete,
+  previewMkdir,
+  previewNewFile,
+  previewRename,
   readPreviewFile,
   savePreviewFile,
   type PreviewFileEntry,
@@ -32,6 +39,7 @@ import { CodeHighlight } from "./CodeHighlight.js";
 import { ArtifactExporter } from "./ArtifactExporter.js";
 // 聊天结果「产物文件」卡片跳转预览面板的目标路径信号
 import { consumePendingPreviewPath, PREVIEW_OPEN_EVENT_NAME } from "../utils/preview-target.js";
+import { getTone, useThemeSync } from "../utils/theme.js";
 
 /** Prism 语言标识映射：将文件类型映射到 Prism 支持的语言名。 */
 const PRISM_LANG_MAP: Record<string, string> = {
@@ -74,15 +82,95 @@ interface FileTreeNode {
   children?: FileTreeNode[];
 }
 
-/** 按类型分组后的组结构。 */
-interface TypeGroup {
-  type: PreviewFileType;
-  label: string;
-  nodes: FileTreeNode[];
-}
-
 /** 样式作用域前缀，避免与宿主类名冲突。 */
 const S = "pl-pv";
+
+/** 复制文本到剪贴板：优先 navigator.clipboard，失败时回退临时 textarea（webview 中兼容）。 */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* 落入回退 */
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 触发浏览器下载指定 Blob。 */
+function triggerDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** 由文件扩展名派生出图标用 type（用于 ZIP 选择器行图标）。 */
+function fileTypeOf(name: string): string {
+  const last = name.lastIndexOf(".");
+  return last >= 0 ? name.slice(last + 1).toLowerCase() : "";
+}
+
+/** ZIP 选择器行图标：按扩展名映射为 emoji。 */
+function fileIconOf(type: string): string {
+  const icons: Record<string, string> = {
+    md: "📝", json: "📋", txt: "📄", csv: "📊", log: "📋",
+    ts: "📘", js: "📗", py: "🐍", go: "🔵", rs: "🦀", java: "☕",
+    c: "⚙️", cpp: "⚙️", css: "🎨", html: "🌐", svg: "🎨",
+    png: "🖼️", jpg: "🖼️", jpeg: "🖼️", gif: "🖼️", webp: "🖼️",
+  };
+  return icons[type] || "📄";
+}
+
+/** ZIP 选择器行文件体积格式化。 */
+function formatZipSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** 把字符串清理成可用的下载文件名（替换非法字符）。 */
+function sanitizeFilename(name: string): string {
+  const cleaned = name
+    .replace(/[/\\:*?"<>|\s]+/g, "_")
+    .replace(/[^\p{L}\p{N}_.-]/gu, "_")
+    .replace(/_+/g, "_")
+    .replace(/^[._]+|[._]+$/g, "");
+  return cleaned || "export";
+}
+
+/** 右键菜单目标：文件 / 目录 / 列表空白区。 */
+interface CtxTarget {
+  kind: "file" | "dir" | "blank";
+  /** 绝对路径（空白区=当前预览根目录）。 */
+  absPath: string;
+  /** 相对列表根目录的路径。 */
+  relPath: string;
+  /** 显示名 / 新建时的默认名。 */
+  name: string;
+  /** 文件类型（仅文件）。 */
+  type?: PreviewFileType;
+}
+
+/** 智能文件分类：基于文件名、路径和内容特征。 */
+type SmartCategory = "docs" | "config" | "test" | "business" | "styles" | "data" | "other";
 
 /** 各类型的徽标文本与主题色。 */
 const TYPE_META: Record<PreviewFileType, { label: string; color: string }> = {
@@ -114,32 +202,6 @@ const TYPE_META: Record<PreviewFileType, { label: string; color: string }> = {
   svg: { label: "svg", color: "#ffb13b" },
 };
 
-/** 各类型分组标题的 i18n 键。 */
-const GROUP_LABEL_KEY: Record<PreviewFileType, string> = {
-  md: "pl.preview.group.md",
-  json: "pl.preview.group.json",
-  txt: "pl.preview.group.txt",
-  csv: "pl.preview.group.csv",
-  ts: "pl.preview.type.ts",
-  js: "pl.preview.type.js",
-  py: "pl.preview.type.py",
-  go: "pl.preview.type.go",
-  rs: "pl.preview.type.rs",
-  java: "pl.preview.type.java",
-  c: "pl.preview.type.c",
-  cpp: "pl.preview.type.cpp",
-  yml: "pl.preview.type.yml",
-  yaml: "pl.preview.type.yaml",
-  toml: "pl.preview.type.toml",
-  xml: "pl.preview.type.xml",
-  log: "pl.preview.type.log",
-  png: "pl.preview.type.image",
-  jpg: "pl.preview.type.image",
-  jpeg: "pl.preview.type.image",
-  gif: "pl.preview.type.image",
-  svg: "pl.preview.type.image",
-};
-
 /** 生成唯一锚点 id：英文/中文/数字保留，其余转短横线；重复时追加序号。 */
 function anchorId(text: string, used: Set<string>): string {
   let base = text
@@ -153,6 +215,23 @@ function anchorId(text: string, used: Set<string>): string {
   while (used.has(id)) id = `${base}-${n++}`;
   used.add(id);
   return id;
+}
+
+/** 把标题原始文本中的 Markdown 符号剥成纯文本（用于大纲展示，避免残留 `**`、`` ` `` 等符号）。 */
+function stripMd(text: string): string {
+  return text
+    .replace(/!\[([^\]]*)\]\([^)\s]+\)/g, "$1") // ![alt](url) → alt
+    .replace(/\[([^\]]+)\]\([^)\s]+\)/g, "$1") // [text](url) → text
+    .replace(/<([^>]+)>/g, "$1") // <tag> → tag
+    .replace(/(`{1,2})([^`\n]+?)\1/g, "$2") // 行内代码 → 内容
+    .replace(/\*\*([^*\n]+?)\*\*/g, "$1") // **粗体**
+    .replace(/\*([^*\n]+?)\*/g, "$1") // *斜体*
+    .replace(/~~([^~\n]+?)~~/g, "$1") // ~~删除线~~
+    .replace(/==([^=\n]+?)==/g, "$1") // ==高亮==
+    .replace(/_([^_\n]+?)_/g, "$1") // _斜体_
+    .replace(/^#+\s+/, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /** 内联标记解析：`code`、**粗体**、*斜体*、~~删除线~~、==高亮==、[链接](url)、![图片](url)、自动 URL。 */
@@ -308,8 +387,9 @@ function renderMd(text: string): { outline: OutlineItem[]; body: ReactNode[] } {
     return <h6 {...props}>{children}</h6>;
   };
   const pushHeading = (lv: number, rawText: string) => {
-    const id = anchorId(rawText, used);
-    outline.push({ id, level: lv, text: rawText });
+    const plain = stripMd(rawText);
+    const id = anchorId(plain, used);
+    outline.push({ id, level: lv, text: plain });
     out.push(heading(lv, id, inlineMd(rawText, keySeq)));
   };
   const renderTable = (header: string[], rows: string[][]) => (
@@ -458,21 +538,34 @@ function isLargeFile(size: number): "warning" | "error" | null {
 /** 把扁平文件列表组装成嵌套树（目录优先、按名排序；目录节点 path 为相对路径）。 */
 function buildTree(files: PreviewFileEntry[]): FileTreeNode[] {
   const root: FileTreeNode = { name: "", children: [] };
-  for (const f of files) {
-    const parts = f.name.split("/");
+
+  /** 逐段创建（或复用）目录节点，返回末级目录节点。 */
+  const ensureDir = (parts: string[]): FileTreeNode => {
     let node = root;
     let dirPath = "";
-    for (let i = 0; i < parts.length - 1; i++) {
-      dirPath = dirPath ? `${dirPath}/${parts[i]}` : parts[i];
-      let child = node.children?.find((c) => c.path === dirPath);
+    for (const p of parts) {
+      dirPath = dirPath ? `${dirPath}/${p}` : p;
+      let child = node.children?.find((c) => c.path === dirPath && c.children);
       if (!child) {
-        child = { name: parts[i], path: dirPath, children: [] };
+        child = { name: p, path: dirPath, children: [] };
         node.children!.push(child);
       }
       node = child;
     }
-    node.children!.push({ name: parts[parts.length - 1], path: f.path, type: f.type, size: f.size });
+    return node;
+  };
+
+  for (const f of files) {
+    const parts = f.name.split("/");
+    // 目录条目：建出末级目录节点即可（空目录也会被创建）
+    if (f.dir) {
+      ensureDir(parts);
+      continue;
+    }
+    const parent = ensureDir(parts.slice(0, -1));
+    parent.children!.push({ name: parts[parts.length - 1], path: f.path, type: f.type, size: f.size });
   }
+
   const sortNode = (n: FileTreeNode) => {
     if (!n.children) return;
     n.children.sort((a, b) => {
@@ -494,9 +587,16 @@ interface TreeProps {
   onToggle: (dir: string) => void;
   activePath: string | null;
   onSelect: (path: string) => void;
+  /** 列表根目录绝对路径（用于由节点相对/绝对路径还原相对显示路径）。 */
+  baseDir: string;
+  /** 右键菜单回调：打开菜单，事件对象来自 onContextMenu。 */
+  onCtx: (
+    e: { clientX: number; clientY: number; preventDefault(): void; stopPropagation(): void },
+    n: FileTreeNode,
+  ) => void;
 }
 
-function TreeNodes({ nodes, depth, collapsed, onToggle, activePath, onSelect }: TreeProps): ReactNode {
+function TreeNodes({ nodes, depth, collapsed, onToggle, activePath, onSelect, baseDir, onCtx }: TreeProps): ReactNode {
   return (
     <>
       {nodes.map((n) => {
@@ -508,6 +608,7 @@ function TreeNodes({ nodes, depth, collapsed, onToggle, activePath, onSelect }: 
                 className={`${S}-treeDir`}
                 style={{ paddingLeft: 4 + depth * 14 }}
                 onClick={() => onToggle(n.path!)}
+                onContextMenu={(e) => onCtx(e, n)}
                 title={n.path}
               >
                 <span className={`${S}-treeArrow ${open ? "open" : ""}`}>{open ? "▾" : "▸"}</span>
@@ -521,6 +622,8 @@ function TreeNodes({ nodes, depth, collapsed, onToggle, activePath, onSelect }: 
                   onToggle={onToggle}
                   activePath={activePath}
                   onSelect={onSelect}
+                  baseDir={baseDir}
+                  onCtx={onCtx}
                 />
               )}
             </div>
@@ -533,6 +636,7 @@ function TreeNodes({ nodes, depth, collapsed, onToggle, activePath, onSelect }: 
             className={`${S}-file ${n.path === activePath ? "active" : ""}`}
             style={{ paddingLeft: 4 + depth * 14 + 18 }}
             onClick={() => onSelect(n.path!)}
+            onContextMenu={(e) => onCtx(e, n)}
             title={n.path}
           >
             <span
@@ -721,6 +825,9 @@ function dirnameOf(path: string): string {
 }
 
 export function PreviewView(props: PreviewProps): ReactNode {
+  useThemeSync(); // 订阅宿主主题，白天/黑夜切换时刷新主题色
+  // 主题色：右键菜单等浮层也据此统一样式，保证昼夜一致
+  const TONE = getTone();
   // 翻译座位；宿主未注入时回退为直接返回 key，保证子弹窗（浏览式目录选择）语言不缺失
   const T: PLTranslate = props?.t ?? ((k: string): string => k);
 
@@ -748,12 +855,51 @@ export function PreviewView(props: PreviewProps): ReactNode {
   const [content, setContent] = useState<string | null>(null);
   // 编辑模式：是否处于编辑状态
   const [editing, setEditing] = useState(false);
+  // 大纲面板是否收起（默认展开）
+  const [tocCollapsed, setTocCollapsed] = useState(false);
   // 编辑中的内容（与 content 分离，避免未保存时污染原始内容）
   const [editContent, setEditContent] = useState<string>("");
   // 保存状态
   const [saving, setSaving] = useState(false);
   // Toast 提示
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+  // ── 右键菜单 ──
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; target: CtxTarget } | null>(null);
+  // 名称输入弹窗（重命名文件/目录、新建文件/目录共用）
+  const [nameDialog, setNameDialog] = useState<{
+    title: string;
+    label: string;
+    initial: string;
+    placeholder: string;
+    okText: string;
+    onOk: (name: string) => Promise<void>;
+  } | null>(null);
+  // 危险确认弹窗（删除）
+  const [confirmDialog, setConfirmDialog] = useState<{
+    title: string;
+    message: string;
+    okText: string;
+    onOk: () => Promise<void>;
+  } | null>(null);
+  // 名称输入框中当前值
+  const [nameInput, setNameInput] = useState("");
+  // 名称输入弹窗内的校验错误提示
+  const [dialogErr, setDialogErr] = useState("");
+  // 弹窗进行中（防重复提交）
+  const [modalBusy, setModalBusy] = useState(false);
+  // 刷新计数：整体自增触发文件列表重载
+  const [refreshTick, setRefreshTick] = useState(0);
+  // 右键「编辑」时若目标文件尚未加载正文，标记在正文加载完成后自动进入编辑模式
+  const editOnLoadRef = useRef(false);
+  // ZIP 导出选择器状态：entries 为可勾选文件；zipSel 记录已选（按 rel 路径）
+  const [zipExport, setZipExport] = useState<null | {
+    title: string;
+    rootName: string;
+    entries: { absPath: string; rel: string; type: string; size: number }[];
+  }>(null);
+  const [zipSel, setZipSel] = useState<Set<string>>(new Set());
+  const [zipBusy, setZipBusy] = useState(false);
+  const [zipProgress, setZipProgress] = useState<{ current: number; total: number } | null>(null);
   // 日志文件截断标志和总行数
   const [truncated, setTruncated] = useState<boolean | undefined>(undefined);
   const [totalLines, setTotalLines] = useState<number | undefined>(undefined);
@@ -772,7 +918,7 @@ export function PreviewView(props: PreviewProps): ReactNode {
     return new Set();
   });
   // 当前激活的 Tab（文件类型）
-  const [activeTab, setActiveTab] = useState<PreviewFileType | "all">("all");
+  const [activeTab, setActiveTab] = useState<PreviewFileType | SmartCategory | "all">("all");
   // 列表显示模式：grouped（分组视图）或 list（列表视图）
   type ViewMode = "grouped" | "list";
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
@@ -880,7 +1026,7 @@ export function PreviewView(props: PreviewProps): ReactNode {
         setFiles(list);
         // 不重置 collapsed，保留用户的折叠偏好
         setActivePath((prev) =>
-          prev && list.some((f) => f.path === prev) ? prev : (list[0]?.path ?? null),
+          prev && list.some((f) => !f.dir && f.path === prev) ? prev : (list.find((f) => !f.dir)?.path ?? null),
         );
       })
       .catch(() => {
@@ -893,7 +1039,7 @@ export function PreviewView(props: PreviewProps): ReactNode {
     return () => {
       alive = false;
     };
-  }, [sessid, manualDir]);
+  }, [sessid, manualDir, refreshTick]);
 
   // 选中文件变化 → 加载正文
   useEffect(() => {
@@ -919,6 +1065,12 @@ export function PreviewView(props: PreviewProps): ReactNode {
           setTruncated(d.truncated);
           setTotalLines(d.totalLines);
           setActiveId("");
+          // 右键「编辑」目标为非当前文件时，正文加载完成即自动进入编辑
+          if (editOnLoadRef.current) {
+            editOnLoadRef.current = false;
+            setEditContent(d.content);
+            setEditing(true);
+          }
         }
       })
       .catch(() => {
@@ -937,6 +1089,15 @@ export function PreviewView(props: PreviewProps): ReactNode {
   const parsed = useMemo(() => (content ? renderMd(content) : { outline: [], body: [] }), [content]);
   const outline = parsed.outline;
 
+  // 大文件截断提示条：后端只返回部分内容时告知用户（显示全文共多少行）
+  const truncHint = truncated
+    ? (
+        <div className={`${S}-truncHint`}>
+          {T?.("pl.preview.truncated") ?? "文件较大，已截断预览，仅显示部分内容"}（共 {totalLines ?? "?"} 行）
+        </div>
+      )
+    : null;
+
   // 解析 json 正文：对象 + 是否解析失败
   const activeFile = files.find((f) => f.path === activePath) ?? null;
   
@@ -949,28 +1110,7 @@ export function PreviewView(props: PreviewProps): ReactNode {
     }
   }, [activeFile, content]);
 
-  // 按类型分组 + 构建树（保留用于向后兼容）
-  const groups = useMemo<TypeGroup[]>(() => {
-    const order: PreviewFileType[] = ["md", "json", "txt", "csv"];
-    const byType = new Map<PreviewFileType, PreviewFileEntry[]>();
-    for (const f of files) {
-      const arr = byType.get(f.type);
-      if (arr) arr.push(f);
-      else byType.set(f.type, [f]);
-    }
-    const out: TypeGroup[] = [];
-    for (const t of order) {
-      const list = byType.get(t);
-      if (list && list.length > 0) {
-        out.push({ type: t, label: T?.(GROUP_LABEL_KEY[t]) ?? TYPE_META[t].label, nodes: buildTree(list) });
-      }
-    }
-    return out;
-  }, [files, T]);
-
   // 智能文件分类：基于文件名、路径和内容特征
-  type SmartCategory = "docs" | "config" | "test" | "business" | "styles" | "data" | "other";
-  
   function classifyFile(file: PreviewFileEntry): SmartCategory {
     const name = file.name.toLowerCase();
     const path = file.path.toLowerCase();
@@ -1039,24 +1179,28 @@ export function PreviewView(props: PreviewProps): ReactNode {
   const tabCounts = useMemo(() => {
     const counts = new Map<PreviewFileType, number>();
     for (const f of files) {
+      if (f.dir) continue;
       counts.set(f.type, (counts.get(f.type) || 0) + 1);
     }
     return counts;
   }, [files]);
 
+  // 仅文件（剔除目录条目），供扁平列表/分类/计数使用；目录节点只进图层树
+  const fileEntries = useMemo(() => files.filter((f) => !f.dir), [files]);
+
   // 智能分类统计
   const smartCategoryCounts = useMemo(() => {
     const counts = new Map<SmartCategory, number>();
-    for (const f of files) {
+    for (const f of fileEntries) {
       const category = classifyFile(f);
       counts.set(category, (counts.get(category) || 0) + 1);
     }
     return counts;
-  }, [files]);
+  }, [fileEntries]);
 
   // 过滤和排序后的文件列表
   const filteredFiles = useMemo(() => {
-    let result = files;
+    let result = fileEntries;
     
     // 按 Tab 过滤（支持智能分类）
     if (activeTab !== "all") {
@@ -1098,22 +1242,28 @@ export function PreviewView(props: PreviewProps): ReactNode {
     return result;
   }, [files, activeTab, searchQuery, sortMode, sortAsc]);
 
-  // 树形视图数据：按当前 Tab 过滤后构建
+  // 图层树（分组视图）：按文件夹节点聚合；受类型/智能分类 Tab 与搜索关键字过滤
   const treeNodes = useMemo(() => {
-    const filtered = activeTab === "all" ? files : files.filter((f) => f.type === activeTab);
-    return buildTree(filtered);
-  }, [files, activeTab]);
+    // 与扁平列表一致的 Tab 谓词
+    let pred: (f: PreviewFileEntry) => boolean = () => true;
+    if (activeTab !== "all") {
+      pred = smartClassify
+        ? (f) => classifyFile(f) === activeTab
+        : (f) => f.type === activeTab;
+    }
+    const q = searchQuery.trim().toLowerCase();
+    return buildTree(files.filter((f) => (!q || f.name.toLowerCase().includes(q)) && pred(f)));
+  }, [files, activeTab, smartClassify, searchQuery]);
 
-  const showFiles = files.length > 1;
+  const showFiles = fileEntries.length > 1;
   const showToc = activeFile?.type === "md" && outline.length > 0;
 
   // 编辑功能
   /** 进入编辑模式 */
   const startEditing = () => {
-    if (content !== null) {
-      setEditContent(content);
-      setEditing(true);
-    }
+    if (content === null || truncated) return; // 截断的文件数据不完整，禁止编辑，以免保存时覆盖原文件
+    setEditContent(content);
+    setEditing(true);
   };
 
   /** 取消编辑 */
@@ -1131,11 +1281,11 @@ export function PreviewView(props: PreviewProps): ReactNode {
       await savePreviewFile(activePath, editContent);
       setContent(editContent);
       setEditing(false);
-      setToast({ message: "保存成功", type: "success" });
+      setToast({ message: T("pl.preview.toast.saveOk"), type: "success" });
       setTimeout(() => setToast(null), 2000);
     } catch (err) {
       console.error("Save failed:", err);
-      setToast({ message: "保存失败，请重试", type: "error" });
+      setToast({ message: T("pl.preview.toast.saveFail"), type: "error" });
       setTimeout(() => setToast(null), 3000);
     } finally {
       setSaving(false);
@@ -1153,10 +1303,309 @@ export function PreviewView(props: PreviewProps): ReactNode {
         setFiles(list);
         // 不重置 collapsed，保留用户的折叠偏好
         setActivePath((prev) =>
-          prev && list.some((f) => f.path === prev) ? prev : (list[0]?.path ?? null),
+          prev && list.some((f) => !f.dir && f.path === prev) ? prev : (list.find((f) => !f.dir)?.path ?? null),
         );
       })
       .catch(() => {});
+  };
+
+  // ── 右键菜单 ──
+  // 绝对路径 → 相对列表根目录的路径（用于展示「相对路径」）
+  const relOf = (abs: string): string =>
+    dir ? abs.replace(/\\/g, "/").slice(dir.length).replace(/^\/+/, "") : abs;
+
+  const flash = (message: string, type: "success" | "error" = "success") => {
+    setToast({ message, type });
+    window.setTimeout(() => setToast(null), type === "error" ? 3000 : 2000);
+  };
+
+  // 打开右键菜单：n 为树/列表节点；null 表示列表空白区。
+  const openCtx = (
+    e: { clientX: number; clientY: number; preventDefault(): void; stopPropagation(): void },
+    n: FileTreeNode | null,
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    let target: CtxTarget;
+    if (!n) {
+      target = { kind: "blank", absPath: dir || "", relPath: "", name: "" };
+    } else if (n.children) {
+      target = {
+        kind: "dir",
+        absPath: dir ? `${dir}/${n.path ?? ""}` : (n.path ?? ""),
+        relPath: n.path ?? "",
+        name: n.name,
+      };
+    } else {
+      target = {
+        kind: "file",
+        absPath: n.path ?? "",
+        relPath: relOf(n.path ?? ""),
+        name: n.name,
+        type: n.type,
+      };
+    }
+    setCtxMenu({ x: e.clientX, y: e.clientY, target });
+  };
+
+  const closeMenu = () => setCtxMenu(null);
+
+  // 任一动作执行前的自定义跳转（裁剪到当前 target）
+  const useCtxTarget = (): CtxTarget | null => ctxMenu?.target ?? null;
+
+  // 纯前端动作：复制
+  const actCopy = async (what: "abs" | "rel" | "name" | "link") => {
+    const t = useCtxTarget();
+    if (!t) return;
+    const text =
+      what === "abs" ? t.absPath : what === "rel" ? t.relPath : what === "name" ? t.name : `[${t.name}](${t.relPath})`;
+    const ok = await copyText(text);
+    flash(ok ? T("pl.preview.toast.copied") : T("pl.preview.toast.copyFailed"));
+    closeMenu();
+  };
+
+  const readAndCopy = async (fence: boolean) => {
+    const t = useCtxTarget();
+    if (!t) return;
+    closeMenu();
+    try {
+      const d = await readPreviewFile(t.absPath);
+      const text = fence
+        ? "```" + (t.type === "md" ? "markdown" : (t.type ?? "")) + "\n" + d.content.replace(/\s+$/, "") + "\n```"
+        : d.content;
+      const ok = await copyText(text);
+      flash(ok ? T("pl.preview.toast.copied") : T("pl.preview.toast.copyFailed"));
+    } catch {
+      flash(T("pl.preview.toast.readFailed"), "error");
+    }
+  };
+
+  // 展开/折叠全部（作用于当前树）
+  const collectDirs = (nodes: FileTreeNode[]): string[] =>
+    nodes.flatMap((n) => (n.children ? [n.path!, ...collectDirs(n.children)] : []));
+  const actExpandAll = () => {
+    setCollapsed(new Set());
+    closeMenu();
+  };
+  const actCollapseAll = () => {
+    setCollapsed(new Set(collectDirs(treeNodes)));
+    closeMenu();
+  };
+  const actRefresh = () => {
+    closeMenu();
+    refresh();
+  };
+
+  // 右键「编辑」：若目标文件已是当前文件且正文已加载则直接进入编辑，否则加载后自动编辑。
+  // 截断的文件数据不完整，禁止编辑以免覆盖原文件。
+  const actEdit = () => {
+    const t = useCtxTarget();
+    if (!t || t.kind !== "file") return;
+    if (activePath === t.absPath && truncated) {
+      flash(T("pl.preview.editForbiddenTruncated"), "error");
+      closeMenu();
+      return;
+    }
+    closeMenu();
+    if (activePath === t.absPath && content !== null) {
+      setEditContent(content);
+      setEditing(true);
+    } else {
+      editOnLoadRef.current = true;
+      setActivePath(t.absPath);
+    }
+  };
+
+  // 右键「导出」：文件→单文件；文件夹→该目录下所有文件。均弹选择器勾选后打包为 ZIP
+  const actExport = () => {
+    const t = useCtxTarget();
+    if (!t || t.kind === "blank") return;
+    closeMenu();
+    let entries: { absPath: string; rel: string; type: string; size: number }[];
+    if (t.kind === "file") {
+      entries = [
+        {
+          absPath: t.absPath,
+          rel: t.relPath || t.name,
+          type: fileTypeOf(t.name),
+          size: 0,
+        },
+      ];
+    } else {
+      const prefix = t.relPath ? t.relPath + "/" : "";
+      entries = files
+        .filter((f) => !f.dir && f.name.startsWith(prefix))
+        .map((f) => ({ absPath: f.path, rel: f.name, type: f.type, size: f.size }));
+    }
+    if (entries.length === 0) {
+      flash(T("pl.preview.toast.noExportable"), "error");
+      return;
+    }
+    setZipExport({
+      title: t.kind === "file" ? T("pl.preview.ctx.export") : T("pl.preview.zip.dirTitle"),
+      rootName: t.name || "export",
+      entries,
+    });
+    setZipSel(new Set(entries.map((e) => e.rel)));
+    setZipProgress(null);
+  };
+
+  // 切换 ZIP 勾选
+  const toggleZipFile = (rel: string) =>
+    setZipSel((prev) => {
+      const next = new Set(prev);
+      next.has(rel) ? next.delete(rel) : next.add(rel);
+      return next;
+    });
+
+  // ZIP 全选 / 取消全选
+  const toggleZipAll = () => {
+    if (!zipExport) return;
+    setZipSel((prev) =>
+      prev.size === zipExport.entries.length
+        ? new Set()
+        : new Set(zipExport.entries.map((e) => e.rel)),
+    );
+  };
+
+  // 把已勾选文件逐个读取原始字节并打包为 ZIP 下载
+  const runZipExport = async () => {
+    if (!zipExport || zipSel.size === 0 || zipBusy) return;
+    setZipBusy(true);
+    setZipProgress({ current: 0, total: zipSel.size });
+    try {
+      const zip = new JSZip();
+      const selected = zipExport.entries.filter((e) => zipSel.has(e.rel));
+      for (let i = 0; i < selected.length; i++) {
+        const e = selected[i];
+        try {
+          const d = await downloadPreviewFile(e.absPath);
+          const bin = atob(d.base64);
+          const bytes = new Uint8Array(bin.length);
+          for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
+          zip.file(e.rel, bytes);
+        } catch (err) {
+          console.warn("zip export skip:", e.rel, err);
+        }
+        setZipProgress({ current: i + 1, total: selected.length });
+      }
+      const blob = await zip.generateAsync({
+        type: "blob",
+        compression: "DEFLATE",
+        compressionOptions: { level: 6 },
+      });
+      triggerDownload(blob, `${sanitizeFilename(zipExport.rootName)}.zip`);
+      setZipExport(null);
+      flash(T("pl.preview.toast.exported"));
+    } catch (err) {
+      console.error("zip export failed:", err);
+      flash(T("pl.preview.toast.exportFailed"), "error");
+    } finally {
+      setZipBusy(false);
+      setZipProgress(null);
+    }
+  };
+
+  // ── 写操作：重命名 / 删除 / 新建文件 / 新建目录 ──
+  const runAndRefresh = (op: () => Promise<unknown>) =>
+    op()
+      .then(() => {
+        flash(T("pl.preview.toast.opSuccess"));
+        setRefreshTick((t) => t + 1);
+      })
+      .catch((err: unknown) => {
+        console.error(err);
+        flash(err instanceof Error ? err.message : T("pl.preview.toast.opFailed"), "error");
+      });
+
+  const actRename = () => {
+    const t = useCtxTarget();
+    if (!t) return;
+    setNameInput(t.name);
+    setNameDialog({
+      title: t.kind === "dir" ? T("pl.preview.renameDir") : T("pl.preview.renameFile"),
+      label: T("pl.preview.renameLabel"),
+      initial: t.name,
+      placeholder: "",
+      okText: T("pl.preview.ok"),
+      onOk: (name) => {
+        if (!name.trim()) throw new Error(T("pl.preview.dialog.nameEmpty"));
+        return runAndRefresh(() => previewRename(t.absPath, name.trim()));
+      },
+    });
+    closeMenu();
+  };
+
+  const actDelete = () => {
+    const t = useCtxTarget();
+    if (!t) return;
+    setConfirmDialog({
+      title: t.kind === "dir" ? T("pl.preview.deleteDirTitle") : T("pl.preview.deleteFileTitle"),
+      message: T("pl.preview.deleteConfirm", { name: t.relPath || t.name }),
+      okText: T("pl.preview.deleteOk"),
+      onOk: () => runAndRefresh(() => previewDelete(t.absPath)),
+    });
+    closeMenu();
+  };
+
+  const openNewFileDialog = (baseDirPath: string) => {
+    setNameInput("");
+    setNameDialog({
+      title: T("pl.preview.newFileTitle"),
+      label: T("pl.preview.newFileLabel"),
+      initial: "",
+      placeholder: T("pl.preview.newFilePlaceholder"),
+      okText: T("pl.preview.create"),
+      onOk: (name) => {
+        if (!name.trim()) throw new Error(T("pl.preview.dialog.nameEmpty"));
+        return runAndRefresh(() => previewNewFile(baseDirPath, name.trim()));
+      },
+    });
+    closeMenu();
+  };
+
+  const openNewDirDialog = (baseDirPath: string) => {
+    setNameInput("");
+    setNameDialog({
+      title: T("pl.preview.newDirTitle"),
+      label: T("pl.preview.newDirLabel"),
+      initial: "",
+      placeholder: T("pl.preview.newDirPlaceholder"),
+      okText: T("pl.preview.create"),
+      onOk: (name) => {
+        if (!name.trim()) throw new Error(T("pl.preview.dialog.nameEmpty"));
+        return runAndRefresh(() => previewMkdir(baseDirPath, name.trim()));
+      },
+    });
+    closeMenu();
+  };
+
+  // 提交名称输入弹窗：校验非空（不含路径分隔符）→ 防重 → 调用 onOk → 成功后关闭
+  const submitNameDialog = async () => {
+    const dlg = nameDialog;
+    if (!dlg || modalBusy) return;
+    const name = nameInput.trim();
+    if (!name) {
+      setDialogErr(T("pl.preview.dialog.nameEmpty"));
+      return;
+    }
+    if (name.includes("/") || name.includes("\\") || name.includes("..")) {
+      setDialogErr(T("pl.preview.dialog.nameInvalid"));
+      return;
+    }
+    setModalBusy(true);
+    try {
+      // onOk 内部已做完整写操作与刷新；resolve 即成功，reject 表示未处理错误
+      await dlg.onOk(name);
+      setNameDialog(null);
+      setDialogErr("");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : T("pl.preview.toast.opFailed");
+      setNameDialog(null);
+      flash(msg, "error");
+    } finally {
+      setModalBusy(false);
+    }
   };
 
   // 打开文件夹：优先宿主原生目录选择器；原生不可用（桌面端仅 browse）时回退到浏览式目录选择弹窗
@@ -1329,9 +1778,12 @@ export function PreviewView(props: PreviewProps): ReactNode {
         .${S}-fileName{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .${S}-fileSize{flex:none;color:var(--dsw-alias-label-tertiary);font-size:10px;font-variant-numeric:tabular-nums}
         .${S}-content{flex:1;min-width:0;min-height:0;display:flex;flex-direction:row;align-items:stretch;overflow:hidden}
-        .${S}-toc{flex:none;width:200px;min-width:160px;box-sizing:border-box;border-right:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);display:flex;flex-direction:column;overflow:hidden}
-        .${S}-tocHead{flex:none;padding:8px 12px 6px;font-size:11px;color:var(--dsw-alias-label-tertiary);font-weight:600}
-        .${S}-tocList{flex:1;min-height:0;overflow-y:auto;padding:0 8px 8px;display:flex;flex-direction:column;gap:1px}
+        .${S}-toc{flex:0 1 auto;min-height:0;height:100%;width:200px;min-width:160px;box-sizing:border-box;border-right:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);display:flex;flex-direction:column;overflow:hidden}
+        .${S}-tocHead{flex:none;display:flex;align-items:center;justify-content:space-between;padding:6px 6px 6px 12px;font-size:11px;color:var(--dsw-alias-label-tertiary);font-weight:600}
+        .${S}-tocCollapseBtn{display:flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:1;cursor:pointer;transition:background .12s ease}
+        .${S}-tocCollapseBtn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+        .${S}-tocCollapsed{width:26px;min-width:26px!important;align-items:center;justify-content:flex-start;padding:6px 0 0;border-right:1px solid var(--dsw-alias-border-l2)}
+        .${S}-tocList{flex:1;min-height:0;overflow-y:auto;padding:0 8px 8px}
         .${S}-tocItem{display:block;text-align:left;width:100%;border:0;background:transparent;padding:3px 8px;border-radius:6px;cursor:pointer;color:var(--dsw-alias-label-secondary);font-size:11.5px;line-height:17px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:background-color .24s,color .24s}
         .${S}-tocItem:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
         .${S}-tocItem.active{color:var(--dsw-static-blue-450,var(--dsw-static-blue-500));font-weight:600}
@@ -1392,6 +1844,7 @@ export function PreviewView(props: PreviewProps): ReactNode {
         .${S}-logBody{flex:1;min-width:0;min-height:0;overflow:auto;padding:14px 18px;margin:0;background:var(--dsw-alias-bg-subtle);border-radius:8px;font-family:var(--ds-font-family-code,ui-monospace,Consolas,monospace);font-size:12px;line-height:1.5;color:var(--dsw-alias-label-primary);white-space:pre-wrap;word-break:break-word}
         .${S}-logBody pre{margin:0;padding:0;background:none;border:none;font-family:inherit;font-size:inherit;line-height:inherit;color:inherit;white-space:inherit;word-break:inherit}
         .${S}-logTruncated{margin-top:8px;padding:8px;text-align:center;color:var(--dsw-alias-label-secondary);font-size:12px;border-top:1px solid var(--dsw-alias-border-l2);font-style:italic}
+        .${S}-truncHint{flex-shrink:0;margin-bottom:8px;padding:8px 12px;text-align:center;font-weight:600;font-size:12px;color:var(--dsw-alias-brand-primary,#2563eb);background:var(--dsw-alias-brand-primary-selected,rgba(37,99,235,.08));border:1px solid var(--dsw-alias-brand-primary,#2563eb);border-radius:6px}
         
         /* 图片预览 */
         .${S}-imgBody{flex:1;min-width:0;min-height:0;display:flex;justify-content:center;align-items:center;padding:14px 18px;overflow:auto;background:var(--dsw-alias-bg-subtle);border-radius:8px}
@@ -1402,7 +1855,8 @@ export function PreviewView(props: PreviewProps): ReactNode {
         
         /* 编辑按钮 */
         .${S}-editBtn,.${S}-cancelBtn,.${S}-saveBtn{padding:4px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:12px;cursor:pointer;transition:all .2s}
-        .${S}-editBtn:hover{border-color:var(--dsw-static-blue-450);background:var(--dsw-alias-interactive-bg-hover)}
+        .${S}-editBtn:hover:not(:disabled){border-color:var(--dsw-static-blue-450);background:var(--dsw-alias-interactive-bg-hover)}
+        .${S}-editBtn:disabled{opacity:.5;cursor:not-allowed;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-tertiary);border-color:var(--dsw-alias-border-l2)}
         .${S}-cancelBtn:hover:not(:disabled){background:var(--dsw-alias-bg-hover)}
         .${S}-saveBtn{background:var(--dsw-static-blue-450);color:#fff;border-color:var(--dsw-static-blue-450)}
         .${S}-saveBtn:hover:not(:disabled){opacity:.9}
@@ -1418,6 +1872,67 @@ export function PreviewView(props: PreviewProps): ReactNode {
         .${S}-toast.success{background:#10b981}
         .${S}-toast.error{background:#ef4444}
         @keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+
+        /* 右键菜单 */
+        .${S}-ctxOverlay{position:fixed;inset:0;z-index:2147483646}
+        .${S}-ctxMenu{
+          position:fixed;z-index:2147483647;min-width:168px;max-width:280px;box-sizing:border-box;
+          padding:4px;border-radius:8px;background:var(--dsw-alias-bg-layer-1, #ffffff);
+          border:1px solid var(--dsw-alias-border-l2);box-shadow:0 6px 20px rgba(0,0,0,.18);
+          color:var(--dsw-alias-label-primary);font-size:12px;line-height:1.4;
+          max-height:calc(100vh - 24px);overflow-y:auto;overscroll-behavior:contain
+        }
+        .${S}-ctxTitle{padding:4px 8px;font-size:11px;color:var(--dsw-alias-label-tertiary);word-break:break-all;border-bottom:1px solid var(--dsw-alias-border-l2);margin-bottom:4px}
+        .${S}-ctxItem{display:flex;align-items:center;gap:8px;padding:6px 8px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary);font-size:12px;cursor:pointer;text-align:left;width:100%;white-space:nowrap}
+        .${S}-ctxItem:hover{background:var(--dsw-alias-interactive-bg-hover)}
+        .${S}-ctxItem .${S}-ctxIcon{flex:none;width:14px;height:14px;opacity:.75;display:inline-flex;align-items:center;justify-content:center}
+        .${S}-ctxItem.danger{color:#ef4444}
+        .${S}-ctxItem.danger:hover{background:rgba(239,68,68,.12)}
+        .${S}-ctxSep{height:1px;background:var(--dsw-alias-border-l2);margin:4px 6px}
+
+        /* 名称输入 / 确认 弹窗 */
+        .${S}-dialogOverlay{position:fixed;inset:0;z-index:2147483646;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35)}
+        .${S}-dialog{width:320px;max-width:calc(100vw - 32px);box-sizing:border-box;padding:16px;border-radius:10px;background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-layer-1));border:1px solid var(--dsw-alias-border-l2);box-shadow:0 12px 32px rgba(0,0,0,.2);color:var(--dsw-alias-label-primary)}
+        .${S}-dialogTitle{font-size:14px;font-weight:600;margin-bottom:12px}
+        .${S}-dialogMsg{font-size:12.5px;color:var(--dsw-alias-label-secondary);margin-bottom:14px;word-break:break-all;line-height:1.5}
+        .${S}-dialogInput{width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-size:13px;outline:none;margin-bottom:14px}
+        .${S}-dialogInput:focus{border-color:var(--dsw-static-blue-450)}
+        .${S}-dialogBtns{display:flex;justify-content:flex-end;gap:8px}
+        .${S}-dialogBtn{padding:6px 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary);font-size:12.5px;cursor:pointer}
+        .${S}-dialogBtn:hover{background:var(--dsw-alias-interactive-bg-hover)}
+        .${S}-dialogBtn.primary{background:var(--dsw-static-blue-450,var(--dsw-alias-brand-primary));border-color:transparent;color:#fff;font-weight:500}
+        .${S}-dialogBtn.danger{background:#ef4444;border-color:transparent;color:#fff;font-weight:500}
+        .${S}-dialogBtn:disabled{opacity:.5;cursor:not-allowed}
+
+        /* ZIP 导出选择器 */
+        .${S}-zipOverlay{position:fixed;inset:0;z-index:2147483646;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35)}
+        .${S}-zipPanel{width:520px;max-width:calc(100vw - 32px);max-height:82vh;box-sizing:border-box;display:flex;flex-direction:column;border-radius:12px;background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-layer-1));border:1px solid var(--dsw-alias-border-l2);box-shadow:0 12px 32px rgba(0,0,0,.2);color:var(--dsw-alias-label-primary)}
+        .${S}-zipHead{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--dsw-alias-border-l2)}
+        .${S}-zipTitle{font-size:14px;font-weight:600}
+        .${S}-zipClose{background:none;border:0;color:var(--dsw-alias-label-secondary);font-size:15px;cursor:pointer;padding:2px 6px;border-radius:4px}
+        .${S}-zipClose:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+        .${S}-zipActions{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--dsw-alias-border-l2)}
+        .${S}-zipAction{padding:4px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary);font-size:12px;cursor:pointer}
+        .${S}-zipAction:hover{background:var(--dsw-alias-interactive-bg-hover)}
+        .${S}-zipCounter{font-size:12px;color:var(--dsw-alias-label-secondary)}
+        .${S}-zipList{flex:1;overflow-y:auto;overscroll-behavior:contain;padding:6px}
+        .${S}-zipItem{display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:6px;cursor:pointer;user-select:none;font-size:12.5px}
+        .${S}-zipItem:hover{background:var(--dsw-alias-interactive-bg-hover)}
+        .${S}-zipItem.selected{background:rgba(96,165,250,.12)}
+        .${S}-zipItem input[type="checkbox"]{cursor:pointer;flex:none}
+        .${S}-zipIcon{flex:none;width:18px;text-align:center}
+        .${S}-zipName{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;word-break:break-all}
+        .${S}-zipSize{flex:none;font-size:11px;color:var(--dsw-alias-label-secondary)}
+        .${S}-zipFoot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-top:1px solid var(--dsw-alias-border-l2)}
+        .${S}-zipProgress{flex:1;display:flex;align-items:center;gap:8px}
+        .${S}-zipBar{flex:1;height:4px;background:var(--dsw-alias-bg-subtle);border-radius:2px;overflow:hidden}
+        .${S}-zipFill{height:100%;background:var(--dsw-static-blue-450);transition:width .2s}
+        .${S}-zipPct{flex:none;font-size:11px;color:var(--dsw-alias-label-secondary)}
+        .${S}-zipBtns{display:flex;gap:8px}
+        .${S}-zipBtn{padding:6px 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary);font-size:12.5px;cursor:pointer}
+        .${S}-zipBtn:hover{background:var(--dsw-alias-interactive-bg-hover)}
+        .${S}-zipBtn.primary{background:var(--dsw-static-blue-450,var(--dsw-alias-brand-primary));border-color:transparent;color:#fff;font-weight:500}
+        .${S}-zipBtn:disabled{opacity:.5;cursor:not-allowed}
       `}</style>
 
         {/* 头部：标题 + 打开文件夹 + 当前目录 + 文件数 + 刷新 */}
@@ -1439,16 +1954,16 @@ export function PreviewView(props: PreviewProps): ReactNode {
           <span className={`${S}-headerPath`} title={dir}>
             {dir || (T?.("pl.preview.noSession") ?? "暂无会话所属文件夹")}
           </span>
-          {files.length > 0 && (
-            <span className={`${S}-count`}>{files.length}</span>
+          {fileEntries.length > 0 && (
+            <span className={`${S}-count`}>{fileEntries.length}</span>
           )}
           
           {/* 导出按钮 */}
-          {files.length > 0 && (
-            <ArtifactExporter files={files} sessionTitle={dir?.split("/").pop()} />
+          {fileEntries.length > 0 && (
+            <ArtifactExporter files={fileEntries} sessionTitle={dir?.split("/").pop()} t={T} />
           )}
           
-          {/* 编辑按钮（仅当有选中文件且不是二进制文件时显示） */}
+          {/* 编辑按钮（仅当有选中文件且不是二进制文件、且未被截断时显示可点） */}
           {activeFile && !["png", "jpg", "jpeg", "gif", "svg"].includes(activeFile.type) && (
             <>
               {!editing ? (
@@ -1456,9 +1971,10 @@ export function PreviewView(props: PreviewProps): ReactNode {
                   type="button"
                   className={`${S}-editBtn`}
                   onClick={startEditing}
-                  title="编辑文件"
+                  disabled={truncated}
+                  title={truncated ? T("pl.preview.editForbiddenTruncated") : T("pl.preview.editFile")}
                 >
-                  ✏️ 编辑
+                  ✏️ {T("pl.preview.ctx.edit")}
                 </button>
               ) : (
                 <>
@@ -1467,18 +1983,18 @@ export function PreviewView(props: PreviewProps): ReactNode {
                     className={`${S}-cancelBtn`}
                     onClick={cancelEditing}
                     disabled={saving}
-                    title="取消编辑"
+                    title={T("pl.preview.cancelEdit")}
                   >
-                    取消
+                    {T("pl.preview.cancel")}
                   </button>
                   <button
                     type="button"
                     className={`${S}-saveBtn`}
                     onClick={handleSave}
                     disabled={saving}
-                    title="保存文件"
+                    title={T("pl.preview.saveFile")}
                   >
-                    {saving ? "保存中..." : "💾 保存"}
+                    {saving ? T("pl.preview.saving") : `💾 ${T("pl.preview.save")}`}
                   </button>
                 </>
               )}
@@ -1504,9 +2020,9 @@ export function PreviewView(props: PreviewProps): ReactNode {
                     setSmartClassify(!smartClassify);
                     setActiveTab("all"); // 切换模式时重置为全部
                   }}
-                  title="智能分类"
+                  title={T("pl.preview.smartClassify")}
                 >
-                  🤖 {smartClassify ? "智能" : "类型"}
+                  🤖 {smartClassify ? T("pl.preview.smart") : T("pl.preview.type")}
                 </button>
                 
                 <button
@@ -1514,8 +2030,8 @@ export function PreviewView(props: PreviewProps): ReactNode {
                   className={`${S}-tab${activeTab === "all" ? " active" : ""}`}
                   onClick={() => setActiveTab("all")}
                 >
-                  全部
-                  <span className={`${S}-tabCount`}>{files.length}</span>
+                  {T("pl.preview.all")}
+                  <span className={`${S}-tabCount`}>{fileEntries.length}</span>
                 </button>
                 
                 {smartClassify ? (
@@ -1554,7 +2070,7 @@ export function PreviewView(props: PreviewProps): ReactNode {
                 <input
                   type="text"
                   className={`${S}-searchInput`}
-                  placeholder="搜索文件名..."
+                  placeholder={T("pl.preview.searchPlaceholder")}
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
@@ -1576,7 +2092,7 @@ export function PreviewView(props: PreviewProps): ReactNode {
                   type="button"
                   className={`${S}-viewToggle${viewMode === "grouped" ? " active" : ""}`}
                   onClick={() => setViewMode("grouped")}
-                  title="分组视图"
+                  title={T("pl.preview.groupView")}
                 >
                   ▤
                 </button>
@@ -1584,7 +2100,7 @@ export function PreviewView(props: PreviewProps): ReactNode {
                   type="button"
                   className={`${S}-viewToggle${viewMode === "list" ? " active" : ""}`}
                   onClick={() => setViewMode("list")}
-                  title="列表视图"
+                  title={T("pl.preview.listView")}
                 >
                   ☰
                 </button>
@@ -1597,14 +2113,14 @@ export function PreviewView(props: PreviewProps): ReactNode {
                       className={`${S}-sortBtn`}
                       onClick={() => setSortMode("name")}
                     >
-                      名称 {sortMode === "name" && (sortAsc ? "↑" : "↓")}
+                      {T("pl.preview.name")} {sortMode === "name" && (sortAsc ? "↑" : "↓")}
                     </button>
                     <button
                       type="button"
                       className={`${S}-sortBtn`}
                       onClick={() => setSortMode("size")}
                     >
-                      大小 {sortMode === "size" && (sortAsc ? "↑" : "↓")}
+                      {T("pl.preview.size")} {sortMode === "size" && (sortAsc ? "↑" : "↓")}
                     </button>
                     <button
                       type="button"
@@ -1614,13 +2130,13 @@ export function PreviewView(props: PreviewProps): ReactNode {
                         setSortAsc(false); // 默认最新在前
                       }}
                     >
-                      修改时间 {sortMode === "modified" && (sortAsc ? "↑" : "↓")}
+                      {T("pl.preview.modified")} {sortMode === "modified" && (sortAsc ? "↑" : "↓")}
                     </button>
                     <button
                       type="button"
                       className={`${S}-sortToggle`}
                       onClick={() => setSortAsc(!sortAsc)}
-                      title="切换升序/降序"
+                      title={T("pl.preview.toggleOrder")}
                     >
                       {sortAsc ? "↑" : "↓"}
                     </button>
@@ -1630,20 +2146,30 @@ export function PreviewView(props: PreviewProps): ReactNode {
 
               {/* 文件列表：根据视图模式渲染 */}
               {viewMode === "list" && (
-                <div className={`${S}-fileListFlat`}>
+                <div
+                  className={`${S}-fileListFlat`}
+                  onContextMenu={(e) => openCtx(e, null)}
+                >
                   {filteredFiles.length === 0 ? (
                     <div className={`${S}-emptyList`}>
-                      {searchQuery ? "未找到匹配的文件" : "此类型下没有文件"}
+                      {searchQuery ? T("pl.preview.noMatch") : T("pl.preview.noFilesInType")}
                     </div>
                   ) : (
                     filteredFiles.map((f) => {
                       const sizeWarning = isLargeFile(f.size);
+                      const fileNode: FileTreeNode = {
+                        name: f.name.split("/").pop() ?? f.name,
+                        path: f.path,
+                        type: f.type,
+                        size: f.size,
+                      };
                       return (
                         <button
                           key={f.path}
                           type="button"
                           className={`${S}-fileItem${activePath === f.path ? " active" : ""}${sizeWarning ? ` ${sizeWarning}` : ""}`}
                           onClick={() => setActivePath(f.path)}
+                          onContextMenu={(e) => openCtx(e, fileNode)}
                           title={f.name}
                         >
                           <span
@@ -1668,10 +2194,13 @@ export function PreviewView(props: PreviewProps): ReactNode {
               
               {/* 分组视图 */}
               {viewMode === "grouped" && (
-                <div className={`${S}-fileListTree`}>
+                <div
+                  className={`${S}-fileListTree`}
+                  onContextMenu={(e) => openCtx(e, null)}
+                >
                   {treeNodes.length === 0 ? (
                     <div className={`${S}-emptyList`}>
-                      {searchQuery ? "未找到匹配的文件" : "此类型下没有文件"}
+                      {searchQuery ? T("pl.preview.noMatch") : T("pl.preview.noFilesInType")}
                     </div>
                   ) : (
                     <TreeNodes
@@ -1681,6 +2210,8 @@ export function PreviewView(props: PreviewProps): ReactNode {
                       onToggle={toggleDir}
                       activePath={activePath}
                       onSelect={setActivePath}
+                      baseDir={dir}
+                      onCtx={openCtx}
                     />
                   )}
                 </div>
@@ -1691,23 +2222,44 @@ export function PreviewView(props: PreviewProps): ReactNode {
           <div className={`${S}-content`}>
             {/* 正文含大纲：左侧大纲（仅 md） */}
             {showToc && (
-              <div className={`${S}-toc`}>
-                <div className={`${S}-tocHead`}>
-                  {T?.("pl.preview.outline") ?? "大纲"}
-                </div>
-                <div className={`${S}-tocList`}>
-                  {outline.map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      className={`${S}-tocItem ${item.id === activeId ? "active" : ""}`}
-                      style={{ paddingLeft: 8 + (item.level - 1) * 12 }}
-                      onClick={() => scrollTo(item.id)}
-                    >
-                      {item.text}
-                    </button>
-                  ))}
-                </div>
+              <div className={`${S}-toc${tocCollapsed ? ` ${S}-tocCollapsed` : ""}`}>
+                {tocCollapsed ? (
+                  <button
+                    type="button"
+                    className={`${S}-tocCollapseBtn`}
+                    title={T?.("pl.preview.showOutline") ?? "展开大纲"}
+                    onClick={() => setTocCollapsed(false)}
+                  >
+                    ❯
+                  </button>
+                ) : (
+                  <>
+                    <div className={`${S}-tocHead`}>
+                      {T?.("pl.preview.outline") ?? "大纲"}
+                      <button
+                        type="button"
+                        className={`${S}-tocCollapseBtn`}
+                        title={T?.("pl.preview.hideOutline") ?? "收起大纲"}
+                        onClick={() => setTocCollapsed(true)}
+                      >
+                        ❮
+                      </button>
+                    </div>
+                    <div className={`${S}-tocList`}>
+                      {outline.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className={`${S}-tocItem ${item.id === activeId ? "active" : ""}`}
+                          style={{ paddingLeft: 8 + (item.level - 1) * 12 }}
+                          onClick={() => scrollTo(item.id)}
+                        >
+                          {item.text}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
               </div>
             )}
 
@@ -1724,6 +2276,7 @@ export function PreviewView(props: PreviewProps): ReactNode {
                 </div>
               ) : activeFile.type === "md" ? (
                 <div className={`${S}-mdBody`} ref={bodyRef} onScroll={onBodyScroll}>
+                  {truncHint}
                   {parsed.body}
                 </div>
               ) : activeFile.type === "json" ? (
@@ -1751,12 +2304,8 @@ export function PreviewView(props: PreviewProps): ReactNode {
                 </div>
               ) : activeFile.type === "log" ? (
                 <div className={`${S}-logBody`}>
+                  {truncHint}
                   <pre>{content}</pre>
-                  {truncated && (
-                    <div className={`${S}-logTruncated`}>
-                      （已截断，显示最后 500 行 / 共 {totalLines ?? "?"} 行）
-                    </div>
-                  )}
                 </div>
               ) : activeFile.type === "png" || activeFile.type === "jpg" || activeFile.type === "jpeg" ||
                   activeFile.type === "gif" || activeFile.type === "svg" ? (
@@ -1767,13 +2316,16 @@ export function PreviewView(props: PreviewProps): ReactNode {
                   />
                 </div>
               ) : (
-                <pre className={`${S}-txtBody`}>{content}</pre>
+                <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
+                  {truncHint}
+                  <pre className={`${S}-txtBody`}>{content}</pre>
+                </div>
               )
             ) : (
               <div className={`${S}-empty`}>
                 {!dir
                   ? (T?.("pl.preview.noSession") ?? "暂无会话所属文件夹")
-                  : files.length === 0
+                  : fileEntries.length === 0
                     ? (
                         <>
                           <span>{T?.("pl.preview.noFiles") ?? "当前目录没有可预览文件"}</span>
@@ -1799,12 +2351,373 @@ export function PreviewView(props: PreviewProps): ReactNode {
           t={T}
         />
         
+        {/* 右键菜单（用 portal 挂到 body，避免祖先 transform 破坏 fixed 定位） */}
+        {ctxMenu &&
+          createPortal(
+            <>
+              <div
+                className={`${S}-ctxOverlay`}
+                onMouseDown={closeMenu}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  closeMenu();
+                }}
+              />
+              <div
+                className={`${S}-ctxMenu`}
+                style={{
+                  left: Math.min(ctxMenu.x, window.innerWidth - 190),
+                  top: Math.min(ctxMenu.y, window.innerHeight - 80),
+                  // 统一面板底色 + 在本浮层内就地声明主题变量，保证 portal 子树昼夜一致
+                  background: TONE.panel,
+                  borderColor: TONE.border,
+                  color: TONE.text,
+                  ["--dsw-alias-bg-layer-1" as any]: TONE.panel,
+                  ["--dsw-alias-border-l2" as any]: TONE.border,
+                  ["--dsw-alias-label-primary" as any]: TONE.text,
+                  ["--dsw-alias-label-secondary" as any]: TONE.muted,
+                  ["--dsw-alias-label-tertiary" as any]: TONE.quiet,
+                  ["--dsw-alias-interactive-bg-hover" as any]:
+                    "color-mix(in srgb, currentColor 12%, transparent)",
+                } as React.CSSProperties}
+              >
+                {ctxMenu.target.name && (
+                  <div className={`${S}-ctxTitle`}>{ctxMenu.target.name}</div>
+                )}
+                {ctxMenu.target.kind === "file" && (
+                  <>
+                    <button
+                      type="button"
+                      className={`${S}-ctxItem`}
+                      onClick={actEdit}
+                      disabled={
+                        ctxMenu.target.kind === "file" &&
+                        activePath === ctxMenu.target.absPath &&
+                        !!truncated
+                      }
+                      title={
+                        ctxMenu.target.kind === "file" &&
+                        activePath === ctxMenu.target.absPath &&
+                        !!truncated
+                          ? T("pl.preview.editForbiddenTruncated")
+                          : undefined
+                      }
+                      style={
+                        ctxMenu.target.kind === "file" &&
+                        activePath === ctxMenu.target.absPath &&
+                        !!truncated
+                          ? { color: "var(--dsw-alias-label-tertiary)", opacity: .5, cursor: "not-allowed" }
+                          : undefined
+                      }
+                    >
+                      <span className={`${S}-ctxIcon`}>✏️</span>{T("pl.preview.ctx.edit")}
+                    </button>
+                    <button type="button" className={`${S}-ctxItem`} onClick={() => actExport()}>
+                      <span className={`${S}-ctxIcon`}>📤</span>{T("pl.preview.ctx.export")}
+                    </button>
+                    <div className={`${S}-ctxSep`} />
+                    <button type="button" className={`${S}-ctxItem`} onClick={() => actCopy("abs")}>
+                      <span className={`${S}-ctxIcon`}>🔗</span>{T("pl.preview.ctx.copyAbs")}
+                    </button>
+                    <button type="button" className={`${S}-ctxItem`} onClick={() => actCopy("rel")}>
+                      <span className={`${S}-ctxIcon`}>📂</span>{T("pl.preview.ctx.copyRel")}
+                    </button>
+                    <button type="button" className={`${S}-ctxItem`} onClick={() => actCopy("name")}>
+                      <span className={`${S}-ctxIcon`}>📄</span>{T("pl.preview.ctx.copyName")}
+                    </button>
+                    <div className={`${S}-ctxSep`} />
+                    <button type="button" className={`${S}-ctxItem`} onClick={() => readAndCopy(false)}>
+                      <span className={`${S}-ctxIcon`}>📋</span>{T("pl.preview.ctx.copyContent")}
+                    </button>
+                    <button type="button" className={`${S}-ctxItem`} onClick={() => readAndCopy(true)}>
+                      <span className={`${S}-ctxIcon`}>🧩</span>{T("pl.preview.ctx.copyFence")}
+                    </button>
+                    <button type="button" className={`${S}-ctxItem`} onClick={() => actCopy("link")}>
+                      <span className={`${S}-ctxIcon`}>🔎</span>{T("pl.preview.ctx.copyLink")}
+                    </button>
+                    <div className={`${S}-ctxSep`} />
+                    <button type="button" className={`${S}-ctxItem`} onClick={actRename}>
+                      <span className={`${S}-ctxIcon`}>✏️</span>{T("pl.preview.ctx.rename")}
+                    </button>
+                    <button type="button" className={`${S}-ctxItem danger`} onClick={actDelete}>
+                      <span className={`${S}-ctxIcon`}>🗑️</span>{T("pl.preview.ctx.delete")}
+                    </button>
+                  </>
+                )}
+                {ctxMenu.target.kind === "dir" && (
+                  <>
+                    <button type="button" className={`${S}-ctxItem`} onClick={() => actExport()}>
+                      <span className={`${S}-ctxIcon`}>📤</span>{T("pl.preview.ctx.export")}
+                    </button>
+                    <div className={`${S}-ctxSep`} />
+                    <button
+                      type="button"
+                      className={`${S}-ctxItem`}
+                      onClick={() => openNewFileDialog(ctxMenu.target.absPath)}
+                    >
+                      <span className={`${S}-ctxIcon`}>📄</span>{T("pl.preview.ctx.newFile")}
+                    </button>
+                    <button
+                      type="button"
+                      className={`${S}-ctxItem`}
+                      onClick={() => openNewDirDialog(ctxMenu.target.absPath)}
+                    >
+                      <span className={`${S}-ctxIcon`}>📁</span>{T("pl.preview.ctx.newDir")}
+                    </button>
+                    <div className={`${S}-ctxSep`} />
+                    <button type="button" className={`${S}-ctxItem`} onClick={() => actCopy("abs")}>
+                      <span className={`${S}-ctxIcon`}>🔗</span>{T("pl.preview.ctx.copyAbs")}
+                    </button>
+                    <button type="button" className={`${S}-ctxItem`} onClick={() => actCopy("rel")}>
+                      <span className={`${S}-ctxIcon`}>📂</span>{T("pl.preview.ctx.copyRel")}
+                    </button>
+                    <div className={`${S}-ctxSep`} />
+                    <button type="button" className={`${S}-ctxItem`} onClick={actExpandAll}>
+                      <span className={`${S}-ctxIcon`}>⤵</span>{T("pl.preview.ctx.expandAll")}
+                    </button>
+                    <button type="button" className={`${S}-ctxItem`} onClick={actCollapseAll}>
+                      <span className={`${S}-ctxIcon`}>⤴</span>{T("pl.preview.ctx.collapseAll")}
+                    </button>
+                    <button type="button" className={`${S}-ctxItem`} onClick={actRefresh}>
+                      <span className={`${S}-ctxIcon`}>🔄</span>{T("pl.preview.refresh")}
+                    </button>
+                    <div className={`${S}-ctxSep`} />
+                    <button type="button" className={`${S}-ctxItem`} onClick={actRename}>
+                      <span className={`${S}-ctxIcon`}>✏️</span>{T("pl.preview.ctx.rename")}
+                    </button>
+                    <button type="button" className={`${S}-ctxItem danger`} onClick={actDelete}>
+                      <span className={`${S}-ctxIcon`}>🗑️</span>{T("pl.preview.ctx.deleteDir")}
+                    </button>
+                  </>
+                )}
+                {ctxMenu.target.kind === "blank" && (
+                  <>
+                    <button
+                      type="button"
+                      className={`${S}-ctxItem`}
+                      onClick={() => openNewFileDialog(ctxMenu.target.absPath)}
+                    >
+                      <span className={`${S}-ctxIcon`}>📄</span>{T("pl.preview.ctx.newFile")}
+                    </button>
+                    <button
+                      type="button"
+                      className={`${S}-ctxItem`}
+                      onClick={() => openNewDirDialog(ctxMenu.target.absPath)}
+                    >
+                      <span className={`${S}-ctxIcon`}>📁</span>{T("pl.preview.ctx.newDir")}
+                    </button>
+                    <div className={`${S}-ctxSep`} />
+                    <button type="button" className={`${S}-ctxItem`} onClick={actExpandAll}>
+                      <span className={`${S}-ctxIcon`}>⤵</span>{T("pl.preview.ctx.expandAll")}
+                    </button>
+                    <button type="button" className={`${S}-ctxItem`} onClick={actCollapseAll}>
+                      <span className={`${S}-ctxIcon`}>⤴</span>{T("pl.preview.ctx.collapseAll")}
+                    </button>
+                    <button type="button" className={`${S}-ctxItem`} onClick={actRefresh}>
+                      <span className={`${S}-ctxIcon`}>🔄</span>{T("pl.preview.refresh")}
+                    </button>
+                  </>
+                )}
+              </div>
+            </>,
+            document.body,
+          )}
+
+        {/* 名称输入弹窗（重命名 / 新建文件 / 新建目录） */}
+        {nameDialog &&
+          createPortal(
+            <div className={`${S}-dialogOverlay`} onMouseDown={() => (modalBusy ? undefined : setNameDialog(null))}>
+              <div className={`${S}-dialog`} onMouseDown={(e) => e.stopPropagation()}>
+                <div className={`${S}-dialogTitle`}>{nameDialog.title}</div>
+                <div className={`${S}-dialogMsg`} style={{ marginBottom: 8 }}>
+                  {nameDialog.label}
+                </div>
+                <input
+                  className={`${S}-dialogInput`}
+                  autoFocus
+                  value={nameInput}
+                  placeholder={nameDialog.placeholder}
+                  onChange={(e) => {
+                    setNameInput(e.target.value);
+                    if (dialogErr) setDialogErr("");
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !modalBusy) submitNameDialog();
+                    if (e.key === "Escape" && !modalBusy) setNameDialog(null);
+                  }}
+                />
+                {dialogErr && (
+                  <div className={`${S}-dialogMsg`} style={{ color: "#ef4444", marginTop: -8 }}>
+                    {dialogErr}
+                  </div>
+                )}
+                <div className={`${S}-dialogBtns`}>
+                  <button
+                    type="button"
+                    className={`${S}-dialogBtn`}
+                    disabled={modalBusy}
+                    onClick={() => setNameDialog(null)}
+                  >
+                    {T("pl.preview.cancel")}
+                  </button>
+                  <button
+                    type="button"
+                    className={`${S}-dialogBtn primary`}
+                    disabled={modalBusy}
+                    onClick={() => submitNameDialog()}
+                  >
+                    {nameDialog.okText}
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )}
+
+        {/* 危险确认弹窗（删除） */}
+        {confirmDialog &&
+          createPortal(
+            <div
+              className={`${S}-dialogOverlay`}
+              onMouseDown={() => (modalBusy ? undefined : setConfirmDialog(null))}
+            >
+              <div className={`${S}-dialog`} onMouseDown={(e) => e.stopPropagation()}>
+                <div className={`${S}-dialogTitle`}>{confirmDialog.title}</div>
+                <div className={`${S}-dialogMsg`}>{confirmDialog.message}</div>
+                <div className={`${S}-dialogBtns`}>
+                  <button
+                    type="button"
+                    className={`${S}-dialogBtn`}
+                    disabled={modalBusy}
+                    onClick={() => setConfirmDialog(null)}
+                  >
+                    {T("pl.preview.cancel")}
+                  </button>
+                  <button
+                    type="button"
+                    className={`${S}-dialogBtn danger`}
+                    disabled={modalBusy}
+                    onClick={async () => {
+                      const onOk = confirmDialog.onOk;
+                      setModalBusy(true);
+                      await onOk();
+                      setModalBusy(false);
+                      setConfirmDialog(null);
+                    }}
+                  >
+                    {confirmDialog.okText}
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )}
+
         {/* Toast 提示 */}
         {toast && (
           <div className={`${S}-toast ${toast.type}`}>
             {toast.type === "success" ? "✓" : "✗"} {toast.message}
           </div>
         )}
+
+        {zipExport &&
+          createPortal(
+            <div
+              className={`${S}-zipOverlay`}
+              onMouseDown={() => (zipBusy ? undefined : setZipExport(null))}
+            >
+              <div
+                className={`${S}-zipPanel`}
+                onMouseDown={(e) => e.stopPropagation()}
+              >
+                <div className={`${S}-zipHead`}>
+                  <div className={`${S}-zipTitle`}>{zipExport.title}</div>
+                  <button
+                    type="button"
+                    className={`${S}-zipClose`}
+                    disabled={zipBusy}
+                    onClick={() => setZipExport(null)}
+                    title={T("pl.preview.cancel")}
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div className={`${S}-zipActions`}>
+                  <button type="button" className={`${S}-zipAction`} onClick={toggleZipAll}>
+                    {zipSel.size === zipExport.entries.length
+                      ? T("pl.preview.zip.unselectAll")
+                      : T("pl.preview.zip.selectAll")}
+                  </button>
+                  <span className={`${S}-zipCounter`}>
+                    {T("pl.preview.zip.selected", {
+                      n: String(zipSel.size),
+                      total: String(zipExport.entries.length),
+                    })}
+                  </span>
+                </div>
+                <div className={`${S}-zipList`}>
+                  {zipExport.entries.map((e) => (
+                    <label
+                      key={e.rel}
+                      className={`${S}-zipItem ${zipSel.has(e.rel) ? "selected" : ""}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={zipSel.has(e.rel)}
+                        disabled={zipBusy}
+                        onChange={() => toggleZipFile(e.rel)}
+                      />
+                      <span className={`${S}-zipIcon`}>{fileIconOf(e.type)}</span>
+                      <span className={`${S}-zipName`} title={e.rel}>
+                        {e.rel}
+                      </span>
+                      {e.size > 0 && (
+                        <span className={`${S}-zipSize`}>{formatZipSize(e.size)}</span>
+                      )}
+                    </label>
+                  ))}
+                </div>
+                <div className={`${S}-zipFoot`}>
+                  {zipProgress && (
+                    <div className={`${S}-zipProgress`}>
+                      <div className={`${S}-zipBar`}>
+                        <div
+                          className={`${S}-zipFill`}
+                          style={{ width: `${(zipProgress.current / zipProgress.total) * 100}%` }}
+                        />
+                      </div>
+                      <span className={`${S}-zipPct`}>
+                        {zipProgress.current}/{zipProgress.total}
+                      </span>
+                    </div>
+                  )}
+                  <div className={`${S}-zipBtns`}>
+                    <button
+                      type="button"
+                      className={`${S}-zipBtn`}
+                      disabled={zipBusy}
+                      onClick={() => setZipExport(null)}
+                    >
+                      {T("pl.preview.cancel")}
+                    </button>
+                    <button
+                      type="button"
+                      className={`${S}-zipBtn primary`}
+                      disabled={zipSel.size === 0 || zipBusy}
+                      onClick={runZipExport}
+                    >
+                      {zipBusy
+                        ? T("pl.preview.zip.exporting")
+                        : T("pl.preview.zip.export", {
+                            n: String(zipSel.size),
+                          })}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )}
       </div>
     </div>
   );

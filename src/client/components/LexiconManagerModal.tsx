@@ -111,7 +111,7 @@ export function LexiconManagerModal(props: {
   // 多选删除：勾选集合（按 id）+ 批量删除二次确认开关
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
-  // 数据子面板覆盖：点击左上「标签 / 回收站」后在右侧覆盖对应子面板；null 表示展示详情
+  // 数据子面板覆盖：词库助手独立弹窗内点击「标签 / 回收站」后覆盖右侧；null 表示展示详情（左侧菜单内嵌时该能力被隐藏）
   const [dataSub, setDataSub] = useState<"tags" | "trash" | null>(null);
   // 编辑表单正文输入框引用：供「插入变量 {{}}」定位光标
   const bodyRef = useRef<HTMLTextAreaElement>(null);
@@ -1493,7 +1493,7 @@ export function LexiconManagerModal(props: {
                   {T("pl.lexicon.new")}
                 </Button>
               </div>
-              {/* 第二行：左侧「列表 / 分类」切换，右侧「标签 / 回收站」 */}
+              {/* 第二行：「列表 / 分类」视图切换 */}
               <div
                 style={{
                   display: "flex",
@@ -1554,36 +1554,38 @@ export function LexiconManagerModal(props: {
                     {T("pl.lexicon.groupView")}
                   </button>
                 </div>
-                {/* 右侧：标签 / 回收站，点击后在右侧覆盖对应子面板 */}
-                <div
-                  style={{
-                    flex: 1,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "flex-end",
-                    gap: 6,
-                    minWidth: 0,
-                  }}
-                >
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className={plBtn("ghost", "sm")}
-                    onClick={() => setDataSub("tags")}
+                {/* 右侧：标签 / 回收站，仅在词库助手独立弹窗（无 container 内嵌）时显示，点击后在右侧覆盖对应子面板 */}
+                {!container && (
+                  <div
+                    style={{
+                      flex: 1,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "flex-end",
+                      gap: 6,
+                      minWidth: 0,
+                    }}
                   >
-                    {T("pl.lexicon.viewTags")}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className={plBtn("ghost", "sm")}
-                    onClick={() => setDataSub("trash")}
-                  >
-                    {T("pl.lexicon.viewTrash")}
-                  </Button>
-                </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className={plBtn("ghost", "sm")}
+                      onClick={() => setDataSub("tags")}
+                    >
+                      {T("pl.lexicon.viewTags")}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className={plBtn("ghost", "sm")}
+                      onClick={() => setDataSub("trash")}
+                    >
+                      {T("pl.lexicon.viewTrash")}
+                    </Button>
+                  </div>
+                )}
               </div>
               {/* 搜索过滤 */}
               <div style={{ position: "relative", marginTop: 9 }}>
@@ -1957,7 +1959,7 @@ export function LexiconManagerModal(props: {
                 </div>
               )}
             </div>
-            {/* 数据子面板覆盖：点击左上「标签 / 回收站」后在右侧覆盖；点「详情」或 X 关闭 */}
+            {/* 数据子面板覆盖：只在词库助手独立弹窗（有「标签 / 回收站」按钮）时可用；点击后覆盖右侧，点详情或 X 关闭 */}
             {dataSub && (
               <div
                 style={{
@@ -1972,7 +1974,7 @@ export function LexiconManagerModal(props: {
                   boxSizing: "border-box",
                 }}
               >
-                {/* 覆盖面板头部：标题在右侧保留（与左上「标签/回收站」按钮各自独立），仅 X 关闭 */}
+                {/* 覆盖面板头部：标题 + X 关闭 */}
                 <div
                   style={{
                     display: "flex",

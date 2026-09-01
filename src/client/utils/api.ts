@@ -1021,6 +1021,65 @@ export function getStats(): Promise<PromptStatsData> {
   return send<PromptStatsData>("GET", "/api/prompt-library/stats");
 }
 
+// ── 数据库预览（只读浏览 prompt.db）────────────────────────────────
+
+/** 单张表的预览信息：表名 + 行数 + 列定义。 */
+export interface DbTableInfo {
+  name: string;
+  /** 表内行数。 */
+  rows: number;
+  /** 列定义（按序号排列）。 */
+  columns: Array<{ name: string; type: string; pk: number; notnull: number; dflt: string | null }>;
+  /** 用于定位行的主键列名。 */
+  key: string[];
+  /** 是否可从可视化面板做增删改。 */
+  editable: boolean;
+}
+
+/** 安全的只读查询结果。 */
+export interface DbQueryResult {
+  /** 返回的行。 */
+  rows: Record<string, unknown>[];
+  /** 列名（按查询结果的列顺序）。 */
+  columns: string[];
+  /** 是否因行数上限被截断。 */
+  truncated: boolean;
+}
+
+/** 可视化增删改的通用入参。 */
+export interface DbCellPayload {
+  table: string;
+  /** 主键定位（列名 → 值），用于更新与删除。 */
+  pk?: Array<{ name: string; value: unknown }>;
+  /** 待写入的列值（列名 → 值）。 */
+  record?: Record<string, unknown>;
+}
+
+/** 列出词库数据库中的全部业务表（含列定义与行数）。 */
+export function listDbTables(): Promise<DbTableInfo[]> {
+  return send<DbTableInfo[]>("GET", "/api/prompt-library/db/tables");
+}
+
+/** 执行一条只读查询（仅允许 SELECT / WITH / PRAGMA / EXPLAIN）。 */
+export function queryDb(sql: string): Promise<DbQueryResult> {
+  return send<DbQueryResult>("POST", "/api/prompt-library/db/query", { sql });
+}
+
+/** 新增一行（可视化「增」）。 */
+export function dbInsert(payload: DbCellPayload): Promise<{ changes: number }> {
+  return send<{ changes: number }>("POST", "/api/prompt-library/db/insert", payload);
+}
+
+/** 按主键更新一行（可视化「改」）。 */
+export function dbUpdate(payload: DbCellPayload): Promise<{ changes: number }> {
+  return send<{ changes: number }>("POST", "/api/prompt-library/db/update", payload);
+}
+
+/** 按主键删除一行（可视化「删」）。 */
+export function dbDelete(payload: DbCellPayload): Promise<{ changes: number }> {
+  return send<{ changes: number }>("POST", "/api/prompt-library/db/delete", payload);
+}
+
 // ── 自动备份 ──────────────────────────────────────────────────────────────
 
 /** 自动备份目录下的单条备份文件信息。 */
@@ -1061,7 +1120,12 @@ export function deleteBackup(name: string): Promise<{ deleted: boolean }> {
 // ── 会话预览（读取当前会话所在工作目录下的可预览文件）────────────────────
 
 /** 可预览文件类型（md / json / txt / csv）。 */
-export type PreviewFileType = "md" | "json" | "txt" | "csv";
+export type PreviewFileType =
+  | "md" | "json" | "txt" | "csv"
+  | "ts" | "js" | "py" | "go" | "rs" | "java" | "c" | "cpp"
+  | "yml" | "yaml" | "toml" | "xml"
+  | "log"
+  | "png" | "jpg" | "jpeg" | "gif" | "svg";
 
 /** 当前会话工作目录下单个可预览文件信息。 */
 export interface PreviewFileEntry {
@@ -1070,7 +1134,10 @@ export interface PreviewFileEntry {
   /** 文件绝对路径（读取内容用）。 */
   path: string;
   size: number;
+  modified: number;
   type: PreviewFileType;
+  /** 目录标记：为 true 时表示该条目是目录（含空目录），type 无意义。 */
+  dir?: boolean;
 }
 
 /** 列出当前会话所在工作目录下（递归）所有可预览文件；会话切换时后端按新会话 id 重新解析根目录。
@@ -1097,8 +1164,26 @@ export function listPreviewFilesByDir(
 /** 读取单个可预览文件内容（右侧渲染用）。 */
 export function readPreviewFile(
   path: string,
-): Promise<{ name: string; path: string; content: string; size: number; type: PreviewFileType }> {
-  return send<{ name: string; path: string; content: string; size: number; type: PreviewFileType }>(
+): Promise<{
+  name: string;
+  path: string;
+  content: string;
+  size: number;
+  type: PreviewFileType;
+  truncated?: boolean;
+  totalLines?: number;
+}> {
+  return send<
+    {
+      name: string;
+      path: string;
+      content: string;
+      size: number;
+      type: PreviewFileType;
+      truncated?: boolean;
+      totalLines?: number;
+    }
+  >(
     "GET",
     `/api/prompt-library/preview/read?path=${encodeURIComponent(path)}`,
   );
@@ -1115,6 +1200,51 @@ export function savePreviewFile(
   content: string,
 ): Promise<{ success: boolean }> {
   return send<{ success: boolean }>("POST", "/api/prompt-library/preview/save", { path, content });
+}
+
+/** 不经截断读取原始字节（Base64），用于下载任意类型文件到本地。 */
+export function downloadPreviewFile(
+  path: string,
+): Promise<{ name: string; mime: string; size: number; base64: string }> {
+  return send<{ name: string; mime: string; size: number; base64: string }>(
+    "GET",
+    `/api/prompt-library/preview/download?path=${encodeURIComponent(path)}`,
+  );
+}
+
+/** 重命名文件/目录（name 只接受 basename，拒绝路径穿越）。 */
+export function previewRename(
+  path: string,
+  name: string,
+): Promise<{ success: boolean; path: string }> {
+  return send<{ success: boolean; path: string }>("POST", "/api/prompt-library/preview/rename", {
+    path,
+    name,
+  });
+}
+
+/** 删除文件/目录（目录递归删除，不可恢复）。 */
+export function previewDelete(path: string): Promise<{ success: boolean }> {
+  return send<{ success: boolean }>("POST", "/api/prompt-library/preview/delete", { path });
+}
+
+/** 在 dir 下新建子目录（dir 为空表示当前列表根目录）。 */
+export function previewMkdir(
+  dir: string,
+  name: string,
+): Promise<{ success: boolean }> {
+  return send<{ success: boolean }>("POST", "/api/prompt-library/preview/mkdir", { dir, name });
+}
+
+/** 在 dir 下新建空白文件（dir 为空表示当前列表根目录）。 */
+export function previewNewFile(
+  dir: string,
+  name: string,
+): Promise<{ success: boolean }> {
+  return send<{ success: boolean }>("POST", "/api/prompt-library/preview/newfile", {
+    dir,
+    name,
+  });
 }
 
 /** 检测 dsh-prompt-library 插件是否已安装（预览/监控并入本插件，恒为已安装）。 */

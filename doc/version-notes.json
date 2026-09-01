@@ -1,5 +1,39 @@
 [
   {
+    "version": "0.12.0",
+    "date": "2026-09-02",
+    "zh": {
+      "title": "数据库行内编辑 · SQL 增强与自动补全 · 开发者模式 · 预览/监控开关",
+      "items": [
+        "数据库行内编辑：新增 / 编辑直接在表格行内操作（单元格变输入框），不再弹出底部表单，并移除每行末尾的操作列，界面更简洁；顶部提供 新增 / 编辑 / 删除 / 保存 / 取消 一组操作。",
+        "开发者模式：数据库面板默认隐藏「新增」工具条与「SQL 条件运行」两行，点击右上角「开发者模式」开关后才显示，日常浏览更清爽。",
+        "数据库 SQL 不设限：开发者模式下 SQL 支持输入任意语句（查询 / 写入 / 建表等），不再限定只读，方便调试与数据维护。",
+        "SQL 语法快捷提示：输入时自动补全 SQL 关键字、库内表名（带中 / 英描述）与表字段（表名. 自动列出列名与类型），↑↓ 选择、Enter / Tab 确认、Esc 关闭；无提示时回车仍可直接运行。",
+        "数据库面板优化：数据表名右侧新增刷新按钮；顶部表信息与开发者模式工具条排版更规整；修复空表时无法「新增行」的问题。",
+        "表描述国际化：数据表列表显示每张业务表的描述，支持中 / 英随界面语言自动切换，未收录的表不显示描述。",
+        "预览导出产物：会话预览新增「导出产物」按钮与文件 / 文件夹右键「导出」，可将当前会话工作目录下的文件（含子目录）勾选打包为 ZIP 下载，便于收敛与沉淀会话产物。",
+        "国际化补全：左侧词库名称、预览界面按钮文案、导出产物弹窗均接入多语言，并随语言切换即时刷新。",
+        "视图显隐开关：设置 - 显示与交互 新增「显示会话监控」「显示会话预览」，关闭后对应会话顶部标签即时隐藏，可随时再开启。",
+        "标签 / 回收站样式：搜索 / 新建输入框补足四周间距并改为圆角，搜索外层容器圆角 12px，整体更柔和统一。"
+      ]
+    },
+    "en": {
+      "title": "DB inline editing · SQL enhancements & autocomplete · Developer mode · Monitor/Preview toggles",
+      "items": [
+        "Inline DB editing: add / edit happen directly in table rows (cells turn into inputs) instead of a bottom form, and the per-row action column is removed for a cleaner look; the toolbar provides Add / Edit / Delete / Save / Cancel.",
+        "Developer mode: the database panel hides the \"Add\" toolbar and the SQL run row by default; both appear only after toggling the \"Developer mode\" switch at the top right.",
+        "Unrestricted database SQL: in developer mode the SQL box accepts any statement (query / write / DDL), no longer read-only, handy for debugging and data maintenance.",
+        "SQL autocomplete: typing suggests SQL keywords, library table names (with localized descriptions) and columns (typing table. lists the field names and types); ↑↓ to choose, Enter / Tab to accept, Esc to close; Enter still runs the query when there is no suggestion.",
+        "Database panel polish: added a refresh button beside the table name, a tidier header and developer-mode toolbar, and fixed \"add row\" not working on empty tables.",
+        "Localized table descriptions: the table list shows a description for each business table, switching with the UI language; unmapped tables show no description.",
+        "Preview artifact export: the preview view adds an \"Export artifacts\" button plus a right-click \"Export\" on files / folders — pick the files (including subdirectories) you want and download them as a single ZIP, great for collecting a session's artifacts.",
+        "i18n completion: the left-side library label, preview buttons and the export-artifacts dialog are now localized, refreshing instantly on language change.",
+        "View visibility toggles: new \"Show conversation monitor\" and \"Show conversation preview\" settings under Display & Interaction; turning them off hides the corresponding tabs at the top of conversations right away.",
+        "Tags / trash styling: the search / new-input field now has even spacing and rounded corners, and the surrounding search container uses a 12px radius for a softer, unified look."
+      ]
+    }
+  },
+  {
     "version": "0.11.0",
     "date": "2026-09-01",
     "zh": {

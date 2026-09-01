@@ -69,6 +69,8 @@ class ActivityMachine {
   private topic: TopicStyle = "general";
   /** 每个阶段被命中的累计次数（阶段变化时递增），用于文案组内轮换。 */
   private counters: Partial<Record<ActivityPhase, number>> = {};
+  /** 终点计时的定时器句柄（done/failed 窗口过期回落 idle）。 */
+  private settleTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private readonly config: ActivityMachineConfig = defaultConfig,

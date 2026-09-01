@@ -5,7 +5,7 @@
  * 支持悬停提示和点击交互。
  */
 import { useMemo, useState } from "react";
-import type { ConversationNode } from "@deepseek-ai/dsh-client-ui-slots";
+import type { ConversationNode } from "@deepseek-ai/dsh-client-runtime/client";
 
 interface DailyActivity {
   date: string; // ISO 日期字符串 "2026-08-31"
@@ -15,14 +15,8 @@ interface DailyActivity {
 }
 
 interface SessionHeatmapProps {
-  nodes: ConversationNode[] | null;
+  nodes: readonly ConversationNode[] | null | undefined;
   onDayClick?: (date: string) => void;
-}
-
-/** 计算两个日期之间的天数差 */
-function daysBetween(date1: Date, date2: Date): number {
-  const ms = Math.abs(date2.getTime() - date1.getTime());
-  return Math.floor(ms / (1000 * 60 * 60 * 24));
 }
 
 /** 格式化日期为 YYYY-MM-DD */
@@ -33,26 +27,45 @@ function formatDate(d: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+/** 容错读取 usage 输出 token 数（兼容多种常见结构）。 */
+function usageOutputTokens(usage: unknown): number | null {
+  if (!usage || typeof usage !== "object") return null;
+  const u = usage as Record<string, unknown>;
+  const pick = (obj: Record<string, unknown> | null): number | null => {
+    if (!obj) return null;
+    for (const k of ["outputTokens", "output_tokens", "completionTokens", "completion_tokens", "output"]) {
+      const v = obj[k];
+      if (typeof v === "number" && Number.isFinite(v) && v >= 0) return v;
+    }
+    return null;
+  };
+  const direct = pick(u);
+  if (direct !== null) return direct;
+  const nested =
+    typeof u.tokenUsage === "object"
+      ? (u.tokenUsage as Record<string, unknown>)
+      : typeof u.usage === "object"
+        ? (u.usage as Record<string, unknown>)
+        : null;
+  return pick(nested);
+}
+
 /** 从节点中提取每日活动数据 */
-function extractDailyActivity(nodes: ConversationNode[]): DailyActivity[] {
+function extractDailyActivity(nodes: readonly ConversationNode[]): DailyActivity[] {
   const map = new Map<string, DailyActivity>();
 
   for (const node of nodes) {
-    if (node.kind !== "assistant" || !node.timestamp) continue;
+    if (node.kind !== "assistant" || typeof node.time !== "number") continue;
 
-    const date = new Date(node.timestamp);
+    const date = new Date(node.time);
     const dateStr = formatDate(date);
 
     // 提取 token 统计
-    const timing = node.timing;
-    const tokens = timing
-      ? (timing.inputTokens ?? 0) + (timing.outputTokens ?? 0)
-      : 0;
+    const outTokens = usageOutputTokens(node.usage) ?? 0;
+    const tokens = outTokens;
 
     // 简单成本估算（DeepSeek 默认价格）
-    const cost = timing
-      ? ((timing.inputTokens ?? 0) * 2 + (timing.outputTokens ?? 0) * 8) / 1e6
-      : 0;
+    const cost = (outTokens * 8) / 1e6;
 
     const existing = map.get(dateStr);
     if (existing) {

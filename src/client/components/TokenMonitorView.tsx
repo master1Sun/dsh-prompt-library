@@ -731,7 +731,6 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
       .map((n) => textOf(n.content))
       .join("\n");
     const inTokens = Math.max(0, Math.ceil(userText.length / 4));
-    const duration = assistantDuration(latestAssistant.timing) ?? 0;
 
     setVelocityHistory((prev) => {
       const newPoint: TokenVelocityPoint = {
@@ -763,8 +762,8 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
           type: "retry",
           severity: "warning",
           message:
-            node.attempt != null
-              ? `第 ${node.attempt} 次重试`
+            node.retry != null
+              ? `第 ${node.retry} 次重试`
               : (T?.("pl.monitor.kindRetry") ?? "重试"),
         });
       }
@@ -791,7 +790,7 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
 
       // 慢响应（>30s）
       if (node.kind === "assistant" && node.timing) {
-        const duration = assistantDuration(node.timing);
+        const duration = assistantDuration(node.timing) ?? 0;
         if (duration > 30000) {
           markers.push({
             turnIndex,

@@ -12,7 +12,7 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 import { fileURLToPath } from "node:url";
@@ -48,9 +48,14 @@ import {
   getPersona,
   getSettings,
   importPrompts,
+  insertDbRow,
+  listDbTables,
   listPrompts,
   listStatsSnapshots,
   listTags,
+  queryDb,
+  updateDbRow,
+  deleteDbRow,
   listTrash,
   recordUsage,
   refinePrompt,
@@ -273,8 +278,14 @@ async function resolveCurrentProjectCwd(): Promise<string | null> {
 
 // ── 会话预览（读取会话所属文件夹下的 md 文件） ────────────────────────
 
-/** 单文件预览大小上限（2 MiB，防止超大文件拖垮渲染）。 */
+/** 文本文件截流触发阈值（2 MiB）：超过该大小的文件只返回部分行预览，避免超大内容拖垮渲染。 */
 const MAX_PREVIEW_FILE_SIZE = 2 * 1024 * 1024;
+
+/** 图片文件大小上限（10 MiB，图片通常较大但浏览器可处理 base64）。 */
+const MAX_IMAGE_FILE_SIZE = 10 * 1024 * 1024;
+
+/** 非日志文本预览的行数上限：超过即只返回首部，防止超大文本一次性渲染卡死界面。 */
+const TEXT_LINE_CAP = 1800;
 
 /** 递归遍历时跳过的噪音目录（避免大仓库拖慢扫描）。 */
 const PREVIEW_SKIP_DIRS = new Set(["node_modules", ".git", ".svn", ".hg", "dist", "build"]);
@@ -283,14 +294,51 @@ const PREVIEW_SKIP_DIRS = new Set(["node_modules", ".git", ".svn", ".hg", "dist"
 const MAX_PREVIEW_FILES = 300;
 
 /** 支持预览的文件类型（按扩展名识别）。 */
-type PreviewFileType = "md" | "json" | "txt" | "csv";
+type PreviewFileType =
+  | "md" | "json" | "txt" | "csv"
+  | "ts" | "js" | "py" | "go" | "rs" | "java" | "c" | "cpp"
+  | "yml" | "yaml" | "toml" | "xml"
+  | "log"
+  | "png" | "jpg" | "jpeg" | "gif" | "svg";
 
 const PREVIEW_EXT_TYPES: Record<string, PreviewFileType> = {
+  // Markdown
   ".md": "md",
   ".markdown": "md",
+  // JSON
   ".json": "json",
+  // Plain text
   ".txt": "txt",
+  // CSV
   ".csv": "csv",
+  // Programming languages
+  ".ts": "ts",
+  ".tsx": "ts",
+  ".js": "js",
+  ".jsx": "js",
+  ".py": "py",
+  ".go": "go",
+  ".rs": "rs",
+  ".java": "java",
+  ".c": "c",
+  ".h": "c",
+  ".cpp": "cpp",
+  ".cc": "cpp",
+  ".cxx": "cpp",
+  ".hpp": "cpp",
+  // Config files
+  ".yml": "yml",
+  ".yaml": "yaml",
+  ".toml": "toml",
+  ".xml": "xml",
+  // Log files
+  ".log": "log",
+  // Images
+  ".png": "png",
+  ".jpg": "jpg",
+  ".jpeg": "jpeg",
+  ".gif": "gif",
+  ".svg": "svg",
 };
 
 /** 按文件名判断类型；不支持/不合法（含路径分隔符、.. 遍历）返回 null，杜绝路径穿越。 */
@@ -301,11 +349,75 @@ function previewTypeOf(name: string): PreviewFileType | null {
   return PREVIEW_EXT_TYPES[ext] ?? null;
 }
 
-/** 递归列出目录下所有可预览文件（md/json/txt/csv，跳过噪音目录、限数量），name 为相对根目录的路径。 */
-async function listPreviewFiles(
-  dir: string,
-): Promise<Array<{ name: string; path: string; size: number; type: PreviewFileType }>> {
-  const list: Array<{ name: string; path: string; size: number; type: PreviewFileType }> = [];
+/** 判断是否为二进制文件类型（需要 base64 编码）。 */
+function isBinaryType(type: PreviewFileType): boolean {
+  return ["png", "jpg", "jpeg", "gif", "svg"].includes(type);
+}
+
+/** 校验合法的单个文件名/目录名（只能是 basename：非空、不含分隔符、不含 ..）。 */
+function safeBasename(name: unknown): name is string {
+  return (
+    typeof name === "string" &&
+    !!name.trim() &&
+    !name.includes("/") &&
+    !name.includes("\\") &&
+    !name.includes("..")
+  );
+}
+
+/** 按扩展名推断 MIME；未知类型回退 application/octet-stream（用于原始文件下载）。 */
+function mimeOf(name: string): string {
+  const ext = name.slice(name.lastIndexOf(".") + 1).toLowerCase();
+  return (
+    {
+      md: "text/markdown",
+      json: "application/json",
+      txt: "text/plain",
+      csv: "text/csv",
+      yml: "text/yaml",
+      yaml: "text/yaml",
+      toml: "text/x-toml",
+      xml: "application/xml",
+      html: "text/html",
+      htm: "text/html",
+      css: "text/css",
+      js: "text/javascript",
+      mjs: "text/javascript",
+      cjs: "text/javascript",
+      ts: "text/plain",
+      py: "text/x-python",
+      go: "text/plain",
+      rs: "text/plain",
+      java: "text/plain",
+      c: "text/plain",
+      cpp: "text/plain",
+      log: "text/plain",
+      png: "image/png",
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      gif: "image/gif",
+      svg: "image/svg+xml",
+      webp: "image/webp",
+      ico: "image/x-icon",
+      pdf: "application/pdf",
+      zip: "application/zip",
+      gz: "application/gzip",
+      mp4: "video/mp4",
+      webm: "video/webm",
+      mp3: "audio/mpeg",
+    } as Record<string, string>
+  )[ext] ?? "application/octet-stream";
+}
+
+/** 预览列表项：文件带 type，目录带 dir 标记（空目录也入列，前端据此显示目录节点）。 */
+type PreviewListEntry =
+  | { name: string; path: string; size: number; modified: number; type: PreviewFileType; dir?: false }
+  | { name: string; path: string; size: number; modified: number; dir: true };
+
+/** 递归列出目录下所有可预览文件（md/json/txt/csv 等，跳过噪音目录、限数量），name 为相对根目录的路径。
+ * 目录（含空目录）也作为条目返回，前端据此在树中展示空目录节点。 */
+async function listPreviewFiles(dir: string): Promise<PreviewListEntry[]> {
+  const list: PreviewListEntry[] = [];
   const walk = async (d: string): Promise<void> => {
     if (list.length >= MAX_PREVIEW_FILES) return;
     let entries;
@@ -319,7 +431,22 @@ async function listPreviewFiles(
       if (list.length >= MAX_PREVIEW_FILES) return;
       const full = join(d, e.name);
       if (e.isDirectory()) {
-        if (!PREVIEW_SKIP_DIRS.has(e.name)) await walk(full);
+        if (PREVIEW_SKIP_DIRS.has(e.name)) continue;
+        // 先递归收集子级，再入列目录本身（空目录也显示）
+        await walk(full);
+        if (list.length >= MAX_PREVIEW_FILES) return;
+        try {
+          const s = await stat(full);
+          list.push({
+            name: full.slice(dir.length).replace(/\\/g, "/").replace(/^\/+/, ""),
+            path: full,
+            size: 0,
+            modified: s.mtimeMs,
+            dir: true,
+          });
+        } catch {
+          /* 单条 stat 失败忽略，不阻塞其余 */
+        }
       } else if (e.isFile()) {
         const type = previewTypeOf(e.name);
         if (!type) continue;
@@ -330,6 +457,7 @@ async function listPreviewFiles(
             path: full,
             size: s.size,
             type,
+            modified: s.mtimeMs,
           });
         } catch {
           /* 单条 stat 失败忽略，不阻塞其余 */
@@ -361,21 +489,67 @@ async function resolveSessionFolder(sessid: string): Promise<string | null> {
   return found;
 }
 
-/** 读取单个可预览文件内容（仅允许 md/json/txt/csv、拒绝路径穿越、限大小）；不合法或不存在返回 null。 */
+/** 读取单个可预览文件内容（支持文本/代码/配置/日志/图片；拒绝路径穿越、限大小）；不合法或不存在返回 null。 */
 async function readPreviewFile(
   p: string,
-): Promise<{ name: string; path: string; content: string; size: number; type: PreviewFileType } | null> {
+): Promise<{
+  name: string;
+  path: string;
+  content: string;
+  size: number;
+  type: PreviewFileType;
+  truncated?: boolean;
+  totalLines?: number;
+} | null> {
   const type = previewTypeOf(basename(p));
   if (!type) return null;
   if (p.includes("..")) return null;
   if (!existsSync(p)) return null;
   const s = await stat(p);
   if (!s.isFile()) return null;
-  if (s.size > MAX_PREVIEW_FILE_SIZE) {
+
+  // 根据文件类型应用大小限制：仅二进制文件有硬上限；文本文件 >2MB 时改为截流预览（见下）
+  if (isBinaryType(type) && s.size > MAX_IMAGE_FILE_SIZE) {
     throw new Error("file too large");
   }
-  const content = await readFile(p, "utf8");
-  return { name: basename(p), path: p, content, size: s.size, type };
+
+  // 二进制文件：读取 Buffer 并 base64 编码
+  if (isBinaryType(type)) {
+    const buffer = await readFile(p);
+    const content = buffer.toString("base64");
+    return { name: basename(p), path: p, content, size: s.size, type };
+  }
+
+  // 文本文件：读取 UTF-8 内容
+  let content = await readFile(p, "utf8");
+
+  // 大文本截流：文件超过 2MB 时只返回部分行，避免超大内容一次性渲染导致界面卡死。
+  // 日志保留尾部 500 行（关心最新输出）；其余文本（md/txt/csv/json/code/config 等）只返回首部（从头阅读更自然）。
+  let truncated: boolean | undefined;
+  let totalLines: number | undefined;
+  if (s.size > MAX_PREVIEW_FILE_SIZE) {
+    const lines = content.split("\n");
+    totalLines = lines.length;
+    if (type === "log") {
+      if (lines.length > 500) {
+        content = lines.slice(-500).join("\n");
+        truncated = true;
+      }
+    } else if (lines.length > TEXT_LINE_CAP) {
+      content = lines.slice(0, TEXT_LINE_CAP).join("\n");
+      truncated = true;
+    }
+  }
+
+  return {
+    name: basename(p),
+    path: p,
+    content,
+    size: s.size,
+    type,
+    ...(truncated !== undefined && { truncated }),
+    ...(totalLines !== undefined && { totalLines }),
+  };
 }
 
 export function makePromptRoutes(): WebRoute[] {
@@ -1183,6 +1357,65 @@ export function makePromptRoutes(): WebRoute[] {
         }
       }
 
+      // ── 数据库预览（只读浏览 prompt.db）──────────────────────────────────
+
+      // GET /db/tables — 列出词库数据库全部业务表（含列定义与行数）
+      if (method === "GET" && tail === "/db/tables") {
+        const data = listDbTables();
+        return json(res, 200, { ok: true, data });
+      }
+
+      // POST /db/query — 执行一条只读查询（仅允许 SELECT / WITH / PRAGMA / EXPLAIN）
+      if (method === "POST" && tail === "/db/query") {
+        const raw = await readJsonBody(req);
+        const sql =
+          typeof raw === "object" && raw !== null && typeof (raw as { sql?: unknown }).sql === "string"
+            ? (raw as { sql: string }).sql
+            : "";
+        if (!sql) return json(res, 400, { ok: false, error: "invalid body: {sql}" });
+        try {
+          const data = queryDb(sql);
+          return json(res, 200, { ok: true, data });
+        } catch (err) {
+          // SQL 非法 / 非只读语句被拒绝等，返回具体原因供界面提示
+          return json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : "query failed",
+          });
+        }
+      }
+
+      // POST /db/insert — 向指定表新增一行（可视化「增」）
+      // POST /db/update — 按主键更新一行（可视化「改」）
+      // POST /db/delete — 按主键删除一行（可视化「删」）
+      if (method === "POST" && ["/db/insert", "/db/update", "/db/delete"].includes(tail)) {
+        const raw = await readJsonBody(req);
+        const body =
+          typeof raw === "object" && raw !== null
+            ? (raw as { table?: string; pk?: Array<{ name: string; value: unknown }>; record?: Record<string, unknown> })
+            : {};
+        if (typeof body.table !== "string") {
+          return json(res, 400, { ok: false, error: "invalid body: need {table}" });
+        }
+        // 仅允许新增/编辑/删除自身列的数据（由 store 端校验表名与列名的合法性）
+        try {
+          let changes = 0;
+          if (tail === "/db/insert") {
+            changes = insertDbRow({ table: body.table, record: body.record ?? {} });
+          } else if (tail === "/db/update") {
+            changes = updateDbRow({ table: body.table, pk: body.pk ?? [], record: body.record ?? {} });
+          } else {
+            changes = deleteDbRow({ table: body.table, pk: body.pk ?? [] });
+          }
+          return json(res, 200, { ok: true, data: { changes } });
+        } catch (err) {
+          return json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : "write failed",
+          });
+        }
+      }
+
       // ── 多人格（自定义 SOUL，按工作区/项目切换） ─────────────────────────
 
       // GET /personas — 列出全部人格（含内置默认人格，排最前）
@@ -1579,6 +1812,34 @@ export function makePromptRoutes(): WebRoute[] {
         }
       }
 
+      // GET /preview/download?path= — 不经截断读取文件的原始字节（Base64 返回，供浏览器下载任意类型文件）。
+      if (method === "GET" && segments[0] === "preview" && segments[1] === "download" && segments.length === 2) {
+        const q = new URLSearchParams((req.url ?? "").split("?", 2)[1] ?? "");
+        const p = q.get("path") ?? "";
+        if (!p) return json(res, 400, { ok: false, error: "invalid query: path" });
+        if (p.includes("..")) return json(res, 403, { ok: false, error: "path traversal not allowed" });
+        try {
+          if (!existsSync(p)) return json(res, 404, { ok: false, error: "file not found" });
+          const s = await stat(p);
+          if (!s.isFile()) return json(res, 400, { ok: false, error: "not a file" });
+          const buf = await readFile(p); // 不传编码 → 原始 Buffer，无截断
+          return json(res, 200, {
+            ok: true,
+            data: {
+              name: basename(p),
+              mime: mimeOf(basename(p)),
+              size: s.size,
+              base64: buf.toString("base64"),
+            },
+          });
+        } catch (err) {
+          return json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : "download failed",
+          });
+        }
+      }
+
       // GET /preview/active — 取当前会话 id（预览面板回退源：useSession 不可用时轮询此端点）。
       if (method === "GET" && segments[0] === "preview" && segments[1] === "active" && segments.length === 2) {
         return json(res, 200, { ok: true, data: { sessid: getCurrentSessionScope() ?? "" } });
@@ -1603,6 +1864,82 @@ export function makePromptRoutes(): WebRoute[] {
           return json(res, 500, {
             ok: false,
             error: err instanceof Error ? err.message : "write failed",
+          });
+        }
+      }
+
+      // POST /preview/rename — 重命名文件或目录（新名只能是 basename，拒绝路径穿越）。
+      if (method === "POST" && segments[0] === "preview" && segments[1] === "rename" && segments.length === 2) {
+        const body = await readJsonBody(req).catch(() => null);
+        const b = (body ?? {}) as { path?: unknown; name?: unknown };
+        const p = typeof b.path === "string" ? b.path : "";
+        if (!p || p.includes("..") || !safeBasename(b.name)) {
+          return json(res, 400, { ok: false, error: "invalid request: path and name required" });
+        }
+        try {
+          const newPath = join(basename(p) === p ? "" : p.slice(0, p.length - basename(p).length), b.name);
+          if (newPath === p) return json(res, 400, { ok: false, error: "name unchanged" });
+          await rename(p, newPath);
+          return json(res, 200, { ok: true, data: { success: true, path: newPath } });
+        } catch (err) {
+          return json(res, 500, {
+            ok: false,
+            error: err instanceof Error ? err.message : "rename failed",
+          });
+        }
+      }
+
+      // POST /preview/delete — 删除文件或目录（目录递归删除，不可恢复）。
+      if (method === "POST" && segments[0] === "preview" && segments[1] === "delete" && segments.length === 2) {
+        const body = await readJsonBody(req).catch(() => null);
+        const b = (body ?? {}) as { path?: unknown };
+        const p = typeof b.path === "string" ? b.path : "";
+        if (!p || p.includes("..")) return json(res, 400, { ok: false, error: "invalid request: path required" });
+        try {
+          await rm(p, { recursive: true, force: true });
+          return json(res, 200, { ok: true, data: { success: true } });
+        } catch (err) {
+          return json(res, 500, {
+            ok: false,
+            error: err instanceof Error ? err.message : "delete failed",
+          });
+        }
+      }
+
+      // POST /preview/mkdir — 在 dir 下新建子目录。dir 允许为空表示当前列表根目录。
+      if (method === "POST" && segments[0] === "preview" && segments[1] === "mkdir" && segments.length === 2) {
+        const body = await readJsonBody(req).catch(() => null);
+        const b = (body ?? {}) as { dir?: unknown; name?: unknown };
+        const dir = typeof b.dir === "string" ? b.dir : "";
+        if (dir.includes("..") || !safeBasename(b.name)) {
+          return json(res, 400, { ok: false, error: "invalid request: dir and name required" });
+        }
+        try {
+          await mkdir(join(dir, b.name), { recursive: false });
+          return json(res, 200, { ok: true, data: { success: true } });
+        } catch (err) {
+          return json(res, 500, {
+            ok: false,
+            error: err instanceof Error ? err.message : "mkdir failed",
+          });
+        }
+      }
+
+      // POST /preview/newfile — 在 dir 下新建空白文件。dir 允许为空表示当前列表根目录。
+      if (method === "POST" && segments[0] === "preview" && segments[1] === "newfile" && segments.length === 2) {
+        const body = await readJsonBody(req).catch(() => null);
+        const b = (body ?? {}) as { dir?: unknown; name?: unknown };
+        const dir = typeof b.dir === "string" ? b.dir : "";
+        if (dir.includes("..") || !safeBasename(b.name)) {
+          return json(res, 400, { ok: false, error: "invalid request: dir and name required" });
+        }
+        try {
+          await writeFile(join(dir, b.name), "", "utf8");
+          return json(res, 200, { ok: true, data: { success: true } });
+        } catch (err) {
+          return json(res, 500, {
+            ok: false,
+            error: err instanceof Error ? err.message : "create failed",
           });
         }
       }

@@ -58,7 +58,7 @@ export function RecycleManagePanel(props: { t?: PLTranslate }): ReactNode {
     color: TONE.text,
     background: TONE.row,
     border: `1px solid ${TONE.border}`,
-    borderRadius: 7,
+    borderRadius: 10,
     fontFamily: MONO,
     fontSize: 13,
     outline: "none",
@@ -279,9 +279,10 @@ export function RecycleManagePanel(props: { t?: PLTranslate }): ReactNode {
             position: "sticky",
             top: 0,
             zIndex: 3,
-            padding: "2px 10px 8px 10px",
+            padding: "10px 12px 10px 12px",
             background: TONE.row,
             borderBottom: `1px solid ${TONE.border}`,
+            borderRadius: 12,
             flexShrink: 0,
           }}
         >

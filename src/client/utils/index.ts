@@ -16,15 +16,15 @@
  */
 import { type ReactNode } from "react";
 // 副作用引入：注册全局 data-tip 主题自适应提示的监听（取代原生 title，适配黑夜/白天模式）
-import "../components/Tooltip.js";
-import { PromptLibraryButton } from "../components/PromptLibraryButton.js";
-import { AIPolishButton } from "../components/AIPolishButton.js";
-import { ContextRecommendations } from "../components/ContextRecommendations.js";
+import "../components/common/Tooltip.js";
+import { PromptLibraryButton } from "../components/data/PromptLibraryButton.js";
+import { AIPolishButton } from "../components/data/AIPolishButton.js";
+import { ContextRecommendations } from "../components/data/ContextRecommendations.js";
 // 会话监控 / 文件预览已拆分为独立插件 dsh-session-monitor，能力代码保留、仅停用注册：
-import { TokenMonitorView } from "../components/TokenMonitorView.js";
-import { PreviewView } from "../components/PreviewView.js";
-import { SettingsSection } from "../components/SettingsSection.js";
-import { registerSettingsAboveMenu, SETTINGS_ABOVE_CSS } from "../components/SettingsAboveMenuButton.js";
+import { TokenMonitorView } from "../components/monitor/TokenMonitorView.js";
+import { PreviewView } from "../components/preview/PreviewView.js";
+import { SettingsSection } from "../components/settings/SettingsSection.js";
+import { registerSettingsAboveMenu, SETTINGS_ABOVE_CSS } from "../components/settings/SettingsAboveMenuButton.js";
 import { en, NS, zh } from "./i18n.js";
 import { startDataChangedSubscription } from "./data-sync.js";
 import { registerWorkspaces } from "./workspace-picker.js";

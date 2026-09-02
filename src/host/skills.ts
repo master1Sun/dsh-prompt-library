@@ -16,6 +16,9 @@ import {
   getMetaValue,
   getPromptIdBySkillName,
   getSkillNameForPrompt,
+  isPromptActive,
+  isPromptTrashed,
+  restorePrompts,
   setMetaValue,
   setSkillNameForPrompt,
   updatePrompt,
@@ -258,9 +261,24 @@ export async function importSkillEntries(entries: SkillEntry[]): Promise<SkillIm
     try {
       const existingId = getPromptIdBySkillName(skillName);
       if (existingId) {
-        await updatePrompt(existingId, { title, body, summary, tags: ["skill"] });
-        updated++;
-        items.push({ title, name: skillName, status: "updated" });
+        if (isPromptActive(existingId)) {
+          // 正常活动提示词：直接覆盖更新
+          await updatePrompt(existingId, { title, body, summary, tags: ["skill"] });
+          updated++;
+          items.push({ title, name: skillName, status: "updated" });
+        } else if (isPromptTrashed(existingId)) {
+          // 同名技能对应的提示词在回收站：先从回收站恢复，再更新内容
+          await restorePrompts([existingId]);
+          await updatePrompt(existingId, { title, body, summary, tags: ["skill"] });
+          imported++;
+          items.push({ title, name: skillName, status: "imported" });
+        } else {
+          // 关联已指向一条被彻底删除的提示词：按新数据重建
+          const prompt = await createPrompt({ title, body, tags: ["skill"], summary });
+          setSkillNameForPrompt(prompt.id, skillName);
+          imported++;
+          items.push({ title, name: skillName, status: "imported" });
+        }
       } else {
         const prompt = await createPrompt({ title, body, tags: ["skill"], summary });
         setSkillNameForPrompt(prompt.id, skillName);

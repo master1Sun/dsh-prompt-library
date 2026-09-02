@@ -13,7 +13,7 @@
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 // 惰性加载 node:sqlite（屏蔽实验特性警告），DatabaseSync 仅作类型使用
 import { createDatabase } from "./node-sqlite.js";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
@@ -836,6 +836,18 @@ export function getPromptIdBySkillName(skillName: string): string | undefined {
     .prepare("SELECT promptId FROM prompt_skill_links WHERE skillName = ? LIMIT 1")
     .get(skillName) as { promptId: string } | undefined;
   return row?.promptId;
+}
+
+/** 判断指定 id 是否仍是活动提示词（存在于 prompts 表，而非回收站 trash 表）。 */
+export function isPromptActive(id: string): boolean {
+  if (!db || !id) return false;
+  return !!db.prepare("SELECT id FROM prompts WHERE id = ?").get(id);
+}
+
+/** 判断指定 id 是否位于回收站（trash 表）。 */
+export function isPromptTrashed(id: string): boolean {
+  if (!db || !id) return false;
+  return !!db.prepare("SELECT id FROM trash WHERE id = ?").get(id);
 }
 
 export function createPrompt(input: {
@@ -2313,9 +2325,8 @@ const PERSIST_EXCLUDED_KEYS = new Set<keyof PluginSettings>([
   "autoLearnManualConfirm",
   "autoLearnTag",
   "autoLearnMinLength",
-  // AI 完善面板不再在界面上暴露，其运行参数（Provider/模型/开关）不写配置文件，读取时回退默认态
-  "aiProvider",
-  "aiModel",
+  // AI 智能完善的开关不再在界面上暴露，不写配置文件，读取时回退默认态；
+  // 默认 AI 模型选择（aiProvider/aiModel）已在设置界面提供并持久化
   "aiEnrichEnabled",
 ]);
 
@@ -2394,6 +2405,23 @@ export function updateSettings(patch: Partial<PluginSettings>): Promise<PluginSe
     await writeSettingsRaw(next);
     return next;
   });
+}
+
+// ── 数据库开发者模式密码（明文不入库，仅存 SHA-256 摘要） ────────────────
+
+/** 默认开发者模式密码（未设置时回退该密码的摘要进行校验）。 */
+const DEFAULT_DEV_PASSWORD = "prompt";
+
+/** 计算密码的 SHA-256 摘要（hex）。 */
+export function hashDevPassword(plain: string): string {
+  return createHash("sha256").update(String(plain ?? "")).digest("hex");
+}
+
+/** 校验开发者模式密码：与已存摘要比对；未设置时比对默认密码摘要。 */
+export async function verifyDbDevPassword(plain: string): Promise<boolean> {
+  const s = await getSettings();
+  const stored = s.dbDevPasswordHash ?? hashDevPassword(DEFAULT_DEV_PASSWORD);
+  return hashDevPassword(plain) === stored;
 }
 
 // ── 多人格（自定义 SOUL）数据访问 ─────────────────────────────────────────

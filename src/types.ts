@@ -234,6 +234,8 @@ export interface PluginSettings {
   monitorEnabled: boolean;
   /** 是否启用「会话预览」视图标签（conversation.view，预览会话工作目录下的文件）。默认开启。 */
   previewEnabled: boolean;
+  /** 数据库开发者模式密码的 SHA-256 摘要（不落盘明文，仅存摘要用于校验）。缺省表示未设置，使用默认密码。 */
+  dbDevPasswordHash?: string;
 }
 
 /** 设置的默认值。 */

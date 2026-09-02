@@ -651,17 +651,21 @@ export function getActivity(lang?: string): Promise<ActivitySnapshot> {
 }
 
 /**
- * SSE 订阅活动状态流：建立与服务器的长连接，实时接收状态变化。
+ * SSE 订阅「词库助手」状态流：建立与服务器的单条长连接，同时接收活动阶段与游戏化状态。
  * 返回取消订阅函数，调用后关闭连接并停止接收更新。
- * @param callback 每次收到新快照时的回调
+ * @param handlers.onActivity 每次收到活动快照时回调
+ * @param handlers.onStatus 每次收到游戏化状态快照时回调
  * @param lang 文案语言（zh/en）
  */
-export function subscribeActivity(
-  callback: (snapshot: ActivitySnapshot) => void,
+export function subscribeAssistant(
+  handlers: {
+    onActivity: (snapshot: ActivitySnapshot) => void;
+    onStatus: (status: AssistantStatus) => void;
+  },
   lang?: string,
 ): () => void {
   const q = lang ? `?lang=${encodeURIComponent(lang)}` : "";
-  const url = `/api/prompt-library/activity/stream${q}`;
+  const url = `/api/prompt-library/assistant/stream${q}`;
 
   // 使用原生 EventSource API（浏览器内置支持 SSE）
   const eventSource = new EventSource(url);
@@ -671,21 +675,30 @@ export function subscribeActivity(
     connected = true;
   };
 
-  eventSource.onmessage = (event) => {
+  eventSource.addEventListener("activity", (event) => {
     try {
-      const snapshot: ActivitySnapshot = JSON.parse(event.data);
-      callback(snapshot);
+      const snapshot: ActivitySnapshot = JSON.parse((event as MessageEvent).data);
+      handlers.onActivity(snapshot);
     } catch {
       // 解析失败忽略
     }
-  };
+  });
+
+  eventSource.addEventListener("status", (event) => {
+    try {
+      const status: AssistantStatus = JSON.parse((event as MessageEvent).data);
+      handlers.onStatus(status);
+    } catch {
+      // 解析失败忽略
+    }
+  });
 
   eventSource.onerror = () => {
     if (connected) {
       // 已连接后出错，可能是服务器断开
-      console.warn("[Activity SSE] Connection lost, falling back to polling");
+      console.warn("[Assistant SSE] Connection lost, falling back to polling");
     }
-    // SSE 连接错误时自动关闭
+    // SSE 连接错误时自动关闭，避免无限重试
     eventSource.close();
   };
 
@@ -817,41 +830,6 @@ export interface AssistantStatus {
 export function getAssistantStatus(lang?: string): Promise<AssistantStatus> {
   const q = lang ? `?lang=${encodeURIComponent(lang)}` : "";
   return send<AssistantStatus>("GET", `/api/prompt-library/assistant/status${q}`);
-}
-
-/**
- * SSE 订阅游戏化状态流：建立与服务器的长连接，实时接收等级/成就变化。
- * 返回取消订阅函数，调用后关闭连接并停止接收更新。
- * @param callback 每次收到新快照时的回调
- * @param lang 文案语言（zh/en）
- */
-export function subscribeAssistantStatus(
-  callback: (status: AssistantStatus) => void,
-  lang?: string,
-): () => void {
-  const q = lang ? `?lang=${encodeURIComponent(lang)}` : "";
-  const url = `/api/prompt-library/assistant/status/stream${q}`;
-
-  // 使用原生 EventSource API（浏览器内置支持 SSE）
-  const eventSource = new EventSource(url);
-
-  eventSource.onmessage = (event) => {
-    try {
-      const status: AssistantStatus = JSON.parse(event.data);
-      callback(status);
-    } catch {
-      // 解析失败忽略
-    }
-  };
-
-  eventSource.onerror = () => {
-    // SSE 连接错误时自动关闭，避免无限重试
-    eventSource.close();
-  };
-
-  return () => {
-    eventSource.close();
-  };
 }
 
 // ── 公告通告 ────────────────────────────────────────────────────────────
@@ -1080,6 +1058,12 @@ export function dbDelete(payload: DbCellPayload): Promise<{ changes: number }> {
   return send<{ changes: number }>("POST", "/api/prompt-library/db/delete", payload);
 }
 
+/** 校验数据库开发者模式密码（明文在客户端侧比对服务端摘要，不落盘）。 */
+export async function verifyDbDevPassword(password: string): Promise<boolean> {
+  const r = await send<{ ok: boolean }>("POST", "/api/prompt-library/db/verify-password", { password });
+  return r.ok;
+}
+
 // ── 自动备份 ──────────────────────────────────────────────────────────────
 
 /** 自动备份目录下的单条备份文件信息。 */
@@ -1245,6 +1229,75 @@ export function previewNewFile(
     dir,
     name,
   });
+}
+
+/** 单个全文搜索命中项：文件 + 命中行号 + 该行内容片段。 */
+export interface PreviewSearchMatch {
+  path: string;
+  name: string;
+  type: PreviewFileType;
+  size: number;
+  line: number;
+  index: number;
+  text: string;
+}
+
+/** 全文搜索（grep）：对会话根目录（或手动 dir）下文本文件做子串匹配，返回命中行。 */
+export function searchPreviewFiles(
+  params: { dir?: string; sessid?: string; query: string; caseSensitive?: boolean },
+): Promise<{ dir: string; matches: PreviewSearchMatch[] }> {
+  return send<{ dir: string; matches: PreviewSearchMatch[] }>(
+    "POST",
+    "/api/prompt-library/preview/search",
+    params,
+  );
+}
+
+/** 按行窗口读取文本文件：返回 `[offset, offset+limit)` 行及总行数（供长文本/日志虚拟滚动）。 */
+export function readPreviewFileLines(
+  path: string,
+  offset: number,
+  limit: number,
+): Promise<{
+  name: string;
+  path: string;
+  size: number;
+  type: PreviewFileType;
+  lines: string[];
+  total: number;
+  offset: number;
+}> {
+  return send<
+    {
+      name: string;
+      path: string;
+      size: number;
+      type: PreviewFileType;
+      lines: string[];
+      total: number;
+      offset: number;
+    }
+  >(
+    "GET",
+    `/api/prompt-library/preview/lines?path=${encodeURIComponent(path)}&offset=${offset}&limit=${limit}`,
+  );
+}
+
+/** 移动文件/目录到目标目录下（保持原名）。 */
+export function previewMove(path: string, dir: string): Promise<{ success: boolean; path: string }> {
+  return send<{ success: boolean; path: string }>("POST", "/api/prompt-library/preview/move", { path, dir });
+}
+
+/** 复制文件/目录到目标目录下（保持原名，目录递归复制）。 */
+export function previewCopy(path: string, dir: string): Promise<{ success: boolean; path: string }> {
+  return send<{ success: boolean; path: string }>("POST", "/api/prompt-library/preview/copy", { path, dir });
+}
+
+/** 取当前预览根目录的总 mtime 快照（dir/sessid 口径与 list 一致），用于增量刷新判断目录是否变化。 */
+export function previewRootMtime(
+  params: { dir?: string; sessid?: string },
+): Promise<{ dir: string; mtime: number }> {
+  return send<{ dir: string; mtime: number }>("POST", "/api/prompt-library/preview/rootmtime", params);
 }
 
 /** 检测 dsh-prompt-library 插件是否已安装（预览/监控并入本插件，恒为已安装）。 */

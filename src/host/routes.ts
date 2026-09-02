@@ -11,9 +11,10 @@
  * 所有响应使用 ApiResponse 信封。
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { createReadStream, existsSync, watch } from "node:fs";
+import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { basename, isAbsolute, join, relative } from "node:path";
+import { createInterface } from "node:readline";
 
 import { fileURLToPath } from "node:url";
 import type { WebRoute } from "@deepseek-ai/dsh-host-webserver";
@@ -56,6 +57,7 @@ import {
   queryDb,
   updateDbRow,
   deleteDbRow,
+  verifyDbDevPassword,
   listTrash,
   recordUsage,
   refinePrompt,
@@ -287,6 +289,15 @@ const MAX_IMAGE_FILE_SIZE = 10 * 1024 * 1024;
 /** 非日志文本预览的行数上限：超过即只返回首部，防止超大文本一次性渲染卡死界面。 */
 const TEXT_LINE_CAP = 1800;
 
+/** 全文搜索：单个文件内命中的行数上限（超限只取前 N 行，卡住结果体积）。 */
+const SEARCH_MATCHES_PER_FILE = 5;
+
+/** 全文搜索：总命中条数上限。 */
+const SEARCH_TOTAL_MATCHES = 300;
+
+/** 全文搜索：参与搜索的文本文件大小上限（超过不读，过大文件搜索代价高）。 */
+const SEARCH_MAX_FILE_SIZE = 4 * 1024 * 1024;
+
 /** 递归遍历时跳过的噪音目录（避免大仓库拖慢扫描）。 */
 const PREVIEW_SKIP_DIRS = new Set(["node_modules", ".git", ".svn", ".hg", "dist", "build"]);
 
@@ -341,10 +352,39 @@ const PREVIEW_EXT_TYPES: Record<string, PreviewFileType> = {
   ".svg": "svg",
 };
 
+/** 按文件名识别、无扩展名的文本/配置文件（映射为 txt 以便按纯文本预览与全文检索）。
+ * 键为小写 basename（含 .env 这类点开头文件名）。 */
+const PREVIEW_NAME_TYPES: Record<string, PreviewFileType> = {
+  ".env": "txt",
+  ".envrc": "txt",
+  ".gitignore": "txt",
+  ".gitattributes": "txt",
+  ".npmrc": "txt",
+  ".npmignore": "txt",
+  ".prettierrc": "txt",
+  ".babelrc": "txt",
+  ".eslintrc": "txt",
+  ".editorconfig": "txt",
+  "dockerfile": "txt",
+  "makefile": "txt",
+  "rakefile": "txt",
+  "gemfile": "txt",
+  "justfile": "txt",
+  "procfile": "txt",
+  "vagrantfile": "txt",
+  "caddyfile": "txt",
+};
+
 /** 按文件名判断类型；不支持/不合法（含路径分隔符、.. 遍历）返回 null，杜绝路径穿越。 */
 function previewTypeOf(name: string): PreviewFileType | null {
   if (!name) return null;
   if (name.includes("/") || name.includes("\\") || name.includes("..")) return null;
+  const lower = name.toLowerCase();
+  // 先按 basename 精确匹配无扩展名配置文件（如 Dockerfile、.gitignore、.env）
+  const named = PREVIEW_NAME_TYPES[lower];
+  if (named) return named;
+  // .env.local / .env.production 这类带环境后缀的 env 文件
+  if (lower.startsWith(".env.")) return "txt";
   const ext = name.slice(name.lastIndexOf(".")).toLowerCase();
   return PREVIEW_EXT_TYPES[ext] ?? null;
 }
@@ -550,6 +590,124 @@ async function readPreviewFile(
     ...(truncated !== undefined && { truncated }),
     ...(totalLines !== undefined && { totalLines }),
   };
+}
+
+/** 是否可参与全文搜索的文本文件类型（排除二进制/图片/过大文件）。 */
+function searchableType(type: PreviewFileType): boolean {
+  return !["png", "jpg", "jpeg", "gif", "svg"].includes(type);
+}
+
+/** 递归全文搜索（grep）：对根目录下所有可预览文本文件做大小写可选的子串匹配，
+ * 返回命中 `{ path, name, type, size, line, index, text }` 列表，命中行截断展示，数量受限。 */
+async function searchPreviewFiles(
+  dir: string,
+  query: string,
+  caseSensitive: boolean,
+): Promise<Array<{ path: string; name: string; type: PreviewFileType; size: number; line: number; index: number; text: string }>> {
+  const matches: Array<{ path: string; name: string; type: PreviewFileType; size: number; line: number; index: number; text: string }> = [];
+  const needle = caseSensitive ? query : query.toLowerCase();
+  const walk = async (d: string): Promise<void> => {
+    if (matches.length >= SEARCH_TOTAL_MATCHES) return;
+    let entries;
+    try {
+      entries = await readdir(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (matches.length >= SEARCH_TOTAL_MATCHES) return;
+      const full = join(d, e.name);
+      if (e.isDirectory()) {
+        if (PREVIEW_SKIP_DIRS.has(e.name)) continue;
+        await walk(full);
+      } else if (e.isFile()) {
+        const type = previewTypeOf(e.name);
+        if (!type || !searchableType(type)) continue;
+        try {
+          const s = await stat(full);
+          if (s.size > SEARCH_MAX_FILE_SIZE) continue;
+          const text = await readFile(full, "utf8");
+          const lines = text.split("\n");
+          let perFile = 0;
+          for (let i = 0; i < lines.length && perFile < SEARCH_MATCHES_PER_FILE; i++) {
+            const lineText = lines[i];
+            const idx = caseSensitive ? lineText.indexOf(query) : lineText.toLowerCase().indexOf(needle);
+            if (idx >= 0) {
+              perFile++;
+              const trimmed = lineText.trim();
+              matches.push({
+                path: full,
+                name: basename(full),
+                type,
+                size: s.size,
+                line: i + 1,
+                index: idx,
+                text:
+                  trimmed.length > 160
+                    ? `${trimmed.slice(0, 160)}…`
+                    : trimmed || " ",
+              });
+            }
+          }
+        } catch {
+          /* 单个文件读取失败忽略 */
+        }
+      }
+    }
+  };
+  await walk(dir);
+  return matches;
+}
+
+/** 按行片段读取文本文件：返回 `[startOffset, startOffset+limit)` 行窗口，避免一次性传输整文件。
+ * 使用流式行读取：仅缓存目标窗口行，常量内存（不再有 4MB 硬上限，超大文件也能分片预览）。
+ * 仅限文本类文件；文件不合法/二进制返回 null。 */
+async function readPreviewFileLines(
+  p: string,
+  offset: number,
+  limit: number,
+): Promise<{ name: string; path: string; size: number; type: PreviewFileType; lines: string[]; total: number; offset: number } | null> {
+  const type = previewTypeOf(basename(p));
+  if (!type || !searchableType(type)) return null;
+  if (p.includes("..")) return null;
+  if (!existsSync(p)) return null;
+  const s = await stat(p);
+  if (!s.isFile()) return null;
+  const start = Math.max(0, offset);
+  const cap = Math.min(10000, Math.max(1, limit)); // 单次窗口上限
+  const end = start + cap;
+  // 单遍流式：沿途累计 total（供虚拟滚动占位高度），仅保留 [start,end) 窗口行
+  return await new Promise((resolve, reject) => {
+    const lines: string[] = [];
+    let total = 0;
+    let rl: ReturnType<typeof createInterface> | undefined;
+    try {
+      rl = createInterface({ input: createReadStream(p, { encoding: "utf8" }), crlfDelay: Infinity });
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    rl.on("line", (ln) => {
+      if (total >= start && total < end) lines.push(ln);
+      total++;
+    });
+    rl.on("close", () =>
+      resolve({ name: basename(p), path: p, size: s.size, type, lines, total, offset: start }),
+    );
+    rl.on("error", reject);
+  });
+}
+
+/** 解析会话所属预览根目录：优先组装端记录的 cwd，其次会话 header.cwd，最后回退到会话树的归属节点。
+ * 返回空串表示未解析到（前端展示「无会话所属文件夹」）。 */
+async function resolvePreviewRoot(sessid: string): Promise<string> {
+  if (!sessid) return "";
+  const cwd1 = getActiveSessionCwd(sessid);
+  if (cwd1) return cwd1;
+  const rec = (await listSessionRecords()).find((r) => r.id === sessid);
+  if (rec?.cwd) return rec.cwd;
+  const treeFolder = await resolveSessionFolder(sessid);
+  return treeFolder ?? "";
 }
 
 export function makePromptRoutes(): WebRoute[] {
@@ -1097,10 +1255,10 @@ export function makePromptRoutes(): WebRoute[] {
         return json(res, 200, { ok: true, data });
       }
 
-      // GET /activity/stream — SSE 实时订阅活动状态流（替代轮询）。
-      // 客户端建立连接后立即收到当前状态，之后每次状态变化时推送新快照。
-      // 支持 lang 查询参数控制文案语言。
-      if (method === "GET" && tail === "/activity/stream") {
+      // GET /assistant/stream — SSE 实时订阅「词库助手」状态流：活动阶段 + 游戏化状态合并为一条连接。
+      // 客户端建立连接后立即收到当前活动快照（event: activity）与游戏化快照（event: status），
+      // 之后任一侧状态变化时分别推送对应命名事件。支持 lang 查询参数控制文案语言。
+      if (method === "GET" && tail === "/assistant/stream") {
         let lang = "zh";
         try {
           const raw = req.url ?? "";
@@ -1119,21 +1277,46 @@ export function makePromptRoutes(): WebRoute[] {
           connection: "keep-alive",
         });
 
-        // 发送初始状态
-        const initial = getActivity(langNorm);
-        res.write(`data: ${JSON.stringify(initial)}\n\n`);
-
-        // 订阅状态变化（回调中重新获取当前语言的快照）
-        const unsubscribe = onActivityChange(() => {
+        // 活动状态：立即推送一次当前快照
+        const writeActivity = () => {
           const snapshot = getActivity(langNorm);
-          res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
-        });
+          res.write(`event: activity\ndata: ${JSON.stringify(snapshot)}\n\n`);
+        };
+        writeActivity();
+
+        // 游戏化状态：构建并立即推送一次当前快照
+        const buildStatus = async () => {
+          const [stats, streak, points] = await Promise.all([
+            computeLibraryStats().catch(() => undefined),
+            computeStreak().catch(() => 0),
+            computePoints().catch(() => ({
+              gross: 0,
+              decay: 0,
+              net: 0,
+              inactiveDays: 0,
+              lastActiveAt: 0,
+            })),
+          ]);
+          const progress = syncAchievementProgress(computeAchievementProgress(stats, streak));
+          return buildAssistantStatus(stats, streak, langNorm, points, progress);
+        };
+        const writeStatus = async () => {
+          const status = await buildStatus();
+          res.write(`event: status\ndata: ${JSON.stringify(status)}\n\n`);
+        };
+        await writeStatus();
+
+        // 订阅两侧状态变化（回调中按当前语言重新取快照）
+        const unsubActivity = onActivityChange(writeActivity);
+        const unsubStatus = onStatusChange(writeStatus);
 
         // 客户端断开时清理
-        req.on("close", () => {
-          unsubscribe();
+        const cleanup = () => {
+          unsubActivity();
+          unsubStatus();
           res.end();
-        });
+        };
+        req.on("close", cleanup);
 
         return;
       }
@@ -1165,63 +1348,6 @@ export function makePromptRoutes(): WebRoute[] {
         const progress = syncAchievementProgress(computeAchievementProgress(stats, streak));
         const data = buildAssistantStatus(stats, streak, lang.toLowerCase().startsWith("en") ? "en" : "zh", points, progress);
         return json(res, 200, { ok: true, data });
-      }
-
-      // GET /assistant/status/stream — SSE 实时订阅游戏化状态流（替代轮询）。
-      // 客户端建立连接后立即收到当前状态，之后每次关键操作（使用/创建/AI完善/导入提示词）时推送新快照。
-      // 支持 lang 查询参数控制文案语言。
-      if (method === "GET" && tail === "/assistant/status/stream") {
-        let lang = "zh";
-        try {
-          const raw = req.url ?? "";
-          const q = raw.includes("?") ? raw.slice(raw.indexOf("?") + 1) : "";
-          const lv = new URLSearchParams(q).get("lang");
-          if (lv) lang = lv;
-        } catch {
-          /* 解析失败用默认 zh */
-        }
-        const langNorm = lang.toLowerCase().startsWith("en") ? "en" : "zh";
-
-        // 设置 SSE 响应头
-        res.writeHead(200, {
-          "content-type": "text/event-stream",
-          "cache-control": "no-cache",
-          connection: "keep-alive",
-        });
-
-        // 构建并发送初始状态
-        const buildStatus = async () => {
-          const [stats, streak, points] = await Promise.all([
-            computeLibraryStats().catch(() => undefined),
-            computeStreak().catch(() => 0),
-            computePoints().catch(() => ({
-              gross: 0,
-              decay: 0,
-              net: 0,
-              inactiveDays: 0,
-              lastActiveAt: 0,
-            })),
-          ]);
-          const progress = syncAchievementProgress(computeAchievementProgress(stats, streak));
-          return buildAssistantStatus(stats, streak, langNorm, points, progress);
-        };
-
-        const initial = await buildStatus();
-        res.write(`data: ${JSON.stringify(initial)}\n\n`);
-
-        // 订阅状态变化
-        const unsubscribe = onStatusChange(async () => {
-          const status = await buildStatus();
-          res.write(`data: ${JSON.stringify(status)}\n\n`);
-        });
-
-        // 客户端断开时清理
-        req.on("close", () => {
-          unsubscribe();
-          res.end();
-        });
-
-        return;
       }
 
       // GET /deepseek/balance — 判断当前是否在使用 DeepSeek API，并在配置了 DeepSeek API Key 时
@@ -1383,6 +1509,18 @@ export function makePromptRoutes(): WebRoute[] {
             error: err instanceof Error ? err.message : "query failed",
           });
         }
+      }
+
+      // POST /db/verify-password — 校验数据库中开发者模式密码（明文不入库，按摘要比对）
+      if (method === "POST" && tail === "/db/verify-password") {
+        const raw = await readJsonBody(req);
+        const pw =
+          typeof raw === "object" && raw !== null && typeof (raw as { password?: unknown }).password === "string"
+            ? (raw as { password: string }).password
+            : "";
+        if (!pw) return json(res, 400, { ok: false, error: "invalid body: {password}" });
+        const ok = await verifyDbDevPassword(pw);
+        return json(res, 200, { ok: true, data: { ok } });
       }
 
       // POST /db/insert — 向指定表新增一行（可视化「增」）
@@ -1940,6 +2078,193 @@ export function makePromptRoutes(): WebRoute[] {
           return json(res, 500, {
             ok: false,
             error: err instanceof Error ? err.message : "create failed",
+          });
+        }
+      }
+
+      // POST /preview/rootmtime — 取当前预览根目录的总 mtime 快照（dir/sessid 解析口径与 list 一致）。
+      // 前端据此判断目录是否变化，避免无变化时全量重扫（增量刷新）。
+      if (method === "POST" && segments[0] === "preview" && segments[1] === "rootmtime" && segments.length === 2) {
+        const body = await readJsonBody(req).catch(() => null);
+        const b = (body ?? {}) as { dir?: unknown; sessid?: unknown };
+        const manualDir = typeof b.dir === "string" ? b.dir.trim() : "";
+        const sessid = (typeof b.sessid === "string" ? b.sessid.trim() : "") || getCurrentSessionScope() || "";
+        let dir = manualDir;
+        if (!dir) dir = await resolvePreviewRoot(sessid);
+        if (!dir || !existsSync(dir)) return json(res, 200, { ok: true, data: { dir, mtime: 0 } });
+        let newest = 0;
+        try {
+          const walk = async (d: string, depth: number): Promise<void> => {
+            if (depth > 6) return;
+            let entries;
+            try {
+              entries = await readdir(d, { withFileTypes: true });
+            } catch {
+              return;
+            }
+            for (const e of entries) {
+              const full = join(d, e.name);
+              if (e.isDirectory()) {
+                if (PREVIEW_SKIP_DIRS.has(e.name)) continue;
+                await walk(full, depth + 1);
+              } else {
+                try {
+                  const s = await stat(full);
+                  if (s.mtimeMs > newest) newest = s.mtimeMs;
+                } catch { /* 忽略 */ }
+              }
+            }
+          };
+          const rootStat = await stat(dir);
+          if (rootStat.mtimeMs > newest) newest = rootStat.mtimeMs;
+          await walk(dir, 0);
+        } catch {
+          /* 快照失败时返回已有 newest */
+        }
+        return json(res, 200, { ok: true, data: { dir, mtime: newest } });
+      }
+
+      // GET /preview/watch?dir=&sessid= — SSE 推送预览根目录的实时变更（替代轮询 rootmtime）。
+      // 客户端建立连接后立即收到一次握手，之后目录内任意文件/目录变化（fs.watch 递归监听，防抖合并）
+      // 都推送 { changed: true }；客户端据此触发增量刷新。连接关闭时清理 watcher 与心跳。
+      if (method === "GET" && segments[0] === "preview" && segments[1] === "watch" && segments.length === 2) {
+        const q = new URLSearchParams((req.url ?? "").split("?", 2)[1] ?? "");
+        const dirArg = (q.get("dir") ?? "").trim();
+        const sessid = (q.get("sessid") ?? "").trim() || getCurrentSessionScope() || "";
+        let dir = dirArg && !dirArg.includes("..") ? dirArg : "";
+        if (!dir) dir = await resolvePreviewRoot(sessid);
+        if (!dir || !existsSync(dir)) return json(res, 200, { ok: true, data: { closed: true, reason: "no dir" } });
+
+        res.writeHead(200, {
+          "content-type": "text/event-stream",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        res.write(`data: ${JSON.stringify({ changed: false })}\n\n`);
+
+        let alive = true;
+        let watcher: ReturnType<typeof watch> | undefined;
+        try {
+          watcher = watch(dir, { recursive: true });
+        } catch {
+          // 递归监听不可用（旧平台/权限受限）时回退为仅监听根目录
+          try {
+            watcher = watch(dir);
+          } catch {
+            watcher = undefined;
+          }
+        }
+
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const notify = () => {
+          if (!alive) return;
+          // 防抖合并短时间内密集的文件系统事件为一次推送
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(() => {
+            if (alive) res.write(`data: ${JSON.stringify({ changed: true })}\n\n`);
+          }, 250);
+        };
+        watcher?.on("change", notify);
+        watcher?.on("error", () => {
+          /* 监听出错不主动断开，保持连接等待下次变更 */
+        });
+
+        // 心跳注释行：避免长连接被空闲超时掐断
+        const hb = setInterval(() => {
+          if (alive) res.write(": ping\n\n");
+        }, 15000);
+
+        req.on("close", () => {
+          alive = false;
+          if (timer) clearTimeout(timer);
+          clearInterval(hb);
+          watcher?.close();
+          res.end();
+        });
+        return;
+      }
+
+      // POST /preview/search — 全文搜索（grep）。dir 为空时按 sessid 解析根目录。
+      if (method === "POST" && segments[0] === "preview" && segments[1] === "search" && segments.length === 2) {
+        const body = await readJsonBody(req).catch(() => null);
+        const b = (body ?? {}) as { dir?: unknown; sessid?: unknown; query?: unknown; caseSensitive?: unknown };
+        const manualDir = typeof b.dir === "string" ? b.dir.trim() : "";
+        const sessid = (typeof b.sessid === "string" ? b.sessid.trim() : "") || getCurrentSessionScope() || "";
+        const query = typeof b.query === "string" ? b.query : "";
+        const caseSensitive = b.caseSensitive === true;
+        if (!query.trim()) return json(res, 400, { ok: false, error: "invalid request: query required" });
+        const dir = manualDir || (await resolvePreviewRoot(sessid));
+        if (!dir) return json(res, 200, { ok: true, data: { dir: "", matches: [] } });
+        const matches = await searchPreviewFiles(dir, query, caseSensitive);
+        return json(res, 200, { ok: true, data: { dir, matches } });
+      }
+
+      // GET /preview/lines?path=&offset=&limit= — 按行窗口读取文本文件（供长文本/日志虚拟滚动）。
+      if (method === "GET" && segments[0] === "preview" && segments[1] === "lines" && segments.length === 2) {
+        const q = new URLSearchParams((req.url ?? "").split("?", 2)[1] ?? "");
+        const p = q.get("path") ?? "";
+        const offset = Math.max(0, parseInt(q.get("offset") ?? "0", 10) || 0);
+        const limit = Math.min(5000, Math.max(1, parseInt(q.get("limit") ?? "200", 10) || 200));
+        if (!p) return json(res, 400, { ok: false, error: "invalid query: path" });
+        try {
+          const data = await readPreviewFileLines(p, offset, limit);
+          if (!data) return json(res, 404, { ok: false, error: "not a readable text file" });
+          return json(res, 200, { ok: true, data });
+        } catch (err) {
+          return json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : "read lines failed",
+          });
+        }
+      }
+
+      // POST /preview/move — 移动文件或目录到目标目录下（保持原名）。不允许移动到自身内部。
+      if (method === "POST" && segments[0] === "preview" && segments[1] === "move" && segments.length === 2) {
+        const body = await readJsonBody(req).catch(() => null);
+        const b = (body ?? {}) as { path?: unknown; dir?: unknown };
+        const p = typeof b.path === "string" ? b.path : "";
+        const targetDir = typeof b.dir === "string" ? b.dir : "";
+        if (!p || !targetDir || p.includes("..") || targetDir.includes("..")) {
+          return json(res, 400, { ok: false, error: "invalid request: path and dir required" });
+        }
+        try {
+          const src = p;
+          const name = basename(src);
+          const dest = join(targetDir, name);
+          if (src === dest) return json(res, 400, { ok: false, error: "already in target" });
+          // 拒绝把目录移动到自身（或其子目录）内部：targetDir 是 src 的后代路径
+          const rel = relative(src, targetDir);
+          if (rel !== "" && !rel.startsWith("..") && !isAbsolute(rel)) {
+            return json(res, 400, { ok: false, error: "cannot move into itself" });
+          }
+          await rename(src, dest);
+          return json(res, 200, { ok: true, data: { success: true, path: dest } });
+        } catch (err) {
+          return json(res, 500, {
+            ok: false,
+            error: err instanceof Error ? err.message : "move failed",
+          });
+        }
+      }
+
+      // POST /preview/copy — 复制文件或目录到目标目录下（保持原名）。目录递归复制。
+      if (method === "POST" && segments[0] === "preview" && segments[1] === "copy" && segments.length === 2) {
+        const body = await readJsonBody(req).catch(() => null);
+        const b = (body ?? {}) as { path?: unknown; dir?: unknown };
+        const p = typeof b.path === "string" ? b.path : "";
+        const targetDir = typeof b.dir === "string" ? b.dir : "";
+        if (!p || !targetDir || p.includes("..") || targetDir.includes("..")) {
+          return json(res, 400, { ok: false, error: "invalid request: path and dir required" });
+        }
+        try {
+          const dest = join(targetDir, basename(p));
+          if (dest === p) return json(res, 400, { ok: false, error: "already in target" });
+          await cp(p, dest, { recursive: true, errorOnExist: false });
+          return json(res, 200, { ok: true, data: { success: true, path: dest } });
+        } catch (err) {
+          return json(res, 500, {
+            ok: false,
+            error: err instanceof Error ? err.message : "copy failed",
           });
         }
       }

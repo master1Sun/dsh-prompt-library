@@ -45,6 +45,7 @@ import { LexiconManagerModal } from "./LexiconManagerModal.js";
 import { DbPreviewPanel } from "./DbPreviewPanel.js";
 import { TagManagePanel } from "./TagManagePanel.js";
 import { RecycleManagePanel } from "./RecycleManagePanel.js";
+import { PanelHeader } from "../common/PanelHeader.js";
 import {
   HOVER_SEQUENCE,
   SEQUENCES,
@@ -1629,9 +1630,19 @@ export function PromptAssistant(props: Props): ReactNode {
               case "dbPreview":
                 return <DbPreviewPanel t={T} />;
               case "tags":
-                return <TagManagePanel t={T} />;
+                return (
+                  <>
+                    <PanelHeader title={T("pl.moduleTags")} desc={T("pl.moduleTagsDesc")} />
+                    <TagManagePanel t={T} />
+                  </>
+                );
               case "trash":
-                return <RecycleManagePanel t={T} />;
+                return (
+                  <>
+                    <PanelHeader title={T("pl.moduleTrash")} desc={T("pl.moduleTrashDesc")} />
+                    <RecycleManagePanel t={T} />
+                  </>
+                );
               default:
                 return null;
             }

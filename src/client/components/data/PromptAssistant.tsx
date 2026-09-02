@@ -21,6 +21,10 @@ import type { PluginSettings } from "../../../types.js";
 import { DEFAULT_SETTINGS } from "../../../types.js";
 import {
   getDeepSeekBalance,
+  getMetaValue,
+  getTodayMood,
+  setMetaValue,
+  setMood,
   subscribeAssistant,
   type ActivityPhase,
   type ActivitySnapshot,
@@ -117,42 +121,14 @@ const FLOAT_MARGIN = 8;
 /** 词库助手位置在 localStorage 中的存储键。 */
 const POS_KEY = "pl:assistant-pos";
 
-// ── 心情系统：按「本地日期」记录当天会话成功/失败次数 ─────────────────────
-/** 当天心情记录的 localStorage 键前缀（后接 YYYY-MM-DD）。 */
-const MOOD_KEY_PREFIX = "pl:mood:";
-
-/** 当天日期键（本地时区，跨天自动换键归零）。 */
+// ── 心情系统：按「本地日期」记录当天会话成功/失败次数（存库 pl_daily_mood）──
+/**
+ * 当天日期键（本地时区，跨天自动换键归零）。
+ * 既用于心情按天聚合（存库），也用于「每日心情气泡」的每日只播一次标记。
+ */
 function moodDayKey(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-/** 读取当天心情记录；解析失败返回空记录。 */
-function loadMood(): { happy: number; sad: number } {
-  try {
-    const raw = localStorage.getItem(MOOD_KEY_PREFIX + moodDayKey());
-    if (!raw) return { happy: 0, sad: 0 };
-    const p = JSON.parse(raw) as Partial<{ happy: number; sad: number }>;
-    return { happy: Math.max(0, p.happy ?? 0), sad: Math.max(0, p.sad ?? 0) };
-  } catch {
-    return { happy: 0, sad: 0 };
-  }
-}
-
-/** 写回当天心情记录，并顺手清理更早日期键，避免 localStorage 无限累积。 */
-function saveMood(m: { happy: number; sad: number }): void {
-  try {
-    const key = MOOD_KEY_PREFIX + moodDayKey();
-    localStorage.setItem(key, JSON.stringify(m));
-    // 只保留当天记录，移除历史日期键
-    const allKeys = localStorage.keys?.() ?? [];
-    for (const k of allKeys) {
-      if (k.startsWith(MOOD_KEY_PREFIX) && k !== key)
-        localStorage.removeItem(k);
-    }
-  } catch {
-    /* 忽略存储失败 */
-  }
 }
 
 interface Props {
@@ -396,9 +372,10 @@ export function PromptAssistant(props: Props): ReactNode {
 
   // ── 心情系统：按天记录会话成功/失败，驱动助手表情、动作与气泡 ──
   // 每次轮询到的阶段从其他阶段跳转到 done/failed 时计一次成功/失败（首次挂载不计）。
-  const [moodCounts, setMoodCounts] = useState<{ happy: number; sad: number }>(
-    loadMood,
-  );
+  // 计数落库（pl_daily_mood），替换原先 localStorage 的 pl:mood: 键。
+  const [moodCounts, setMoodCounts] = useState<{ happy: number; sad: number }>({ happy: 0, sad: 0 });
+  // 心情智能提醒：记录「最近一次已提醒的心情快照」，用于判断是否发生了有意义的变化
+  const moodNoticeRef = useRef<{ kind: string; happy: number; sad: number; ts: number } | null>(null);
   const prevPhaseRef = useRef<ActivityPhase | null>(null);
   useEffect(() => {
     const phase = activity.phase;
@@ -409,13 +386,13 @@ export function PromptAssistant(props: Props): ReactNode {
     if (phase === "done" && prev !== "done") {
       setMoodCounts((m) => {
         const next = { ...m, happy: m.happy + 1 };
-        saveMood(next);
+        void setMood({ happy: next.happy, sad: next.sad });
         return next;
       });
     } else if (phase === "failed" && prev !== "failed") {
       setMoodCounts((m) => {
         const next = { ...m, sad: m.sad + 1 };
-        saveMood(next);
+        void setMood({ happy: next.happy, sad: next.sad });
         return next;
       });
     }
@@ -430,18 +407,20 @@ export function PromptAssistant(props: Props): ReactNode {
         : "neutral";
 
   // ── 游戏化：等级徽章 / 成就解锁播报 / 时间彩蛋 / 点击互动 ──
-  // toast 为临时气泡（成就 / 互动），优先级高于阶段气泡与简介轮播
+  // toast 为临时气泡（成就 / 互动 / 每日心情），优先级高于阶段气泡与简介轮播
   interface Toast {
-    kind: "achievement" | "tap";
+    kind: "achievement" | "tap" | "mood";
     title?: string;
     text: string;
   }
   const [status, setStatus] = useState<AssistantStatus | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
-  // 已播报过的成就 id（localStorage 记忆，避免重复弹）
+  // 已播报过的成就 id 记忆，避免重复弹。以 localStorage 为快速缓存，权威数据迁入库 meta 表
+  // （pl:achievements-announced），跨端只播一次；下方挂载 effect 会从库再合并一次。
+  const ACHIEVEMENTS_ANNOUNCED_KEY = "pl:achievements-announced";
   const [announced] = useState<Set<string>>(() => {
     try {
-      const raw = localStorage.getItem("pl:achievements-announced");
+      const raw = localStorage.getItem(ACHIEVEMENTS_ANNOUNCED_KEY);
       return new Set(raw ? (JSON.parse(raw) as string[]) : []);
     } catch {
       return new Set();
@@ -462,7 +441,7 @@ export function PromptAssistant(props: Props): ReactNode {
       window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(
       () => setToast(null),
-      t.kind === "achievement" ? 4000 : 2200,
+      t.kind === "achievement" || t.kind === "mood" ? 4000 : 2200,
     );
   }, []);
 
@@ -470,6 +449,102 @@ export function PromptAssistant(props: Props): ReactNode {
   // 避免 effect 依赖 T 导致每次 render 重跑、误杀 toast 计时器
   const tRef = useRef(T);
   tRef.current = T;
+
+  // ── 心情智能提醒：不固定「每天一次」，而是按「心情变化」触发。
+  // 当天有会话记录，且相对上一次提醒发生了有意义变化（情绪 kind 翻转：开心↔低落↔平常，或从无到有）
+  // 才补一句话；为避免高频连发（挂载读库 + 连续会话），两次提醒间设 60s 冷却，
+  // 最近一次提醒快照存库 meta（pl:moodNotice:<dayKey>），跨端只在同日共享、跨天自然重置。
+  const MOOD_META_PREFIX = "pl:moodNotice:";
+  const moodCooldownMs = 60_000;
+  const maybeNotifyMood = useCallback(
+    (happy: number, sad: number) => {
+      if (happy + sad <= 0) return; // 今天尚无会话记录，不打扰
+      if (moodNoticeRef.current && Date.now() - moodNoticeRef.current.ts < moodCooldownMs) return;
+      const kind: "happy" | "sad" | "neutral" =
+        happy > sad ? "happy" : sad > happy ? "sad" : "neutral";
+      const key = MOOD_META_PREFIX + moodDayKey();
+      void getMetaValue(key).then((raw) => {
+        // 冷却期内不弹，兼防异步竞态下的重复进入
+        if (moodNoticeRef.current && Date.now() - moodNoticeRef.current.ts < moodCooldownMs) return;
+        const prior = raw
+          ? (JSON.parse(raw) as { kind?: string; happy?: number; sad?: number })
+          : null;
+        const changed = !prior || prior.kind !== kind;
+        moodNoticeRef.current = { kind, happy, sad, ts: Date.now() };
+        if (!changed) return; // 情绪未翻转（仍在同一种心态），不重复唠叨
+        void setMetaValue(key, JSON.stringify({ kind, happy, sad }));
+        showToast({
+          kind: "mood",
+          title: tRef.current("pl.mood.title"),
+          text:
+            happy > sad
+              ? tRef.current("pl.mood.bubble.happy", { happy })
+              : sad > happy
+                ? tRef.current("pl.mood.bubble.sad", { sad })
+                : tRef.current("pl.mood.bubble.neutral"),
+        });
+      });
+    },
+    [showToast],
+  );
+
+  // 心情计数发生变化时评估是否智能提醒（含挂载读库后从无到有的首次总结）。
+  // 用 lastMoodCountsRef 区分「实质变化」，避免初始 render 的等值误触发。
+  const lastMoodCountsRef = useRef<{ happy: number; sad: number }>({ happy: 0, sad: 0 });
+  useEffect(() => {
+    const prev = lastMoodCountsRef.current;
+    lastMoodCountsRef.current = moodCounts;
+    if (prev.happy === moodCounts.happy && prev.sad === moodCounts.sad) return;
+    maybeNotifyMood(moodCounts.happy, moodCounts.sad);
+  }, [moodCounts, maybeNotifyMood]);
+
+  // 成就已播报记忆：同时写入 localStorage（快速回退）与库 meta（权威），跨端共享
+  const persistAnnounced = useCallback(() => {
+    const arr = JSON.stringify([...announcedRef.current]);
+    try {
+      localStorage.setItem(ACHIEVEMENTS_ANNOUNCED_KEY, arr);
+    } catch {
+      /* 忽略本地存储失败 */
+    }
+    void setMetaValue(ACHIEVEMENTS_ANNOUNCED_KEY, arr);
+  }, []);
+
+  // 挂载时从库读取今日心情并还原表情；顺带合并 meta 中的成就已播报记忆（迁库回读）。
+  useEffect(() => {
+    let cancelled = false;
+    getTodayMood()
+      .then((m) => {
+        if (cancelled) return;
+        setMoodCounts({ happy: m.happy, sad: m.sad }); // 变化会触发上方心情智能提醒
+      })
+      .catch(() => {
+        /* 读取失败保持全 0 */
+      });
+    void getMetaValue(ACHIEVEMENTS_ANNOUNCED_KEY)
+      .then((raw) => {
+        if (cancelled || !raw) return;
+        try {
+          const ids = JSON.parse(raw) as string[];
+          if (!Array.isArray(ids) || ids.length === 0) return;
+          let changed = false;
+          for (const id of ids) {
+            if (!announcedRef.current.has(id)) {
+              announcedRef.current.add(id);
+              changed = true;
+            }
+          }
+          if (changed) {
+            localStorage.setItem(ACHIEVEMENTS_ANNOUNCED_KEY, JSON.stringify([...announcedRef.current]));
+          }
+        } catch {
+          /* 忽略非法 JSON */
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // toast 计时器仅在组件卸载时清理；运行期由 showToast 自行覆盖管理
   useEffect(
@@ -525,14 +600,7 @@ export function PromptAssistant(props: Props): ReactNode {
             statusInitedRef.current = true;
             for (const a of s.achievements)
               if (a.achieved) announcedRef.current.add(a.id);
-            try {
-              localStorage.setItem(
-                "pl:achievements-announced",
-                JSON.stringify([...announcedRef.current]),
-              );
-            } catch {
-              /* 忽略存储失败 */
-            }
+            persistAnnounced();
             return;
           }
           // 新解锁的成就：只播报第一条，避免多条连发；
@@ -542,14 +610,7 @@ export function PromptAssistant(props: Props): ReactNode {
           );
           if (fresh) {
             announcedRef.current.add(fresh.id);
-            try {
-              localStorage.setItem(
-                "pl:achievements-announced",
-                JSON.stringify([...announcedRef.current]),
-              );
-            } catch {
-              /* 忽略存储失败 */
-            }
+            persistAnnounced();
             const levelAnnouncement =
               settingsRef.current?.levelAnnouncementEnabled ??
               DEFAULT_SETTINGS.levelAnnouncementEnabled;

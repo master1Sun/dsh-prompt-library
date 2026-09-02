@@ -46,15 +46,20 @@ import {
   deleteTrash,
   emptyTrash,
   exportPrompts,
+  getDailyMood,
+  getMetaValue,
   getPersona,
   getSettings,
   importPrompts,
   insertDbRow,
   listDbTables,
+  listPromptVersions,
   listPrompts,
   listStatsSnapshots,
   listTags,
   queryDb,
+  setDailyMood,
+  setMetaValue,
   updateDbRow,
   deleteDbRow,
   verifyDbDevPassword,
@@ -780,6 +785,47 @@ export function makePromptRoutes(): WebRoute[] {
         if (!updated) return json(res, 404, { ok: false, error: "not found" });
         emitStatusChange(); // 使用提示词会改变积分/成就
         return json(res, 200, { ok: true, data: updated });
+      }
+
+      // GET /prompts/:id/versions — 查询提示词版本历史（创建/更新/精炼快照）
+      if (method === "GET" && segments[0] === "prompts" && segments[2] === "versions" && segments.length === 3) {
+        const list = listPromptVersions(segments[1] ?? "");
+        return json(res, 200, { ok: true, data: list });
+      }
+
+      // GET /mood — 读取今日心情记录
+      if (method === "GET" && segments[0] === "mood" && segments.length === 1) {
+        return json(res, 200, { ok: true, data: getDailyMood() });
+      }
+
+      // POST /mood — 覆写某日（缺省今天）的心情计数（body: { dayKey?, happy?, sad? }）
+      if (method === "POST" && segments[0] === "mood" && segments.length === 1) {
+        const body = await readJsonBody(req);
+        const obj = (typeof body === "object" && body !== null ? body : {}) as {
+          dayKey?: unknown;
+          happy?: unknown;
+          sad?: unknown;
+        };
+        const happy = typeof obj.happy === "number" ? Math.max(0, obj.happy) : 0;
+        const sad = typeof obj.sad === "number" ? Math.max(0, obj.sad) : 0;
+        const dayKey = typeof obj.dayKey === "string" ? obj.dayKey : undefined;
+        const data = setDailyMood({ happy, sad }, dayKey);
+        return json(res, 200, { ok: true, data });
+      }
+
+      // GET /meta/:key — 读取插件级元数据
+      if (method === "GET" && segments[0] === "meta" && segments.length === 2) {
+        const value = getMetaValue(segments[1] ?? "");
+        return json(res, 200, { ok: true, data: { key: segments[1], value } });
+      }
+
+      // PUT /meta/:key — 覆写插件级元数据（body: { value }）
+      if (method === "PUT" && segments[0] === "meta" && segments.length === 2) {
+        const body = await readJsonBody(req);
+        const obj = (typeof body === "object" && body !== null ? body : {}) as { value?: unknown };
+        const value = typeof obj.value === "string" ? obj.value : "";
+        setMetaValue(segments[1] ?? "", value);
+        return json(res, 200, { ok: true, data: { key: segments[1], value } });
       }
 
       // GET /export — 导出全部提示词（备份内容，含 schema 版本）

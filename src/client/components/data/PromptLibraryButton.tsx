@@ -31,6 +31,7 @@ import {
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { PL_BUTTON_CSS, plBtn } from "../../utils/button-style.js";
 import { AssistantHost } from "./AssistantHost.js";
+import { VersionUpdateNotice } from "../common/VersionUpdateNotice.js";
 import { SelectionAddPrompt } from "./SelectionAddPrompt.js";
 import { Pagination } from "../common/Pagination.js";
 import { TagInput } from "../common/TagInput.js";
@@ -1590,6 +1591,8 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
       <SelectionAddPrompt t={t} enabled={settings.selectionAddEnabled} inputActions={inputActions} draft={draft} />
       {/* 词库助手（独立浮动词库助手）：自管理位置/冒泡/简介，随 composer 按钮常驻挂载 */}
       <AssistantHost t={t} />
+      {/* 版本不一致重启提示：更新未重启时提醒用户重启服务加载最新版本 */}
+      <VersionUpdateNotice t={t} />
       {/* 模板变量填充弹窗：插入含 {{变量}} 的提示词前弹出 */}
       <TemplateFillModal
         open={template !== null}

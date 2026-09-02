@@ -51,6 +51,8 @@ const TABLE_DESC_KEYS: Partial<Record<string, PLKey>> = {
   pl_points_log: "pl.db.tblDesc.pointsLog",
   pl_achievement_progress: "pl.db.tblDesc.achievementProgress",
   stats_history: "pl.db.tblDesc.statsHistory",
+  pl_daily_mood: "pl.db.tblDesc.dailyMood",
+  pl_prompt_versions: "pl.db.tblDesc.promptVersions",
 };
 
 /** SQL 语法快捷提示的关键字集合。 */

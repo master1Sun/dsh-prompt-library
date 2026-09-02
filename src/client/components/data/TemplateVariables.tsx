@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 模板变量占位符支持。
  *
  * 提示词正文可包含 `{{变量名}}` 形式的占位符。插入到输入框前弹出填充窗口，
@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties, type Reac
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { plBtn } from "../../utils/button-style.js";
 import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../../utils/dialog-style.js";
+import { getMetaValue, setMetaValue } from "../../utils/api.js";
 import { type PLT } from "../../utils/i18n.js";
 
 const MONO =
@@ -154,10 +155,10 @@ function renderPreview(
   return nodes;
 }
 
-/** 变量填充记忆的本地存储键。 */
+/** 变量填充记忆的本地存储键（仅作快速缓存，权威数据迁入库 meta 表）。 */
 const VAR_MEMORY_KEY = "pl:template-var-memory";
 
-/** 读取历史变量填充记忆（按变量名存值，失败时返回空对象）。 */
+/** 同步读取历史变量填充记忆（失败时返回空对象）。 */
 function loadVarMemory(): Record<string, string> {
   try {
     const raw = localStorage.getItem(VAR_MEMORY_KEY);
@@ -169,17 +170,30 @@ function loadVarMemory(): Record<string, string> {
   }
 }
 
-/** 只取当前弹窗变量列表对应的历史记忆（未记住的变量缺省为空）。 */
-function pickVarMemory(variables: string[]): Record<string, string> {
-  const mem = loadVarMemory();
-  const out: Record<string, string> = {};
-  for (const name of variables) {
-    if (Object.prototype.hasOwnProperty.call(mem, name)) out[name] = mem[name];
+/**
+ * 异步读取历史填充记忆：以库 meta 为权威（跨端共享），localStorage 兜底。
+ * meta 为空时若本地有记忆，则回填一份到 meta，完成一次性迁移。
+ */
+async function loadVarMemoryAsync(): Promise<Record<string, string>> {
+  const local = loadVarMemory();
+  try {
+    const raw = await getMetaValue(VAR_MEMORY_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as unknown;
+      const meta = (typeof parsed === "object" && parsed !== null ? parsed : {}) as Record<string, string>;
+      return { ...local, ...meta }; // 库优先，本地补缺
+    }
+    if (Object.keys(local).length > 0) {
+      void setMetaValue(VAR_MEMORY_KEY, JSON.stringify(local));
+    }
+    return local;
+  } catch {
+    return local;
   }
-  return out;
 }
 
-/** 记录本次填充的变量值，供下次同名变量预填（忽略空值，单值超长不保留）。 */
+/** 记录本次填充的变量值，供下次同名变量预填（忽略空值，单值超长不保留）。
+ * 同步更新本地缓存，并异步回写库 meta（跨端共享）。 */
 function rememberVarValues(values: Record<string, string>): void {
   try {
     const prior = loadVarMemory();
@@ -190,6 +204,7 @@ function rememberVarValues(values: Record<string, string>): void {
       if (prior[k].length > 2000) delete prior[k];
     }
     localStorage.setItem(VAR_MEMORY_KEY, JSON.stringify(prior));
+    void setMetaValue(VAR_MEMORY_KEY, JSON.stringify(prior));
   } catch {
     /* 忽略，记忆失败不影响填充 */
   }
@@ -262,11 +277,23 @@ export function TemplateFillModal({
   // 当前获得焦点的变量名（用于输入框聚焦时以该变量色描边）
   const [focusName, setFocusName] = useState<string | null>(null);
   // 每次打开时重置表单：先按历史记忆预填同名变量，再叠加调用方传入的预填值（如选中文本）
+  // 历史记忆以库 meta 为权威（异步读取），本地缓存兜底
   useEffect(() => {
+    let cancelled = false;
     if (open) {
-      setValues({ ...pickVarMemory(variables), ...(initialValues ?? {}) });
       setWarnMsg(null); // 重新打开时清除上次的未填提示
+      void loadVarMemoryAsync().then((mem) => {
+        if (cancelled) return;
+        const init: Record<string, string> = {};
+        for (const name of variables) {
+          if (Object.prototype.hasOwnProperty.call(mem, name)) init[name] = mem[name];
+        }
+        setValues({ ...init, ...(initialValues ?? {}) });
+      });
     }
+    return () => {
+      cancelled = true;
+    };
   }, [open, variables, initialValues]);
   // 按变量在列表中的位置分配颜色：输入行标签、输入框描边、预览高亮使用同一变量色
   const colorOf = useCallback(

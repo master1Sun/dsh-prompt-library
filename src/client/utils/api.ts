@@ -1304,3 +1304,64 @@ export function previewRootMtime(
 export function checkPromptLibraryInstalled(): Promise<{ installed: boolean }> {
   return send<{ installed: boolean }>("GET", "/api/prompt-library/plugins/prompt-library");
 }
+
+// ── 每日心情 ────────────────────────────────────────────────────────────────
+
+/** 每日心情记录（按本地日期计当天会话成功/失败次数）。 */
+export interface DailyMood {
+  dayKey: string;
+  happy: number;
+  sad: number;
+}
+
+/** 读取今日心情记录。 */
+export function getTodayMood(): Promise<DailyMood> {
+  return send<DailyMood>("GET", "/api/prompt-library/mood");
+}
+
+/** 覆写某日（缺省今天）的心情计数，返回最新记录。 */
+export function setMood(
+  counts: { happy?: number; sad?: number; dayKey?: string },
+): Promise<DailyMood> {
+  return send<DailyMood>("POST", "/api/prompt-library/mood", counts);
+}
+
+// ── 插件级元数据（localStorage 业务标记落库用）───────────────────────────
+
+/** 读取 meta 表值（key 不存在返回空串）。 */
+export function getMetaValue(key: string): Promise<string> {
+  return send<{ key: string; value: string }>("GET", `/api/prompt-library/meta/${encodeURIComponent(key)}`).then(
+    (d) => d.value,
+  );
+}
+
+/** 覆写 meta 表值。 */
+export function setMetaValue(key: string, value: string): Promise<string> {
+  return send<{ key: string; value: string }>(
+    "PUT",
+    `/api/prompt-library/meta/${encodeURIComponent(key)}`,
+    { value },
+  ).then((d) => d.value);
+}
+
+// ── 提示词版本历史 ────────────────────────────────────────────────────────
+
+/** 提示词的一个版本快照。 */
+export interface PromptVersion {
+  version: number;
+  title: string;
+  body: string;
+  tags: string[];
+  summary?: string;
+  sourceBody?: string;
+  reason: string;
+  snapshotAt: number;
+}
+
+/** 查询某提示词的版本历史（旧 → 新）。 */
+export function listPromptVersions(promptId: string): Promise<PromptVersion[]> {
+  return send<PromptVersion[]>(
+    "GET",
+    `/api/prompt-library/prompts/${encodeURIComponent(promptId)}/versions`,
+  );
+}

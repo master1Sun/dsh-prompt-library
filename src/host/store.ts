@@ -234,6 +234,32 @@ function getDb(): DatabaseSync {
       PRIMARY KEY (date, lang)
     );
   `);
+  // 每日心情表：按「本地日期」记录当天会话成功/失败次数，驱动助手表情与气泡。
+  // 取代原先 localStorage 的 pl:mood:* 键，支持跨端持久化与按天聚合。
+  next.exec(`
+    CREATE TABLE IF NOT EXISTS pl_daily_mood (
+      dayKey    TEXT PRIMARY KEY,
+      happy     INTEGER NOT NULL DEFAULT 0,
+      sad       INTEGER NOT NULL DEFAULT 0,
+      updatedAt INTEGER NOT NULL
+    );
+  `);
+  // 提示词版本历史表：创建/更新/精炼时写一份快照，支持回溯任意历史状态。
+  next.exec(`
+    CREATE TABLE IF NOT EXISTS pl_prompt_versions (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      promptId   TEXT NOT NULL,
+      version    INTEGER NOT NULL,
+      title      TEXT NOT NULL,
+      body       TEXT NOT NULL,
+      tags       TEXT,
+      summary    TEXT,
+      sourceBody TEXT,
+      reason     TEXT NOT NULL DEFAULT 'update',
+      snapshotAt INTEGER NOT NULL
+    );
+  `);
+  next.exec("CREATE INDEX IF NOT EXISTS idx_pl_prompt_versions_prompt ON pl_prompt_versions (promptId, version)");
   // 一次性把提示词中已有的标签同步进标签表（幂等）。
   syncTagsFromPrompts(next);
   // 首次使用（词库为空）时写入一条默认提示词与标签，作为上手引导。
@@ -891,6 +917,8 @@ export function createPrompt(input: {
       );
     // 用用户配置的真实上限做后台淘汰（getSettingsSync 只回默认值）
     void getSettings().then((s) => enforceMaxCount(s.maxPromptCount, s.autoLearnTag));
+    // 版本历史：创建时快照 v1
+    snapshotPromptVersion(prompt, "create");
     // 等级积分：新增收藏 +1
     void addPoints("collect");
     return Promise.resolve(prompt);
@@ -961,6 +989,15 @@ export function updatePrompt(
         next.lastUsedAt,
         id,
       );
+    // 版本历史：内容有实质变化时快照。首次 AI 完善记为 refine，其余记为 update。
+    const contentChanged =
+      next.title !== current.title ||
+      next.body !== current.body ||
+      next.summary !== current.summary ||
+      next.sourceBody !== current.sourceBody;
+    if (contentChanged) {
+      snapshotPromptVersion(next, aiRefined && !current.aiRefined ? "refine" : "update");
+    }
     // 等级积分：首次 AI 完善时 +3（重复完善不加，只记一次）
     if (aiRefined && !current.aiRefined) void addPoints("ai");
     return Promise.resolve(next);
@@ -3215,4 +3252,122 @@ export function queryDb(rawSql: string): DbQueryResult {
   // PRAGMA 等没有结果集的语句以空数组呈现
   const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
   return { rows, columns, truncated };
+}
+
+// ── 每日心情 ────────────────────────────────────────────────────────────────
+
+/** 当日心情键（本地时区 YYYY-MM-DD，跨天自动归零）。 */
+function dailyMoodKey(d = new Date()): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** 读取指定日期（缺省今天）的心情记录；无记录返回全 0。 */
+export function getDailyMood(dayKey?: string): { dayKey: string; happy: number; sad: number } {
+  try {
+    const key = dayKey ?? dailyMoodKey();
+    const row = getDb()
+      .prepare("SELECT happy, sad FROM pl_daily_mood WHERE dayKey = ?")
+      .get(key) as { happy: number; sad: number } | undefined;
+    return { dayKey: key, happy: row?.happy ?? 0, sad: row?.sad ?? 0 };
+  } catch {
+    return { dayKey: dayKey ?? dailyMoodKey(), happy: 0, sad: 0 };
+  }
+}
+
+/**
+ * 整体覆写某日（缺省今天）的心情计数（幂等，便于前端增量回写）。
+ * 成功/失败次数均取非负，避免异常输入拉垮表情判定。
+ */
+export function setDailyMood(
+  counts: { happy: number; sad: number },
+  dayKey?: string,
+): { dayKey: string; happy: number; sad: number } {
+  const key = dayKey ?? dailyMoodKey();
+  const happy = Math.max(0, counts.happy);
+  const sad = Math.max(0, counts.sad);
+  getDb()
+    .prepare(
+      `INSERT INTO pl_daily_mood (dayKey, happy, sad, updatedAt) VALUES (?, ?, ?, ?)
+       ON CONFLICT(dayKey) DO UPDATE SET happy = excluded.happy, sad = excluded.sad, updatedAt = excluded.updatedAt`,
+    )
+    .run(key, happy, sad, Date.now());
+  return { dayKey: key, happy, sad };
+}
+
+// ── 提示词版本历史 ──────────────────────────────────────────────────────────
+
+/**
+ * 为指定提示词写一份版本快照（创建/更新/精炼时调用）。
+ * version 从 1 递增，按 (promptId, version) 记录完整历史，快照失败不阻断主流程。
+ */
+export function snapshotPromptVersion(
+  prompt: { id: string; title: string; body: string; tags?: string[]; summary?: string; sourceBody?: string },
+  reason: "create" | "update" | "refine",
+): void {
+  try {
+    const cur = getDb();
+    const last = cur
+      .prepare("SELECT MAX(version) AS v FROM pl_prompt_versions WHERE promptId = ?")
+      .get(prompt.id) as { v: number };
+    cur
+      .prepare(
+        `INSERT INTO pl_prompt_versions
+           (promptId, version, title, body, tags, summary, sourceBody, reason, snapshotAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        prompt.id,
+        (last?.v ?? 0) + 1,
+        prompt.title,
+        prompt.body,
+        tagsToJson(prompt.tags ?? []),
+        prompt.summary ?? null,
+        prompt.sourceBody ?? null,
+        reason,
+        Date.now(),
+      );
+  } catch {
+    /* 快照失败静默，不影响提示词主流程 */
+  }
+}
+
+/** 列出某提示词的版本历史（旧 → 新）；无记录返回空数组。 */
+export function listPromptVersions(promptId: string): Array<{
+  version: number;
+  title: string;
+  body: string;
+  tags: string[];
+  summary?: string;
+  sourceBody?: string;
+  reason: string;
+  snapshotAt: number;
+}> {
+  try {
+    const rows = getDb()
+      .prepare(
+        "SELECT version, title, body, tags, summary, sourceBody, reason, snapshotAt FROM pl_prompt_versions WHERE promptId = ? ORDER BY version ASC",
+      )
+      .all(promptId) as unknown as Array<{
+      version: number;
+      title: string;
+      body: string;
+      tags: string | null;
+      summary: string | null;
+      sourceBody: string | null;
+      reason: string;
+      snapshotAt: number;
+    }>;
+    return rows.map((r) => ({
+      version: r.version,
+      title: r.title,
+      body: r.body,
+      tags: r.tags ? (JSON.parse(r.tags) as string[]) : [],
+      summary: r.summary ?? undefined,
+      sourceBody: r.sourceBody ?? undefined,
+      reason: r.reason,
+      snapshotAt: r.snapshotAt,
+    }));
+  } catch {
+    return [];
+  }
 }

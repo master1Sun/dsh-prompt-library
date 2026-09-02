@@ -169,78 +169,78 @@ export function apply(ctx: ClientCtx): void {
 
   // 会话监控 / 会话预览：作为 conversation.view 插槽的两个视图标签。
   // 显隐由设置「显示与交互」里的监控/预览开关控制；关闭时撤回注册（标签隐藏），开启时重新注入。
-  ctx.effect(
-    () => {
-      let monitorDispose: (() => void) | null = null;
-      let previewDispose: (() => void) | null = null;
+  // ctx.effect(
+  //   () => {
+  //     let monitorDispose: (() => void) | null = null;
+  //     let previewDispose: (() => void) | null = null;
 
-      const syncViews = async (): Promise<void> => {
-        let enabled: { monitor: boolean; preview: boolean } = { monitor: true, preview: true };
-        try {
-          const s = await getSettings();
-          enabled = { monitor: s.monitorEnabled !== false, preview: s.previewEnabled !== false };
-        } catch {
-          /* 读取失败时按默认开启处理 */
-        }
-        try {
-          if (enabled.monitor && !monitorDispose) {
-            monitorDispose = ctx.slots.inject(
-              "conversation.view",
-              () =>
-                ctx.slots.register(
-                  {
-                    name: "conversation.view",
-                    id: "prompt-library-monitor",
-                    order: 20,
-                    locale: NS,
-                    label: () => t("pl.view.tokenMonitor"),
-                  },
-                  TokenMonitorView as (props: unknown) => ReactNode,
-                ),
-            ) as unknown as () => void;
-          } else if (!enabled.monitor && monitorDispose) {
-            monitorDispose();
-            monitorDispose = null;
-          }
-          if (enabled.preview && !previewDispose) {
-            previewDispose = ctx.slots.inject(
-              "conversation.view",
-              () =>
-                ctx.slots.register(
-                  {
-                    name: "conversation.view",
-                    id: "prompt-library-preview",
-                    order: 21,
-                    locale: NS,
-                    label: () => t("pl.view.preview"),
-                  },
-                  PreviewView as (props: unknown) => ReactNode,
-                ),
-            ) as unknown as () => void;
-          } else if (!enabled.preview && previewDispose) {
-            previewDispose();
-            previewDispose = null;
-          }
-        } catch {
-          /* 单次同步失败可忽略，下次设置变更时重试 */
-        }
-      };
+  //     const syncViews = async (): Promise<void> => {
+  //       let enabled: { monitor: boolean; preview: boolean } = { monitor: true, preview: true };
+  //       try {
+  //         const s = await getSettings();
+  //         enabled = { monitor: s.monitorEnabled !== false, preview: s.previewEnabled !== false };
+  //       } catch {
+  //         /* 读取失败时按默认开启处理 */
+  //       }
+  //       try {
+  //         if (enabled.monitor && !monitorDispose) {
+  //           monitorDispose = ctx.slots.inject(
+  //             "conversation.view",
+  //             () =>
+  //               ctx.slots.register(
+  //                 {
+  //                   name: "conversation.view",
+  //                   id: "prompt-library-monitor",
+  //                   order: 20,
+  //                   locale: NS,
+  //                   label: () => t("pl.view.tokenMonitor"),
+  //                 },
+  //                 TokenMonitorView as (props: unknown) => ReactNode,
+  //               ),
+  //           ) as unknown as () => void;
+  //         } else if (!enabled.monitor && monitorDispose) {
+  //           monitorDispose();
+  //           monitorDispose = null;
+  //         }
+  //         if (enabled.preview && !previewDispose) {
+  //           previewDispose = ctx.slots.inject(
+  //             "conversation.view",
+  //             () =>
+  //               ctx.slots.register(
+  //                 {
+  //                   name: "conversation.view",
+  //                   id: "prompt-library-preview",
+  //                   order: 21,
+  //                   locale: NS,
+  //                   label: () => t("pl.view.preview"),
+  //                 },
+  //                 PreviewView as (props: unknown) => ReactNode,
+  //               ),
+  //           ) as unknown as () => void;
+  //         } else if (!enabled.preview && previewDispose) {
+  //           previewDispose();
+  //           previewDispose = null;
+  //         }
+  //       } catch {
+  //         /* 单次同步失败可忽略，下次设置变更时重试 */
+  //       }
+  //     };
 
-      const onSettingsChanged = (): void => {
-        void syncViews();
-      };
-      void syncViews();
-      window.addEventListener("pl:settings-changed", onSettingsChanged);
-      return () => {
-        window.removeEventListener("pl:settings-changed", onSettingsChanged);
-        monitorDispose?.();
-        previewDispose?.();
-        monitorDispose = null;
-        previewDispose = null;
-      };
-    },
-    "prompt-library: monitor/preview view visibility",
-  );
+  //     const onSettingsChanged = (): void => {
+  //       void syncViews();
+  //     };
+  //     void syncViews();
+  //     window.addEventListener("pl:settings-changed", onSettingsChanged);
+  //     return () => {
+  //       window.removeEventListener("pl:settings-changed", onSettingsChanged);
+  //       monitorDispose?.();
+  //       previewDispose?.();
+  //       monitorDispose = null;
+  //       previewDispose = null;
+  //     };
+  //   },
+  //   "prompt-library: monitor/preview view visibility",
+  // );
 
   // 注册设置面板到 harness 原生设置界面
   ctx.slots.inject("settings.section", () =>

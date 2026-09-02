@@ -12,7 +12,14 @@
  *
  * 修改后立即生效，无需保存按钮。
  */
-import { type CSSProperties, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  type CSSProperties,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type { PluginSettings } from "../../../types.js";
 import { DEFAULT_SETTINGS } from "../../../types.js";
 import {
@@ -118,11 +125,20 @@ function ModuleCard(props: {
           }}
           aria-hidden="true"
         >
-          <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          <path
+            d="M4 6l4 4 4-4"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
         </svg>
       </div>
       {open && (
-        <div style={{ display: "flex", flexDirection: "column" }}>{children}</div>
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          {children}
+        </div>
       )}
     </section>
   );
@@ -154,7 +170,15 @@ function ToggleRow({
         padding: "8px 0",
       }}
     >
-      <span style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1, opacity: dim }}>
+      <span
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 2,
+          flex: 1,
+          opacity: dim,
+        }}
+      >
         <span style={{ fontSize: 13 }}>{label}</span>
         <span style={{ fontSize: 11, color: TONE.quiet }}>{desc}</span>
       </span>
@@ -218,7 +242,9 @@ function NumberRow({
     >
       <span style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
         <span style={{ fontSize: 13 }}>{label}</span>
-        <span style={{ fontSize: 11, color: TONE.quiet }}>{min}-{max}</span>
+        <span style={{ fontSize: 11, color: TONE.quiet }}>
+          {min}-{max}
+        </span>
       </span>
       <input
         type="number"
@@ -316,7 +342,14 @@ function TextRow({
         />
       </label>
       {desc && (
-        <div style={{ fontSize: 11, color: TONE.quiet, marginTop: 4, lineHeight: 1.5 }}>
+        <div
+          style={{
+            fontSize: 11,
+            color: TONE.quiet,
+            marginTop: 4,
+            lineHeight: 1.5,
+          }}
+        >
           {desc}
         </div>
       )}
@@ -380,7 +413,14 @@ function SelectRow({
         </select>
       </label>
       {desc && (
-        <div style={{ fontSize: 11, color: TONE.quiet, marginTop: 4, lineHeight: 1.5 }}>
+        <div
+          style={{
+            fontSize: 11,
+            color: TONE.quiet,
+            marginTop: 4,
+            lineHeight: 1.5,
+          }}
+        >
           {desc}
         </div>
       )}
@@ -409,9 +449,14 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
   const [installedVer, setInstalledVer] = useState("");
   const [checking, setChecking] = useState(false);
   const [updating, setUpdating] = useState(false);
-  const [updateMsg, setUpdateMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [updateMsg, setUpdateMsg] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
   // 手动升级实时进度（驱动进度条）与升级完成后的「需重启服务」标记
-  const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
+  const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(
+    null,
+  );
   const [needsRestart, setNeedsRestart] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 记录已保存的 DeepSeek API Key：保存成功后若发生变化，再通知小助手刷新余额
@@ -420,7 +465,9 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
   useEffect(() => {
     getSettings()
       .then((s) => setDraft(s))
-      .catch(() => { /* 使用默认值 */ })
+      .catch(() => {
+        /* 使用默认值 */
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -428,14 +475,18 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
   useEffect(() => {
     getAiSelectables()
       .then((list) => setAiSelectables(list))
-      .catch(() => { /* LLM 服务未注入或网络失败：下拉仅显示「自动选择」 */ });
+      .catch(() => {
+        /* LLM 服务未注入或网络失败：下拉仅显示「自动选择」 */
+      });
   }, []);
 
   // 拉取当前已安装版本号，供「更新提醒」标题后展示（轻量本地接口，不触发网络检查）
   useEffect(() => {
     getVersion()
       .then((v) => setInstalledVer(v.installed || ""))
-      .catch(() => { /* 忽略 */ });
+      .catch(() => {
+        /* 忽略 */
+      });
   }, []);
 
   // 保存设置到后台并通知其他组件
@@ -443,26 +494,37 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
     // 防抖：避免频繁写入
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      apiUpdateSettings(next).then(() => {
-        window.dispatchEvent(new CustomEvent("pl:settings-changed", { detail: next }));
-        // 保存成功后若 DeepSeek API Key 发生变化（含清空），通知小助手立即刷新余额，
-        // 避免残留旧 Key 查询到的余额角标
-        if (next.deepseekApiKey !== lastDeepseekKeyRef.current) {
-          lastDeepseekKeyRef.current = next.deepseekApiKey;
-          window.dispatchEvent(new CustomEvent("pl:deepseek-balance-refresh", { detail: next.deepseekApiKey }));
-        }
-      }).catch(() => {});
+      apiUpdateSettings(next)
+        .then(() => {
+          window.dispatchEvent(
+            new CustomEvent("pl:settings-changed", { detail: next }),
+          );
+          // 保存成功后若 DeepSeek API Key 发生变化（含清空），通知小助手立即刷新余额，
+          // 避免残留旧 Key 查询到的余额角标
+          if (next.deepseekApiKey !== lastDeepseekKeyRef.current) {
+            lastDeepseekKeyRef.current = next.deepseekApiKey;
+            window.dispatchEvent(
+              new CustomEvent("pl:deepseek-balance-refresh", {
+                detail: next.deepseekApiKey,
+              }),
+            );
+          }
+        })
+        .catch(() => {});
     }, 300);
   }, []);
 
   // 通用更新函数：更新本地状态 + 自动保存
-  const updateAndSave = useCallback((patch: Partial<PluginSettings>) => {
-    setDraft((prev) => {
-      const next = { ...prev, ...patch };
-      saveSettings(next);
-      return next;
-    });
-  }, [saveSettings]);
+  const updateAndSave = useCallback(
+    (patch: Partial<PluginSettings>) => {
+      setDraft((prev) => {
+        const next = { ...prev, ...patch };
+        saveSettings(next);
+        return next;
+      });
+    },
+    [saveSettings],
+  );
 
   // 手动检查更新（强制刷新 host 缓存）
   const handleCheckUpdate = useCallback(async () => {
@@ -525,7 +587,9 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
       try {
         const info = await getUpdate();
         setUpdateInfo(info);
-      } catch { /* 忽略 */ }
+      } catch {
+        /* 忽略 */
+      }
     } catch {
       setUpdateMsg({ ok: false, text: T("pl.set.updateFail") });
     } finally {
@@ -554,7 +618,14 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
 
   if (loading) {
     return (
-      <div style={{ padding: 16, color: TONE.quiet, fontFamily: MONO, fontSize: 13 }}>
+      <div
+        style={{
+          padding: 16,
+          color: TONE.quiet,
+          fontFamily: MONO,
+          fontSize: 13,
+        }}
+      >
         {T("pl.loading")}
       </div>
     );
@@ -569,8 +640,23 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
       }}
     >
       {/* 面板顶部标题（与「词库管理」一致） */}
-      <div style={{ padding: "2px 0 4px", display: "flex", flexDirection: "column", gap: 4 }}>
-        <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: 1, color: TONE.text, lineHeight: 1.2 }}>
+      <div
+        style={{
+          padding: "2px 0 4px",
+          display: "flex",
+          flexDirection: "column",
+          gap: 4,
+        }}
+      >
+        <div
+          style={{
+            fontSize: 20,
+            fontWeight: 700,
+            letterSpacing: 1,
+            color: TONE.text,
+            lineHeight: 1.2,
+          }}
+        >
           {T("pl.setSectionTitle")}
         </div>
         <span style={{ fontSize: 12, color: TONE.quiet, lineHeight: 1.5 }}>
@@ -606,18 +692,32 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
       >
         {(() => {
           // 当前选中 provider 的模型列表；未配置或未知 provider 时仅「自动选择」
-          const curSel = aiSelectables.find((s) => s.provider === draft.aiProvider);
+          const curSel = aiSelectables.find(
+            (s) => s.provider === draft.aiProvider,
+          );
           const providerOptions = [
             { value: "", label: T("pl.set.aiModelAuto") },
-            ...aiSelectables.map((s) => ({ value: s.provider, label: s.name || s.provider })),
+            ...aiSelectables.map((s) => ({
+              value: s.provider,
+              label: s.name || s.provider,
+            })),
           ];
           // 若已配置的 provider 不在下拉列表中（如列表加载前），附加一项以便回显当前值
-          if (draft.aiProvider && !aiSelectables.some((s) => s.provider === draft.aiProvider)) {
-            providerOptions.push({ value: draft.aiProvider, label: draft.aiProvider });
+          if (
+            draft.aiProvider &&
+            !aiSelectables.some((s) => s.provider === draft.aiProvider)
+          ) {
+            providerOptions.push({
+              value: draft.aiProvider,
+              label: draft.aiProvider,
+            });
           }
           const modelOptions = [
             { value: "", label: T("pl.set.aiModelAuto") },
-            ...(curSel?.models.map((m) => ({ value: m.id, label: m.name || m.id })) ?? []),
+            ...(curSel?.models.map((m) => ({
+              value: m.id,
+              label: m.name || m.id,
+            })) ?? []),
           ];
           return (
             <>
@@ -731,7 +831,13 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           onChange={(v) => updateAndSave({ showComposerButton: v })}
         />
         {/* 词库按钮纯图标 / 图标+文字 切换（仅在显示词库按钮时可配置）；缩进从属于「聊天框显示词库按钮」 */}
-        <div style={{ paddingLeft: 14, borderLeft: `1px solid ${TONE.border}`, marginLeft: 6 }}>
+        <div
+          style={{
+            paddingLeft: 14,
+            borderLeft: `1px solid ${TONE.border}`,
+            marginLeft: 6,
+          }}
+        >
           <ToggleRow
             label={T("pl.set.composerBtnIconOnly")}
             desc={T("pl.set.composerBtnIconOnlyDesc")}
@@ -747,7 +853,13 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           onChange={(v) => updateAndSave({ showAIPolishButton: v })}
         />
         {/* AI 优化按钮纯图标 / 图标+文字 切换（仅在显示 AI 优化按钮时可配置）；缩进从属于「聊天框显示 AI 优化按钮」 */}
-        <div style={{ paddingLeft: 14, borderLeft: `1px solid ${TONE.border}`, marginLeft: 6 }}>
+        <div
+          style={{
+            paddingLeft: 14,
+            borderLeft: `1px solid ${TONE.border}`,
+            marginLeft: 6,
+          }}
+        >
           <ToggleRow
             label={T("pl.set.polishBtnIconOnly")}
             desc={T("pl.set.polishBtnIconOnlyDesc")}
@@ -775,18 +887,18 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           onChange={(v) => updateAndSave({ contextRecommendEnabled: v })}
         />
         {/* 会话监控 / 会话预览 视图标签显隐 */}
-        <ToggleRow
-          label={T("pl.set.monitorEnabled")}
-          desc={T("pl.set.monitorEnabledDesc")}
-          checked={draft.monitorEnabled}
-          onChange={(v) => updateAndSave({ monitorEnabled: v })}
-        />
-        <ToggleRow
-          label={T("pl.set.previewEnabled")}
-          desc={T("pl.set.previewEnabledDesc")}
-          checked={draft.previewEnabled}
-          onChange={(v) => updateAndSave({ previewEnabled: v })}
-        />
+        {/* <ToggleRow
+         label={T("pl.set.monitorEnabled")}
+         desc={T("pl.set.monitorEnabledDesc")}
+         checked={draft.monitorEnabled}
+         onChange={(v) => updateAndSave({ monitorEnabled: v })}
+       />
+      <ToggleRow
+         label={T("pl.set.previewEnabled")}
+         desc={T("pl.set.previewEnabledDesc")}
+         checked={draft.previewEnabled}
+         onChange={(v) => updateAndSave({ previewEnabled: v })}
+       /> */}
       </ModuleCard>
 
       {/* 备份管理（独立卡片）：从「词库管理」面板迁移至此，集中管理自动备份设置/手动备份/备份文件恢复 */}
@@ -816,7 +928,14 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           }}
         >
           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+              }}
+            >
               <span style={{ fontSize: 13 }}>
                 {T("pl.set.currentVersion")}
                 {installedVer ? `（v${installedVer}）` : ""}
@@ -835,17 +954,28 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
                   cursor: checking || updating ? "default" : "pointer",
                 }}
               >
-                {checking ? T("pl.set.updateChecking") : T("pl.set.checkUpdate")}
+                {checking
+                  ? T("pl.set.updateChecking")
+                  : T("pl.set.checkUpdate")}
               </button>
             </div>
           </div>
 
           {/* 版本信息状态行 */}
           {checking ? (
-            <div style={{ fontSize: 11, color: TONE.quiet }}>{T("pl.set.updateChecking")}</div>
+            <div style={{ fontSize: 11, color: TONE.quiet }}>
+              {T("pl.set.updateChecking")}
+            </div>
           ) : updating ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                }}
+              >
                 <span style={{ fontSize: 11, color: TONE.accent }}>
                   {stageLabel(updateProgress)}
                 </span>
@@ -878,14 +1008,18 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
               <div style={{ fontSize: 11, color: TONE.quiet }}>
                 {updateInfo.hasUpdate ? (
                   <span style={{ color: TONE.accent }}>
-                    {T("pl.set.updateAvailable", { version: updateInfo.latest })}
+                    {T("pl.set.updateAvailable", {
+                      version: updateInfo.latest,
+                    })}
                   </span>
                 ) : (
                   T("pl.set.updateLatest")
                 )}
               </div>
               {updateInfo.hasUpdate && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div
+                  style={{ display: "flex", flexDirection: "column", gap: 8 }}
+                >
                   <div>
                     <Button
                       type="button"
@@ -918,7 +1052,12 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
                       width="14"
                       height="14"
                       viewBox="0 0 16 16"
-                      style={{ flexShrink: 0, marginTop: 1, color: "var(--dsw-alias-state-warning-primary, #f59e0b)" }}
+                      style={{
+                        flexShrink: 0,
+                        marginTop: 1,
+                        color:
+                          "var(--dsw-alias-state-warning-primary, #f59e0b)",
+                      }}
                       aria-hidden="true"
                     >
                       <path
@@ -965,26 +1104,26 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
                   style={{ flexShrink: 0 }}
                   aria-hidden="true"
                 >
-                {updateMsg.ok ? (
-                  <path
-                    d="M3 8.5l3.2 3.2L13 4.8"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                ) : (
-                  <path
-                    d="M8 4v5M8 11.5v.5"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                  />
-                )}
-              </svg>
-              <span>{updateMsg.text}</span>
+                  {updateMsg.ok ? (
+                    <path
+                      d="M3 8.5l3.2 3.2L13 4.8"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  ) : (
+                    <path
+                      d="M8 4v5M8 11.5v.5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                    />
+                  )}
+                </svg>
+                <span>{updateMsg.text}</span>
               </div>
             </div>
           )}
@@ -1003,7 +1142,8 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
                 borderRadius: 7,
                 background:
                   "linear-gradient(180deg, rgba(59, 130, 246, 0.08) 0%, rgba(59, 130, 246, 0.03) 100%)",
-                border: "1px solid var(--dsw-alias-state-info-primary, rgba(59, 130, 246, 0.35))",
+                border:
+                  "1px solid var(--dsw-alias-state-info-primary, rgba(59, 130, 246, 0.35))",
                 color: TONE.text,
                 fontSize: 12,
                 lineHeight: 1.6,
@@ -1025,7 +1165,14 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
         <div style={{ height: 1, background: TONE.border }} />
 
         {/* 关于信息：信息行、开源地址、版权注释 */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 2 }}>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+            paddingTop: 2,
+          }}
+        >
           {/* 信息行（标签: 值，分隔布局） */}
           {(
             [
@@ -1058,7 +1205,9 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
               padding: "6px 2px",
             }}
           >
-            <span style={{ fontSize: 12.5, color: TONE.quiet }}>{T("pl.about.repo")}</span>
+            <span style={{ fontSize: 12.5, color: TONE.quiet }}>
+              {T("pl.about.repo")}
+            </span>
             <a
               href="https://github.com/master1Sun/dsh-prompt-library"
               target="_blank"
@@ -1076,7 +1225,13 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
               onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
               onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.9")}
             >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                aria-hidden="true"
+              >
                 <path d="M12 0C5.37 0 0 5.4 0 12.06c0 5.33 3.44 9.84 8.21 11.43.6.11.82-.26.82-.58 0-.29-.01-1.04-.02-2.04-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.2.09 1.84 1.24 1.84 1.24 1.07 1.84 2.81 1.31 3.5 1 .1-.78.42-1.31.76-1.61-2.66-.3-5.47-1.34-5.47-5.95 0-1.31.47-2.39 1.24-3.23-.13-.3-.54-1.53.11-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.66 1.65.25 2.88.12 3.18.77.84 1.23 1.92 1.23 3.23 0 4.62-2.81 5.64-5.49 5.94.43.38.81 1.12.81 2.26 0 1.63-.02 2.94-.02 3.34 0 .32.22.7.83.58A12.4 12.4 0 0 0 24 12.06C24 5.4 18.63 0 12 0z" />
               </svg>
               <span>github.com/master1Sun/dsh-prompt-library</span>
@@ -1101,7 +1256,10 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             }}
           >
             <span>
-              {T("pl.about.copyright", { year: new Date().getFullYear(), author: "master1Sun" })}
+              {T("pl.about.copyright", {
+                year: new Date().getFullYear(),
+                author: "master1Sun",
+              })}
             </span>
             <span>{T("pl.footer.disclaimer")}</span>
           </div>

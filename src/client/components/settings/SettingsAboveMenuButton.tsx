@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 设置按钮上方词库菜单按钮 — 纯 DOM 操作，无 React 依赖。
  *
  * 通过 MutationObserver 找到原生「设置」按钮，在其上方插入按钮，
@@ -23,6 +23,9 @@ export const SETTINGS_ABOVE_CSS = `
 .pl-sa-nav-item:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.08))}
 .pl-sa-nav-item.active{background:var(--dsw-alias-interactive-bg-active,rgba(127,127,127,.14))}
 .pl-sa-nav-icon{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;flex-shrink:0}
+/* 侧边栏折叠态：与宿主原生「设置」按钮一致，只显示图标、隐藏文字 */
+[data-pl-sa-wrap].pl-sa-collapsed button{justify-content:center!important;padding:0 4px!important;width:100%!important;margin:4px 0!important}
+[data-pl-sa-wrap].pl-sa-collapsed .pl-sa-btn-label{display:none!important}
 .pl-sa-content-area{flex:1;overflow:hidden;padding:5px;min-width:0;position:relative;display:flex;flex-direction:column}
 .pl-sa-content-area > [role="dialog"]{flex:1;min-height:0;display:flex;flex-direction:column}
 .pl-sa-content-area > [role="dialog"] > .pl-dialog{flex:1;min-height:0;height:auto}
@@ -311,7 +314,11 @@ export function registerSettingsAboveMenu(
     }
 
     const existing = document.querySelector("[data-pl-sa-wrap]");
-    if (existing) existing.remove();
+    if (existing) {
+      // 断开旧容器的折叠监听，避免重复观察
+      (existing as HTMLElement & { __plCollapseRo?: ResizeObserver }).__plCollapseRo?.disconnect();
+      existing.remove();
+    }
 
     const wrapper = document.createElement("div");
     wrapper.dataset.plSaWrap = "";
@@ -370,6 +377,20 @@ export function registerSettingsAboveMenu(
     });
 
     wrapper.appendChild(menuBtn);
+
+    // 跟随宿主侧边栏折叠：内容宽度收窄到一定阈值时切换为只显示图标。
+    // 方案不依赖宿主内部类名，通过观察自身容器宽度判断折叠状态。
+    const syncCollapsed = (): void => {
+      const collapsed = wrapper.getBoundingClientRect().width < 60;
+      wrapper.classList.toggle("pl-sa-collapsed", collapsed);
+    };
+    if (typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(syncCollapsed);
+      (wrapper as HTMLDivElement & { __plCollapseRo?: ResizeObserver }).__plCollapseRo = ro;
+      ro.observe(wrapper);
+    }
+    // 初始同步一次，处理注入时侧边栏已处于折叠状态的情况
+    requestAnimationFrame(syncCollapsed);
 
     const parent = settingsBtn.parentNode;
     if (parent) parent.insertBefore(wrapper, settingsBtn);

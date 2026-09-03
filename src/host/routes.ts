@@ -313,9 +313,8 @@ const MAX_PREVIEW_FILES = 300;
 type PreviewFileType =
   | "md" | "json" | "txt" | "csv"
   | "ts" | "js" | "py" | "go" | "rs" | "java" | "c" | "cpp"
-  | "yml" | "yaml" | "toml" | "xml"
-  | "log"
-  | "png" | "jpg" | "jpeg" | "gif" | "svg";
+  | "png" | "jpg" | "jpeg" | "gif" | "svg"
+  | "mp4";
 
 const PREVIEW_EXT_TYPES: Record<string, PreviewFileType> = {
   // Markdown
@@ -342,19 +341,14 @@ const PREVIEW_EXT_TYPES: Record<string, PreviewFileType> = {
   ".cc": "cpp",
   ".cxx": "cpp",
   ".hpp": "cpp",
-  // Config files
-  ".yml": "yml",
-  ".yaml": "yaml",
-  ".toml": "toml",
-  ".xml": "xml",
-  // Log files
-  ".log": "log",
   // Images
   ".png": "png",
   ".jpg": "jpg",
   ".jpeg": "jpeg",
   ".gif": "gif",
   ".svg": "svg",
+  // Videos
+  ".mp4": "mp4",
 };
 
 /** 按文件名识别、无扩展名的文本/配置文件（映射为 txt 以便按纯文本预览与全文检索）。
@@ -396,7 +390,7 @@ function previewTypeOf(name: string): PreviewFileType | null {
 
 /** 判断是否为二进制文件类型（需要 base64 编码）。 */
 function isBinaryType(type: PreviewFileType): boolean {
-  return ["png", "jpg", "jpeg", "gif", "svg"].includes(type);
+  return ["png", "jpg", "jpeg", "gif", "svg", "mp4"].includes(type);
 }
 
 /** 校验合法的单个文件名/目录名（只能是 basename：非空、不含分隔符、不含 ..）。 */
@@ -569,18 +563,13 @@ async function readPreviewFile(
   let content = await readFile(p, "utf8");
 
   // 大文本截流：文件超过 2MB 时只返回部分行，避免超大内容一次性渲染导致界面卡死。
-  // 日志保留尾部 500 行（关心最新输出）；其余文本（md/txt/csv/json/code/config 等）只返回首部（从头阅读更自然）。
+  // 文本（md/txt/csv/json/code 等）只返回首部（从头阅读更自然）。
   let truncated: boolean | undefined;
   let totalLines: number | undefined;
   if (s.size > MAX_PREVIEW_FILE_SIZE) {
     const lines = content.split("\n");
     totalLines = lines.length;
-    if (type === "log") {
-      if (lines.length > 500) {
-        content = lines.slice(-500).join("\n");
-        truncated = true;
-      }
-    } else if (lines.length > TEXT_LINE_CAP) {
+    if (lines.length > TEXT_LINE_CAP) {
       content = lines.slice(0, TEXT_LINE_CAP).join("\n");
       truncated = true;
     }
@@ -599,7 +588,7 @@ async function readPreviewFile(
 
 /** 是否可参与全文搜索的文本文件类型（排除二进制/图片/过大文件）。 */
 function searchableType(type: PreviewFileType): boolean {
-  return !["png", "jpg", "jpeg", "gif", "svg"].includes(type);
+  return !["png", "jpg", "jpeg", "gif", "svg", "mp4"].includes(type);
 }
 
 /** 递归全文搜索（grep）：对根目录下所有可预览文本文件做大小写可选的子串匹配，

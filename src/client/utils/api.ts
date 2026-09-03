@@ -1103,13 +1103,12 @@ export function deleteBackup(name: string): Promise<{ deleted: boolean }> {
 
 // ── 会话预览（读取当前会话所在工作目录下的可预览文件）────────────────────
 
-/** 可预览文件类型（md / json / txt / csv）。 */
+/** 可预览文件类型（md / json / txt / csv / 代码 / 图片 / 视频）。 */
 export type PreviewFileType =
   | "md" | "json" | "txt" | "csv"
   | "ts" | "js" | "py" | "go" | "rs" | "java" | "c" | "cpp"
-  | "yml" | "yaml" | "toml" | "xml"
-  | "log"
-  | "png" | "jpg" | "jpeg" | "gif" | "svg";
+  | "png" | "jpg" | "jpeg" | "gif" | "svg"
+  | "mp4";
 
 /** 当前会话工作目录下单个可预览文件信息。 */
 export interface PreviewFileEntry {

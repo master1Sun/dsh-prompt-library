@@ -52,7 +52,7 @@ export function fileIconOf(type: string): string {
     md: "📝", json: "📋", txt: "📄", csv: "📊", log: "📋",
     ts: "📘", js: "📗", py: "🐍", go: "🔵", rs: "🦀", java: "☕",
     c: "⚙️", cpp: "⚙️", css: "🎨", html: "🌐", svg: "🎨",
-    png: "🖼️", jpg: "🖼️", jpeg: "🖼️", gif: "🖼️", webp: "🖼️",
+    png: "🖼️", jpg: "🖼️", jpeg: "🖼️", gif: "🖼️", webp: "🖼️", mp4: "🎬",
   };
   return icons[type] || "📄";
 }

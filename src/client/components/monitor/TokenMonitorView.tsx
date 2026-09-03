@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 会话监控面板。
  *
  * 注册到 `conversation.view` 插槽，作为「会话轨迹」旁的独立监控视图标签。
@@ -734,10 +734,6 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
         .${S}-contextBody{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
         .${S}-contextHead{display:flex;align-items:center;gap:6px;font-weight:500;color:var(--dsw-alias-label-primary)} 
         .${S}-formBadge{font-style:normal;font-size:10.5px;line-height:16px;padding:0 6px;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-tertiary);font-weight:500}
-        .${S}-manage{flex:none;align-self:center;margin-left:auto;cursor:pointer;border:0;background:transparent;padding:0;font-size:10.5px;line-height:16px;color:#a78bfa;font-weight:600;text-decoration:none;transition:opacity .24s ease}
-        .${S}-manage.skill{color:#60a5fa}
-        .${S}-manage:hover{opacity:.72}
-        .${S}-manage:focus-visible{outline:none}
         .${S}-live{flex:1;min-width:0;align-self:center;font-size:11px;line-height:20px;color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:default}
         .${S}-live.clickable{cursor:pointer;color:var(--dsw-alias-label-primary)}
         .${S}-live.clickable:hover{color:var(--dsw-static-blue-450)}
@@ -1083,7 +1079,7 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
             {T?.("pl.monitor.sectionInjection") ?? "会话注入"}
           </h4>
 
-          {/* 实时注入解析：仅保留「人格管理」「技能管理」入口（跨项目联动，词库插件监听事件打开） */}
+          {/* 实时注入解析：人格/技能命中项点击可打开右侧详情抽屉查看内容 */}
           {hasPromptAssistant && (
             <div className={`${S}-block`}>
               <div className={`${S}-blockTitle`}>
@@ -1100,14 +1096,6 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
                   >
                     {injectDiag?.personaName ?? (T?.("pl.monitor.none") ?? "无")}
                   </span>
-                  {/* 点击打开「人格管理」弹窗（PromptAssistant 监听事件后打开） */}
-                  <button
-                    type="button"
-                    className={`${S}-manage`}
-                    onClick={() => window.dispatchEvent(new CustomEvent("pl:open-persona-manager"))}
-                  >
-                    {T?.("pl.monitor.manage") ?? "管理"}
-                  </button>
                 </div>
                 <div className={`${S}-row`}>
                   <span className={`${S}-role skill`}>{T?.("pl.monitor.skills") ?? "技能"}</span>
@@ -1121,14 +1109,6 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
                       ? injectDiag.promptTitles.join("、")
                       : (T?.("pl.monitor.none") ?? "无")}
                   </span>
-                  {/* 点击打开「技能管理」弹窗（PromptAssistant 监听事件后打开） */}
-                  <button
-                    type="button"
-                    className={`${S}-manage skill`}
-                    onClick={() => window.dispatchEvent(new CustomEvent("pl:open-skill-manager"))}
-                  >
-                    {T?.("pl.monitor.manage") ?? "管理"}
-                  </button>
                 </div>
               </div>
             </div>

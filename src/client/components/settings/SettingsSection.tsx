@@ -887,7 +887,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           onChange={(v) => updateAndSave({ contextRecommendEnabled: v })}
         />
         {/* 会话监控 / 会话预览 视图标签显隐 */}
-        {/* <ToggleRow
+        <ToggleRow
          label={T("pl.set.monitorEnabled")}
          desc={T("pl.set.monitorEnabledDesc")}
          checked={draft.monitorEnabled}
@@ -898,7 +898,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
          desc={T("pl.set.previewEnabledDesc")}
          checked={draft.previewEnabled}
          onChange={(v) => updateAndSave({ previewEnabled: v })}
-       /> */}
+       />
       </ModuleCard>
 
       {/* 备份管理（独立卡片）：从「词库管理」面板迁移至此，集中管理自动备份设置/手动备份/备份文件恢复 */}

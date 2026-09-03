@@ -73,19 +73,14 @@ export const TYPE_META: Record<PreviewFileType, { label: string; color: string }
   java: { label: "java", color: "#f89820" },
   c: { label: "c", color: "#a8b9cc" },
   cpp: { label: "cpp", color: "#00599c" },
-  // Config files
-  yml: { label: "yml", color: "#cb171f" },
-  yaml: { label: "yaml", color: "#cb171f" },
-  toml: { label: "toml", color: "#9c4121" },
-  xml: { label: "xml", color: "#e37933" },
-  // Log files
-  log: { label: "log", color: "#6b7280" },
   // Images
   png: { label: "png", color: "#a855f7" },
   jpg: { label: "jpg", color: "#a855f7" },
   jpeg: { label: "jpeg", color: "#a855f7" },
   gif: { label: "gif", color: "#a855f7" },
   svg: { label: "svg", color: "#ffb13b" },
+  // Videos
+  mp4: { label: "mp4", color: "#ec4899" },
 };
 
 /** Prism 语言标识映射：将文件类型映射到 Prism 支持的语言名。 */
@@ -98,10 +93,6 @@ export const PRISM_LANG_MAP: Record<string, string> = {
   java: "java",
   c: "c",
   cpp: "cpp",
-  yml: "yaml",
-  yaml: "yaml",
-  toml: "toml",
-  xml: "markup",
 };
 
 /** 大文本文件按行窗口的分页读取 + 虚拟滚动渲染（只渲染可视窗口，带滚动条与行号）。 */

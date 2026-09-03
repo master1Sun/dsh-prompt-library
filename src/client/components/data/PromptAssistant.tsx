@@ -1009,7 +1009,53 @@ export function PromptAssistant(props: Props): ReactNode {
   // 是否隐藏助手：仅跟随 assistantEnabled 设置（不再受等级限制）。
 
   const hidden = !(settings?.assistantEnabled ?? DEFAULT_SETTINGS.assistantEnabled);
-  if (hidden) return null;
+
+  // 词库菜单（设置面板）右侧内容区：与词库助手显隐相互独立，
+  // 因此在 hidden 分支也要渲染，否则关闭助手后菜单里的功能会一起被隐藏。
+  const panelContentPortal =
+    panelNavKey && panelContainerRef.current
+      ? createPortal(
+          (() => {
+            switch (panelNavKey) {
+              case "lexicon":
+                return <LexiconManagerModal open onClose={closePanelContent} t={T} container={panelContainerRef.current} />;
+              case "importExport":
+                return <ImportExportModal open onClose={closePanelContent} t={T} container={panelContainerRef.current} />;
+              case "persona":
+                return <PersonaManagerModal open onClose={closePanelContent} t={T} container={panelContainerRef.current} />;
+              case "skill":
+                return <PromptInjectPanel open onClose={closePanelContent} t={T} container={panelContainerRef.current} />;
+              case "dashboard":
+                return <DashboardModal open onClose={closePanelContent} t={T} container={panelContainerRef.current} />;
+              case "achievement":
+                return <AchievementModal open onClose={closePanelContent} t={T} container={panelContainerRef.current} />;
+              case "announce":
+                return <AnnouncementModal open onClose={closePanelContent} t={T} container={panelContainerRef.current} />;
+              case "dbPreview":
+                return <DbPreviewPanel t={T} />;
+              case "tags":
+                return (
+                  <>
+                    <PanelHeader title={T("pl.moduleTags")} desc={T("pl.moduleTagsDesc")} />
+                    <TagManagePanel t={T} />
+                  </>
+                );
+              case "trash":
+                return (
+                  <>
+                    <PanelHeader title={T("pl.moduleTrash")} desc={T("pl.moduleTrashDesc")} />
+                    <RecycleManagePanel t={T} />
+                  </>
+                );
+              default:
+                return null;
+            }
+          })(),
+          panelContainerRef.current,
+        )
+      : null;
+
+  if (hidden) return <>{panelContentPortal}</>;
 
   return (
     <>
@@ -1608,48 +1654,7 @@ export function PromptAssistant(props: Props): ReactNode {
         t={T}
       />
       {/* 设置面板内嵌内容：在 SettingsAboveMenu 面板内容区直接渲染对应 Modal */}
-      {panelNavKey && panelContainerRef.current && (() => {
-        const container = panelContainerRef.current;
-        return createPortal(
-          (() => {
-            switch (panelNavKey) {
-              case "lexicon":
-                return <LexiconManagerModal open onClose={closePanelContent} t={T} container={container} />;
-              case "importExport":
-                return <ImportExportModal open onClose={closePanelContent} t={T} container={container} />;
-              case "persona":
-                return <PersonaManagerModal open onClose={closePanelContent} t={T} container={container} />;
-              case "skill":
-                return <PromptInjectPanel open onClose={closePanelContent} t={T} container={container} />;
-              case "dashboard":
-                return <DashboardModal open onClose={closePanelContent} t={T} container={container} />;
-              case "achievement":
-                return <AchievementModal open onClose={closePanelContent} t={T} container={container} />;
-              case "announce":
-                return <AnnouncementModal open onClose={closePanelContent} t={T} container={container} />;
-              case "dbPreview":
-                return <DbPreviewPanel t={T} />;
-              case "tags":
-                return (
-                  <>
-                    <PanelHeader title={T("pl.moduleTags")} desc={T("pl.moduleTagsDesc")} />
-                    <TagManagePanel t={T} />
-                  </>
-                );
-              case "trash":
-                return (
-                  <>
-                    <PanelHeader title={T("pl.moduleTrash")} desc={T("pl.moduleTrashDesc")} />
-                    <RecycleManagePanel t={T} />
-                  </>
-                );
-              default:
-                return null;
-            }
-          })(),
-          container,
-        );
-      })()}
+      {panelContentPortal}
     </>
   );
 }

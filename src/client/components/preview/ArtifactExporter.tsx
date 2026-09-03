@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 会话产物导出器。
  *
  * 一键导出会话期间创建/修改的所有文件为 ZIP 格式。
@@ -60,7 +60,7 @@ function getTypeIcon(type: string): string {
     ts: "📘", js: "📗", py: "🐍", go: "🔵", rs: "🦀", java: "☕",
     c: "⚙️", cpp: "⚙️", yml: "⚙️", yaml: "⚙️", toml: "⚙️", xml: "📄",
     json: "📋", md: "📝", txt: "📄", csv: "📊", log: "📋",
-    png: "🖼️", jpg: "🖼️", jpeg: "🖼️", gif: "🖼️", svg: "🎨",
+    png: "🖼️", jpg: "🖼️", jpeg: "🖼️", gif: "🖼️", svg: "🎨", mp4: "🎬",
   };
   return icons[type] || "📄";
 }

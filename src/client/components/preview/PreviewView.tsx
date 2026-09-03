@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 会话预览面板。
  *
  * 注册到 `conversation.view` 插槽，作为「监控」旁的独立预览视图标签。
@@ -557,11 +557,7 @@ export function PreviewView(props: PreviewProps): ReactNode {
       lower.includes("justfile") ||
       lower.includes("procfile") ||
       lower.includes("vagrantfile") ||
-      lower.includes("caddyfile") ||
-      file.type === "yml" ||
-      file.type === "yaml" ||
-      file.type === "toml" ||
-      file.type === "xml"
+      lower.includes("caddyfile")
     ) {
       return "config";
     }
@@ -722,7 +718,7 @@ export function PreviewView(props: PreviewProps): ReactNode {
   // 大文本文件：截断读取（truncated）或行数超阈值时改用分片虚拟滚动查看
   const bigText =
     activeFile != null &&
-    (activeFile.type === "log" || activeFile.type === "txt" || activeFile.type === "md") &&
+    (activeFile.type === "txt" || activeFile.type === "md") &&
     (truncated || (totalLines != null && totalLines > BIG_TEXT_THRESHOLD));
 
   // 全文搜索命中：按文件分组
@@ -1517,6 +1513,8 @@ export function PreviewView(props: PreviewProps): ReactNode {
         /* 图片预览 */
         .${S}-imgBody{flex:1;min-width:0;min-height:0;display:flex;justify-content:center;align-items:center;padding:14px 18px;overflow:auto;background:var(--dsw-alias-bg-subtle);border-radius:8px}
         .${S}-imgBody img{max-width:100%;max-height:70vh;object-fit:contain;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+        .${S}-videoBody{flex:1;min-width:0;min-height:0;display:flex;justify-content:center;align-items:center;padding:14px 18px;overflow:auto;background:var(--dsw-alias-bg-subtle);border-radius:8px}
+        .${S}-videoBody video{max-width:100%;max-height:72vh;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.15);background:#000}
         
         .${S}-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;flex:1;min-height:0;color:var(--dsw-alias-label-tertiary);font-size:12.5px;padding:24px;text-align:center}
         .${S}-emptyNote{font-size:11px;opacity:.85}
@@ -1656,7 +1654,7 @@ export function PreviewView(props: PreviewProps): ReactNode {
           )}
           
           {/* 编辑按钮（仅当有选中文件且不是二进制文件、且未被截断时显示可点） */}
-          {activeFile && !["png", "jpg", "jpeg", "gif", "svg"].includes(activeFile.type) && (
+          {activeFile && !["png", "jpg", "jpeg", "gif", "svg", "mp4"].includes(activeFile.type) && (
             <>
               {!editing ? (
                 <button
@@ -2094,16 +2092,6 @@ export function PreviewView(props: PreviewProps): ReactNode {
                 <div className={`${S}-codeBody`}>
                   <CodeHighlight code={content} language={PRISM_LANG_MAP[activeFile.type]} />
                 </div>
-              ) : activeFile.type === "yml" || activeFile.type === "yaml" || activeFile.type === "toml" ||
-                  activeFile.type === "xml" ? (
-                <div className={`${S}-codeBody`}>
-                  <CodeHighlight code={content} language={PRISM_LANG_MAP[activeFile.type]} />
-                </div>
-              ) : activeFile.type === "log" ? (
-                <div className={`${S}-logBody`}>
-                  {truncHint}
-                  <pre>{content}</pre>
-                </div>
               ) : activeFile.type === "png" || activeFile.type === "jpg" || activeFile.type === "jpeg" ||
                   activeFile.type === "gif" || activeFile.type === "svg" ? (
                 <div className={`${S}-imgBody`}>
@@ -2111,6 +2099,10 @@ export function PreviewView(props: PreviewProps): ReactNode {
                     src={`data:image/${activeFile.type === "jpg" ? "jpeg" : activeFile.type};base64,${content}`}
                     alt={activeFile.name}
                   />
+                </div>
+              ) : activeFile.type === "mp4" ? (
+                <div className={`${S}-videoBody`}>
+                  <video controls src={`data:video/mp4;base64,${content}`} />
                 </div>
               ) : (
                 <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>

@@ -4,7 +4,8 @@
  * 背景：DSH 用 pnpm 的 `blockExoticSubdeps` 禁止「子依赖」携带 git/file 等 exotic 源，
  * 因此 workbench 不能作为 library 的 dependencies 随 npm 安装。改为由 library 在
  * 运行时检测 workbench 是否已安装，未安装则从 git 拉取并铺到 profile 的 node_modules，
- * 同时把它登记到 profile 的 `dsh.profile.bundles`，保证重启 dsh 后 workbench 会被自动加载。
+ * 同时把它登记到 profile 的 `dsh.profile.bundles` 与 `dependencies`（引用格式与 library
+ * 一致 `github:<repo>#<tag>`），保证重启 dsh 后 workbench 会被自动加载。
  *
  * 已安装则一律不管，不检查版本、不升级。任何失败都静默降级，不阻断 library。
  * 生效方式：安装完成后提示重启 `dsh web`。
@@ -190,6 +191,28 @@ async function ensureInBundles(profile: string): Promise<boolean> {
 }
 
 /**
+ * 把 workbench 写入 profile 的 `dependencies`（不存在则追加），引用格式与
+ * library 一致：`github:<repo>#<tag>`。保留 JSON 无 BOM 写入。
+ * @returns 写入成功返回 true（含原本已在）。
+ */
+async function ensureInDependencies(profile: string, ref: string): Promise<boolean> {
+  const pkgPath = join(profile, "package.json");
+  let conf: JsonLike = null;
+  try {
+    conf = JSON.parse(await readFile(pkgPath, "utf8")) as JsonLike;
+  } catch {
+    return false;
+  }
+  const deps = (conf?.dependencies as Record<string, unknown> | null) ?? null;
+  if (!deps) return false;
+  const entry = `github:${DEFAULT_REPO.replace(/^https?:\/\//, "").replace(/\.git$/, "")}#${ref}`;
+  if (deps[WORKBENCH_PKG] === entry) return true;
+  deps[WORKBENCH_PKG] = entry;
+  await writeFile(pkgPath, JSON.stringify(conf, null, 2) + "\n", "utf8");
+  return true;
+}
+
+/**
  * 主入口：仅当用户未安装 workbench 时才安装（不检测最新、不每日检测）。
  * 已安装则一律不管，不做任何升级。幂等，任何失败均静默。
  * @returns 是否执行了安装（true 表示刚装上，需重启生效；已安装则 false）。
@@ -212,6 +235,8 @@ export async function ensureWorkbenchInstalled(): Promise<boolean> {
     const dest = join(profile, "node_modules", ...WORKBENCH_PKG.split("/"));
     await installFromGit(DEFAULT_REPO, remote.raw, dest);
     await ensureInBundles(profile).catch(() => false);
+    // 把版本写入 profile 的 dependencies，格式 `github:master1Sun/dsh-file-workbench-lib#v0.x.y`
+    await ensureInDependencies(profile, remote.raw).catch(() => false);
 
     // 安装完成后推送 SSE 事件，由前端弹「需重启」气泡（不再自行打印）
     emitWorkbenchInstalled();

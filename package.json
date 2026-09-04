@@ -98,8 +98,7 @@
   "engines": {
     "node": ">=22.19"
   },
-  "dependencies": {
-    "@sunjuntao/dsh-file-workbench": "github:master1Sun/dsh-file-workbench#v0.1.2",
+  "dependencies": {
     "js-yaml": "^5.3.0",
     "@types/prismjs": "^1.26.6",
     "jszip": "^3.10.1",

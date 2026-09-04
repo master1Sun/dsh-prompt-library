@@ -1,6 +1,4 @@
-# dsh-prompt-library bundle patch：把本插件及随附安装的 workbench 一起挂进 profile
+# dsh-prompt-library bundle patch：把本插件挂进 profile（workbench 为独立顶层依赖，由 profile bundles 加载）
 - insert:
     - id: prompt-library
       name: '@sunjuntao/dsh-prompt-library'
-    - id: dsh-file-workbench
-      name: '@sunjuntao/dsh-file-workbench'

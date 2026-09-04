@@ -163,7 +163,10 @@ export function ContextRecommendations(props: DockProps): ReactNode {
 
   // 宿主注入的钩子必须在组件顶层调用（不能放进 useMemo）；会话存在时必定注入，
   // 缺失时（理论上不会发生）整个组件不渲染
-  const nodes = useSession?.((s) => s.chat.legacy.nodes) as readonly ConversationNode[] | undefined;
+  const nodes = useSession?.((s) =>
+    (s as unknown as { chat?: { legacy?: { nodes?: readonly ConversationNode[] } } } | undefined)
+      ?.chat?.legacy?.nodes,
+  );
   const draft = useInput?.((s) => s.draft) ?? "";
 
   // 会话上下文：最近几条用户消息的文本（宿主 StatsLine 读取聊天历史的同一途径）

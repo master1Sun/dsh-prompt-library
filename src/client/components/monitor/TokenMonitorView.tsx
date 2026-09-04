@@ -230,7 +230,10 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
         ? (T?.("pl.monitor.srcPath") ?? "工作区")
         : (T?.("pl.monitor.srcDefault") ?? "默认");
 
-  const nodes = useSession((s) => s.chat.legacy.nodes) as readonly ConversationNode[] | undefined;
+  const nodes = useSession((s) =>
+    (s as unknown as { chat?: { legacy?: { nodes?: readonly ConversationNode[] } } } | undefined)
+      ?.chat?.legacy?.nodes,
+  );
 
   // Token 流速历史：记录每轮对话的输入/输出 token 数，用于绘制折线图（最多保留 50 轮）
   interface TokenVelocityPoint {

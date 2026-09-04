@@ -1,14 +1,14 @@
 /**
- * workbench 首次安装：library 启动后检测 file-workbench 是否已安装，未装则从 git 安装。
+ * workbench 自动安装与每日更新检测：
+ * - `ensureWorkbenchInstalled`：启动时只做首次安装检测，未安装才从 git 拉取安装；
+ * - `checkWorkbenchUpdate`：每日做版本检查，远端有更高版本就就地更新；
  *
  * 背景：DSH 用 pnpm 的 `blockExoticSubdeps` 禁止「子依赖」携带 git/file 等 exotic 源，
  * 因此 workbench 不能作为 library 的 dependencies 随 npm 安装。改为由 library 在
- * 运行时检测 workbench 是否已安装，未安装则从 git 拉取并铺到 profile 的 node_modules，
- * 同时把它登记到 profile 的 `dsh.profile.bundles` 与 `dependencies`（引用格式与 library
- * 一致 `github:<repo>#<tag>`），保证重启 dsh 后 workbench 会被自动加载。
+ * 运行时检测 workbench 是否已安装/版本，未安装则从 git 拉取并铺到 profile 的 node_modules，
+ * 同时把它登记到 profile 的 `dsh.profile.bundles`，保证重启 dsh 后 workbench 会被自动加载。
  *
- * 已安装则一律不管，不检查版本、不升级。任何失败都静默降级，不阻断 library。
- * 生效方式：安装完成后提示重启 `dsh web`。
+ * 任何失败都静默降级，不阻断 library。安装/更新完成后推送 SSE 提示前端弹窗重启。
  */
 import { execFile } from "node:child_process";
 import { statSync } from "node:fs";
@@ -191,28 +191,6 @@ async function ensureInBundles(profile: string): Promise<boolean> {
 }
 
 /**
- * 把 workbench 写入 profile 的 `dependencies`（不存在则追加），引用格式与
- * library 一致：`github:<repo>#<tag>`。保留 JSON 无 BOM 写入。
- * @returns 写入成功返回 true（含原本已在）。
- */
-async function ensureInDependencies(profile: string, ref: string): Promise<boolean> {
-  const pkgPath = join(profile, "package.json");
-  let conf: JsonLike = null;
-  try {
-    conf = JSON.parse(await readFile(pkgPath, "utf8")) as JsonLike;
-  } catch {
-    return false;
-  }
-  const deps = (conf?.dependencies as Record<string, unknown> | null) ?? null;
-  if (!deps) return false;
-  const entry = `github:${DEFAULT_REPO.replace(/^https?:\/\//, "").replace(/\.git$/, "")}#${ref}`;
-  if (deps[WORKBENCH_PKG] === entry) return true;
-  deps[WORKBENCH_PKG] = entry;
-  await writeFile(pkgPath, JSON.stringify(conf, null, 2) + "\n", "utf8");
-  return true;
-}
-
-/**
  * 主入口：仅当用户未安装 workbench 时才安装（不检测最新、不每日检测）。
  * 已安装则一律不管，不做任何升级。幂等，任何失败均静默。
  * @returns 是否执行了安装（true 表示刚装上，需重启生效；已安装则 false）。
@@ -235,8 +213,6 @@ export async function ensureWorkbenchInstalled(): Promise<boolean> {
     const dest = join(profile, "node_modules", ...WORKBENCH_PKG.split("/"));
     await installFromGit(DEFAULT_REPO, remote.raw, dest);
     await ensureInBundles(profile).catch(() => false);
-    // 把版本写入 profile 的 dependencies，格式 `github:master1Sun/dsh-file-workbench-lib#v0.x.y`
-    await ensureInDependencies(profile, remote.raw).catch(() => false);
 
     // 安装完成后推送 SSE 事件，由前端弹「需重启」气泡（不再自行打印）
     emitWorkbenchInstalled();
@@ -244,6 +220,52 @@ export async function ensureWorkbenchInstalled(): Promise<boolean> {
   } catch (error) {
     try {
       console.error("[dsh-prompt-library] ensureWorkbenchInstalled skipped:", (error as Error).message);
+    } catch {
+      /* ignore */
+    }
+    return false;
+  }
+}
+
+/**
+ * 每日检查 workbench 是否有新版本：有则更新并推送 SSE 气泡提示重启。
+ * - 未安装：安装最新版（既启动兜底，也保证每日覆盖）；
+ * - 已安装且远端有更高版本：就地更新；
+ * - 已是最新：不动作。
+ * 幂等，任何失败均静默。@returns 是否发生了安装/更新（true 表示需重启生效）。
+ */
+export async function checkWorkbenchUpdate(): Promise<boolean> {
+  try {
+    const profile = profileRoot();
+    if (!profile) return false;
+
+    const remote = await latestRemoteTag(DEFAULT_REPO).catch(() => null);
+    if (!remote) return false;
+
+    const root = await workbenchRoot(profile);
+    let installedBare = "";
+    if (root) {
+      const pkg = await readJson(join(root, "package.json"));
+      installedBare = bare(String(pkg?.version ?? ""));
+    }
+
+    // 已安装且不落后于远端 → 只需确保登记，不做任何事
+    if (installedBare && semverCompare(remote.sem, installedBare) <= 0) {
+      await ensureInBundles(profile).catch(() => false);
+      return false;
+    }
+
+    // 未安装或已安装但非最新 → 安装/更新到最新版
+    const dest = root ?? join(profile, "node_modules", ...WORKBENCH_PKG.split("/"));
+    await installFromGit(DEFAULT_REPO, remote.raw, dest);
+    await ensureInBundles(profile).catch(() => false);
+
+    // 安装/更新完成后推送 SSE 事件，由前端弹「需重启」气泡（不再自行打印）
+    emitWorkbenchInstalled();
+    return true;
+  } catch (error) {
+    try {
+      console.error("[dsh-prompt-library] checkWorkbenchUpdate skipped:", (error as Error).message);
     } catch {
       /* ignore */
     }

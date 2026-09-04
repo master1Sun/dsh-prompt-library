@@ -8,6 +8,8 @@
  * 都不可达则判定无更新源。
  *
  * 自动更新由设置项「自动更新」控制：开启时发现新版本即后台静默安装；关闭则完全不动。
+ * 安装采用「本地替换」方式：按当前运行安装目录（LIBRARY_ROOT）从 GitHub clone 对应 tag
+ * 并替换 lib/package.json/cordis.patch.yml，不依赖 `dsh plugin add` 与 profile 路径配置。
  *
  * 结果在内存缓存 24 小时；任何失败都静默降级，不影响插件其它功能。
  */
@@ -16,11 +18,15 @@ import type { IncomingMessage } from "node:http";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { getSettings, readGlobalLocale } from "./store.js";
 import { dshHome, logDir } from "./paths.js";
+import { installFromGit } from "./updateWorkbench.js";
 
 /** npm registry 中本包的 latest 端点（scoped 包需把 `/` 编码为 `%2f`）。 */
 const REGISTRY_URL = "https://registry.npmjs.org/@sunjuntao%2fdsh-prompt-library/latest";
+/** 当前 library 运行包根（lib/ 上一级，即实际安装目录）。 */
+const LIBRARY_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 /** GitHub 仓库（owner/repo），用于读 latest release tag 及 `github:` 安装引用。 */
 const GITHUB_REPO = "master1Sun/dsh-prompt-library";
 /** GitHub latest release 接口：取最新发布 tag 作为兜底版本号。 */
@@ -353,84 +359,102 @@ export function startUpgrade(): { ok: boolean; started: boolean; error?: string 
 }
 
 /**
- * 执行「更新插件」命令行，把插件安装/升级到指定版本。
+ * 执行「更新插件」，把 library 安装/升级到指定版本。
  *
- * 不传 target 时自动选择：取 checkUpdate 得到的最新待更新版本。
- * - 来源为 GitHub release（gitTag 非空）→ 走 `dsh plugin --profile <profile> add github:<repo>#<tag>`；
- * - 否则（npm）→ 走 `dsh plugin --profile <profile> add <pkg>@<version>`。
- * 桌面端平台名由 env `DSH_PLUGIN_PROFILE` 覆盖（如 desktop）；若需完全自定义整条命令，
- * 可设 env `DSH_PLUGIN_UPGRADE_CMD`。返回 { ok, output }；任何异常都不抛出，仅置 ok=false。
+ * 直接依据「当前运行包实际安装目录」（LIBRARY_ROOT）从 GitHub clone 对应 tag 并
+ * 本地替换 lib/package.json/cordis.patch.yml，不依赖 `dsh plugin add` 命令行与
+ * profile 路径配置——即使桌面端路径配错也能正常更新。
+ *
+ * 不传 target 时自动选择：取 checkUpdate 得到的最新待更新版本（npm 或 GitHub release）。
+ * 可设 env `DSH_PLUGIN_UPGRADE_CMD` 完全自定义整条命令（优先级最高，走原 spawn 流程）。
+ * 返回 { ok, output }；任何异常都不抛出，仅置 ok=false。
  */
 export async function upgradePlugin(target?: string, gitRef = ""): Promise<{ ok: boolean; output: string }> {
-  const profile = process.env.DSH_PLUGIN_PROFILE || "web";
   const pkg = "@sunjuntao/dsh-prompt-library";
   let version = target;
-  // git 版本（GitHub release）用 github: 方式安装时的 ref（如 v0.9.0）；为空表示走 npm。
+  let ref = gitRef;
   if (!version) {
     try {
       const info = await checkUpdate(true); // 强制刷新，确保拿到最新版本信息
       if (info.hasUpdate && /^\d+\.\d+\.\d+/.test(info.latest)) {
         version = info.latest;
-        gitRef = info.gitTag || "";
+        ref = info.gitTag || "";
       }
     } catch {
       /* 拿不到版本就安装 latest 标签 */
     }
   }
-  const targetStr = version && /^\d+\.\d+\.\d+/.test(version) ? `${pkg}@${version}` : pkg;
-  // 只要是 GitHub 来源（带 gitTag）就走 github: 安装命令；其余（npm）保持 npm 命令。
-  // 二者都可通过 DSH_PLUGIN_UPGRADE_CMD 完全自定义整条命令（优先级最高）。
-  const cmd =
-    process.env.DSH_PLUGIN_UPGRADE_CMD ||
-    (gitRef
-      ? `dsh plugin --profile ${profile} add github:${GITHUB_REPO}#${gitRef}`
-      : `dsh plugin --profile ${profile} add ${targetStr}`);
   const vlog = buildVersionLogCopy(await readGlobalLocale());
-  logVersion(vlog.upgradeStart(version || pkg, cmd));
-  return new Promise((resolve) => {
-    setUpgradeProgress({ active: true, stage: "downloading", percent: 5 });
-    const child = spawn(cmd, { shell: true, windowsHide: true });
-    const parts: string[] = [];
-    let completed = false;
-    let timer: NodeJS.Timeout | undefined;
-    const finish = (ok: boolean, out: string): void => {
-      if (completed) return;
-      completed = true;
-      if (timer) clearTimeout(timer);
-      if (ok) {
-        // 升级成功后使版本缓存失效：下次检查会重新请求 registry，避免旧缓存一直提示更新
-        cache = null;
-        logVersion(vlog.upgradeOk);
-        setUpgradeProgress({ active: false, stage: "done", percent: 100 });
-      } else {
-        logVersion(vlog.upgradeFail(out || "unknown error"));
-        setUpgradeProgress({ active: false, stage: "failed", detail: out });
-      }
-      resolve({ ok, output: out });
-    };
-    // 安装阶段：随子进程输出字符推进伪实时进度（无精确百分比，按输出量估算），封顶 90%；退出后定成败
-    let outLen = 0;
-    const onData = (buf: Buffer): void => {
-      const text = buf.toString("utf8");
-      parts.push(text);
-      outLen += text.length;
-      setUpgradeProgress({
-        stage: "installing",
-        percent: Math.min(90, 5 + Math.floor(Math.min(80, outLen / 256))),
+
+  // 若配置了完全自定义更新命令，则走原 spawn 流程（唯一的平台差异化后门）。
+  const customCmd = process.env.DSH_PLUGIN_UPGRADE_CMD;
+  if (customCmd) {
+    return new Promise((resolve) => {
+      logVersion(vlog.upgradeStart(version || pkg, customCmd));
+      const child = spawn(customCmd, { shell: true, windowsHide: true });
+      const parts: string[] = [];
+      let completed = false;
+      let timer: NodeJS.Timeout | undefined;
+      const finish = (ok: boolean, out: string): void => {
+        if (completed) return;
+        completed = true;
+        if (timer) clearTimeout(timer);
+        if (ok) {
+          cache = null;
+          logVersion(vlog.upgradeOk);
+          setUpgradeProgress({ active: false, stage: "done", percent: 100 });
+        } else {
+          logVersion(vlog.upgradeFail(out || "unknown error"));
+          setUpgradeProgress({ active: false, stage: "failed", detail: out });
+        }
+        resolve({ ok, output: out });
+      };
+      let outLen = 0;
+      const onData = (buf: Buffer): void => {
+        const text = buf.toString("utf8");
+        parts.push(text);
+        outLen += text.length;
+        setUpgradeProgress({
+          stage: "installing",
+          percent: Math.min(90, 5 + Math.floor(Math.min(80, outLen / 256))),
+        });
+      };
+      child.stdout?.on("data", onData);
+      child.stderr?.on("data", onData);
+      child.on("error", (err) => finish(false, err instanceof Error ? err.message : String(err)));
+      timer = setTimeout(() => {
+        finish(false, "timeout");
+        child.kill();
+      }, UPGRADE_TIMEOUT_MS);
+      child.on("close", (code) => {
+        const output = parts.join("").trim().slice(0, 1000);
+        finish(code === 0, output);
       });
-    };
-    child.stdout?.on("data", onData);
-    child.stderr?.on("data", onData);
-    child.on("error", (err) => finish(false, err instanceof Error ? err.message : String(err)));
-    timer = setTimeout(() => {
-      finish(false, "timeout");
-      child.kill();
-    }, UPGRADE_TIMEOUT_MS);
-    child.on("close", (code) => {
-      const output = parts.join("").trim().slice(0, 1000);
-      finish(code === 0, output);
     });
-  });
+  }
+
+  // 本地替换安装：determine 目标 tag（GitHub 来源带 gitTag；npm 来源拼 v<version>）
+  if (!version || !/^\d+\.\d+\.\d+/.test(version)) {
+    setUpgradeProgress({ active: false, stage: "failed", detail: "no valid target version" });
+    return { ok: false, output: "no valid target version" };
+  }
+  const tag = ref || `v${version}`;
+  const repoUrl = `https://github.com/${GITHUB_REPO}.git`;
+  logVersion(vlog.upgradeStart(version, `git clone ${repoUrl} #${tag} → ${LIBRARY_ROOT}`));
+  setUpgradeProgress({ active: true, stage: "downloading", percent: 5 });
+  try {
+    await installFromGit(repoUrl, tag, LIBRARY_ROOT);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logVersion(vlog.upgradeFail(msg));
+    setUpgradeProgress({ active: false, stage: "failed", detail: msg });
+    return { ok: false, output: msg };
+  }
+  // 升级成功后使版本缓存失效，下次检查重新请求 registry / GitHub
+  cache = null;
+  setUpgradeProgress({ active: false, stage: "done", percent: 100 });
+  logVersion(vlog.upgradeOk);
+  return { ok: true, output: `已安装 ${pkg}@${version} 到 ${LIBRARY_ROOT}` };
 }
 
 /** 静默自动更新的并发锁：避免启动检查与每日定时（或手动升级）重叠执行。 */

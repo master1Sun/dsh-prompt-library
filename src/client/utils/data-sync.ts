@@ -9,6 +9,7 @@ import { useEffect, useRef } from "react";
 const DATA_CHANGED_EVENT = "pl:data-changed";
 const FILL_DRAFT_EVENT = "pl:fill-draft";
 const EXPORT_DOWNLOADED_EVENT = "pl:export-downloaded";
+const WORKBENCH_INSTALLED_EVENT = "pl:workbench-installed";
 
 /** 通知所有提示词组件：数据已新增/修改/删除，应重新加载。 */
 export function notifyDataChanged(): void {
@@ -73,6 +74,10 @@ export function startDataChangedSubscription(): void {
         window.dispatchEvent(new CustomEvent(EXPORT_DOWNLOADED_EVENT, { detail: { count } }));
       }
     });
+    // host 侧 workbench 首装完成：翻译成 window 事件，前端据此弹「需重启」气泡。
+    es.addEventListener("workbench-installed", () => {
+      window.dispatchEvent(new CustomEvent(WORKBENCH_INSTALLED_EVENT));
+    });
     // 插件热重载/页面卸载前关闭连接，避免 EventSource 泄漏
     const onUnload = () => {
       es.close();
@@ -133,5 +138,17 @@ export function useExportDownloaded(onDownloaded: (count: number) => void): void
     };
     window.addEventListener(EXPORT_DOWNLOADED_EVENT, handler);
     return () => window.removeEventListener(EXPORT_DOWNLOADED_EVENT, handler);
+  }, []);
+}
+
+/** 订阅 host 推送的「workbench 首装完成」事件（SSE），回调用于弹「需重启」提示。 */
+export function useWorkbenchInstalled(onInstalled: () => void): void {
+  const onRef = useRef(onInstalled);
+  onRef.current = onInstalled;
+  useEffect(() => {
+    startDataChangedSubscription();
+    const handler = () => onRef.current();
+    window.addEventListener(WORKBENCH_INSTALLED_EVENT, handler);
+    return () => window.removeEventListener(WORKBENCH_INSTALLED_EVENT, handler);
   }, []);
 }

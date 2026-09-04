@@ -42,6 +42,8 @@ import {
   type SessionQueryRecord,
 } from "./host/session-scope.js";
 import { autoUpdateDaily } from "./host/update.js";
+// workbench 仅在启动时做一次「未安装则安装」检查（已装则不管，不做每日检测）
+import { ensureWorkbenchInstalled } from "./host/updateWorkbench.js";
 import { autoBackup } from "./host/backup.js";
 // 操作手册：纯文本字符串，聊天消息按纯文本渲染（markdown/HTML 都无法解析），用换行符排版
 import { manualEn, manualZh } from "./manual.js";
@@ -741,6 +743,9 @@ export function apply(ctx: Context) {
   const versionTimer = setInterval(() => {
     void autoUpdateDaily();
   }, 24 * 60 * 60 * 1000);
+
+  // —— workbench 首次安装：仅在启动时检测一次，未安装则安装（已装则不管） ——
+  void ensureWorkbenchInstalled();
 
   // —— 每周自动统计：每 7 天生成一次「近 7 天」统计快照写入 stats_history ——
   // 统计的只是近 7 天的增量数据（新增/使用/AI 完善），避免把历史累计反复重复统计；

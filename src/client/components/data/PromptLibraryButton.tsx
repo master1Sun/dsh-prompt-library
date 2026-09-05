@@ -230,6 +230,8 @@ function useTildaTrigger(
       if (activeRef.current) return;
       const el = target as HTMLElement | null;
       if (!el || !(el instanceof HTMLElement)) return;
+      // 仅在宿主「系统会话输入框」（composer seat）内触发，避免在其它输入框（插件面板、搜索框等）弹出浮层
+      if (!el.closest?.("[data-composer-seat]")) return;
       // 忽略插件自身编辑器（如预览编辑），避免与聊天框 # 触发冲突导致卡死
       if (el.closest?.("[data-pl-no-hash-trigger]")) return;
       const value = getEditableText(el);

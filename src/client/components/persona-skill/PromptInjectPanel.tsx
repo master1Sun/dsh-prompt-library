@@ -1241,10 +1241,6 @@ export function PromptInjectPanel({ open, onClose, t, container }: Props): React
           aria-modal="true"
           aria-label={t("pl.inject.title")}
           className={container ? undefined : maximized ? `${PL_DIALOG_OVERLAY} ${PL_DIALOG_OVERLAY_MAX}` : PL_DIALOG_OVERLAY}
-          onClick={(e) => {
-            // 点击蒙层（空白处）关闭；点击对话框内部不关闭
-            if (!container && e.target === e.currentTarget) onClose();
-          }}
         >
           {!container && <style>{PL_DIALOG_CSS}</style>}
           <div

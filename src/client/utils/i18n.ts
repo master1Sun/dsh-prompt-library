@@ -714,6 +714,9 @@ export const zh = {
   "pl.applyTemplateTitle": "选中文本直接套模板：选择含变量的模板，文本自动填入变量",
   "pl.applyTemplateDesc": "已选中 {length} 个字符，请选择要套用的模板（含 {{变量}} 的提示词）",
   "pl.applyTemplateEmpty": "词库中还没有含变量的模板，可先在词库中创建",
+  "pl.selectionMore": "更多操作",
+  "pl.selectionSetDefault": "设为默认",
+  "pl.selectionIsDefault": "默认",
 
   // 上下文提示词推荐
   "pl.recommend": "推荐",
@@ -1818,6 +1821,9 @@ export const en: Record<keyof typeof zh, string> = {
   "pl.applyTemplateTitle": "Apply selected text to a template: pick a prompt with variables",
   "pl.applyTemplateDesc": "Selected {length} characters. Pick a template (prompt with {{variables}})",
   "pl.applyTemplateEmpty": "No variable templates in the library yet. Create one first.",
+  "pl.selectionMore": "More actions",
+  "pl.selectionSetDefault": "Set as default",
+  "pl.selectionIsDefault": "Default",
 
   // Context-based prompt recommendations
   "pl.recommend": "Recommended",

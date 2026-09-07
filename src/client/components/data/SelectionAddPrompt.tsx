@@ -109,6 +109,44 @@ const floatingBtnStyle: CSSProperties = {
   transition: "background 0.15s",
 };
 
+/** 浮层可选动作：默认只显示一个（可切换），其余收进「更多」二级面板。 */
+type SelectionActionId = "copy" | "add" | "tpl";
+const SELECTION_ACTIONS: SelectionActionId[] = ["copy", "add", "tpl"];
+const DEFAULT_ACTION_KEY = "pl-selection-default-action";
+/** 非默认动作的入口收纳在「更多」面板里，避免和批注等其他插件的选区浮层拥挤冲突。 */
+
+/** 各动作的图标（模块级静态 SVG，随按钮文案一起复用）。 */
+const ACTION_ICON: Record<SelectionActionId, ReactNode> = {
+  copy: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  ),
+  add: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  ),
+  tpl: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M4 6h9v4H4V6Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="M4 14h9v4H4v-4ZM17 6h3M17 12h3M17 18h3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  ),
+};
+
+/** 读取本地持久化的默认动作（异常/非法值回退到「复制」）。 */
+function loadDefaultAction(): SelectionActionId {
+  try {
+    const v = localStorage.getItem(DEFAULT_ACTION_KEY);
+    if (v === "add" || v === "tpl") return v;
+  } catch {
+    /* 隐私模式等 localStorage 不可用时静默回退 */
+  }
+  return "copy";
+}
+
 interface Props {
   t?: PLTranslate;
   /** 是否启用该功能（由设置面板开关控制）。 */
@@ -146,6 +184,10 @@ export function SelectionAddPrompt(props: Props): ReactNode {
   const selectingRef = useRef(false);
   // 浮层按钮容器引用：用于区分「点按浮层按钮」与「普通选择动作」，避免点按钮被误判为拖选
   const floatingRef = useRef<HTMLDivElement>(null);
+  // 「更多」二级面板是否展开（收纳非默认动作）
+  const [moreOpen, setMoreOpen] = useState(false);
+  // 浮层默认动作（只显示这一个按钮）：copy=复制 / add=添加提示词 / tpl=套模板，本地持久化
+  const [defaultAction, setDefaultAction] = useState<SelectionActionId>(loadDefaultAction);
   // 弹窗表单
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -207,6 +249,29 @@ export function SelectionAddPrompt(props: Props): ReactNode {
     setTplPrefill(prefillWithSelection(extractVariables(p.body), tplText));
     setTplPick(p);
   };
+
+  // 切换浮层默认动作并持久化（下次选中文本时直接显示新默认按钮）
+  const chooseDefaultAction = useCallback((id: SelectionActionId) => {
+    setDefaultAction(id);
+    try {
+      localStorage.setItem(DEFAULT_ACTION_KEY, id);
+    } catch {
+      /* localStorage 不可用时仅本次会话生效 */
+    }
+  }, []);
+
+  // 浮层各动作的文案（复制动作在反馈期显示「已复制」）
+  const actionLabel = useCallback(
+    (id: SelectionActionId) =>
+      id === "copy"
+        ? copied
+          ? T("pl.copiedSelected")
+          : T("pl.copySelected")
+        : id === "add"
+          ? T("pl.addToLibrary")
+          : T("pl.applyTemplate"),
+    [copied, T],
+  );
 
   // 套模板：确认填充后把生成结果插入到聊天输入框（有草稿则追加）
   const applyTpl = useCallback(
@@ -291,9 +356,10 @@ export function SelectionAddPrompt(props: Props): ReactNode {
       }
       setSelection({ text, rect: range.getBoundingClientRect() });
     };
-    // 选择动作开始：按下鼠标（非浮层按钮）进入「正在选择」状态
+    // 选择动作开始：按下鼠标（非浮层按钮）进入「正在选择」状态；同时在浮层外按下时收起「更多」面板
     const onMouseDown = (e: MouseEvent) => {
       if (floatingRef.current?.contains(e.target as Node)) return;
+      setMoreOpen(false);
       selectingRef.current = true;
     };
     // 选择动作结束：松开鼠标后计算最终选区并弹出按钮
@@ -302,8 +368,12 @@ export function SelectionAddPrompt(props: Props): ReactNode {
       selectingRef.current = false;
       update();
     };
-    // 键盘选字（Shift/方向键/Home/End/PageUp/PageDown）：按住期间同样不弹出
+    // 键盘选字（Shift/方向键/Home/End/PageUp/PageDown）：按住期间同样不弹出；Esc 收起「更多」面板
     const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setMoreOpen(false);
+        return;
+      }
       if (
         e.key === "Shift" ||
         e.key.startsWith("Arrow") ||
@@ -365,6 +435,11 @@ export function SelectionAddPrompt(props: Props): ReactNode {
       window.clearInterval(timer);
     };
   }, [enabled, open]);
+
+  // 选区消失（浮层收起）时同步收起「更多」面板，避免下次选中时面板残留展开
+  useEffect(() => {
+    if (!selection) setMoreOpen(false);
+  }, [selection]);
 
   const openModal = (text: string) => {
     setSelection(null);
@@ -432,8 +507,12 @@ export function SelectionAddPrompt(props: Props): ReactNode {
 .pl-selection-btn:hover{background:var(--dsw-alias-bg-layer-3, #eef1f5)}
 .pl-selection-btn:active{background:var(--dsw-alias-bg-layer-3, #e0e4ea)}
 .pl-selection-btn:disabled{opacity:.6;cursor:default}
+.pl-selection-row:hover{background:var(--dsw-alias-interactive-bg-hover, rgba(17,24,39,0.06))}
+.pl-selection-setdefault:hover{background:var(--dsw-alias-interactive-bg-hover, rgba(17,24,39,0.06));color:var(--dsw-alias-brand-primary, #4f9df5)}
 `}</style>
-      {/* 高亮选中 → 浮层工具栏：优先居选区上方居中；上方空间不足时翻转到选区下方。含「复制」与「添加提示词」 */}
+      {/* 高亮选中 → 浮层工具栏：只显示一个默认动作按钮 + 「更多」入口，
+          其余动作收进二级面板（可在面板内切换默认动作），尽量少占用选区空间，
+          避免与批注等其他选区浮层插件拥挤冲突。 */}
       {enabled && selection && (
         <div
           ref={floatingRef}
@@ -448,54 +527,167 @@ export function SelectionAddPrompt(props: Props): ReactNode {
             zIndex: 2147483647,
             display: "flex",
             alignItems: "center",
-            gap: 6,
+            gap: 4,
           }}
         >
+          {/* 默认动作按钮：仅图标（省空间），悬停可见动作名；展开面板后可看到带文字的完整动作列表 */}
           <button
             type="button"
             className="pl-selection-btn"
-            onClick={() => copySelected(selection.text)}
-            data-tip={T("pl.copySelected")}
-            style={floatingBtnStyle}
+            aria-label={actionLabel(defaultAction)}
+            onClick={() => {
+              if (defaultAction === "copy") copySelected(selection.text);
+              else if (defaultAction === "add") openModal(selection.text);
+              else openTplPicker(selection.text);
+            }}
+            data-tip={actionLabel(defaultAction)}
+            style={{ ...floatingBtnStyle, width: 30, padding: 0, justifyContent: "center" }}
           >
-            {copied ? (
+            {defaultAction === "copy" && copied ? (
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <path d="M20 6 9 17l-5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             ) : (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
-                <path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-              </svg>
+              ACTION_ICON[defaultAction]
             )}
-            {copied ? T("pl.copiedSelected") : T("pl.copySelected")}
           </button>
+          {/* 「更多」入口：展开二级面板（非默认动作 + 默认动作切换） */}
           <button
             type="button"
             className="pl-selection-btn"
-            onClick={() => openModal(selection.text)}
-            data-tip={T("pl.addToLibrary")}
-            style={floatingBtnStyle}
+            aria-expanded={moreOpen}
+            aria-haspopup="menu"
+            onClick={() => setMoreOpen((v) => !v)}
+            data-tip={T("pl.selectionMore")}
+            style={{ ...floatingBtnStyle, width: 26, padding: 0, justifyContent: "center" }}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              aria-hidden="true"
+              style={{ transform: moreOpen ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}
+            >
+              <path d="m6 9 6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
-            {T("pl.addToLibrary")}
           </button>
-          {/* 选中文本直接套模板：选择含 {{变量}} 的模板，选中文本自动预填变量后插入输入框 */}
-          <button
-            type="button"
-            className="pl-selection-btn"
-            onClick={() => openTplPicker(selection.text)}
-            data-tip={T("pl.applyTemplateTitle")}
-            style={floatingBtnStyle}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M4 6h9v4H4V6Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-              <path d="M4 14h9v4H4v-4ZM17 6h3M17 12h3M17 18h3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-            </svg>
-            {T("pl.applyTemplate")}
-          </button>
+          {/* 二级面板：列出全部动作；点击执行，右侧图标可把该动作设为默认 */}
+          {moreOpen && (
+            <div
+              role="menu"
+              aria-label={T("pl.selectionMore")}
+              style={{
+                position: "absolute",
+                top: "calc(100% + 6px)",
+                left: 0,
+                minWidth: 188,
+                boxSizing: "border-box",
+                padding: 4,
+                display: "flex",
+                flexDirection: "column",
+                gap: 2,
+                background: TONE.panel,
+                border: `1px solid ${TONE.border}`,
+                borderRadius: 10,
+                boxShadow: "0 8px 24px rgba(17, 24, 39, 0.16)",
+              }}
+            >
+              {SELECTION_ACTIONS.map((id) => (
+                <div key={id} role="menuitem" style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <button
+                    type="button"
+                    className="pl-selection-row"
+                    onClick={() => {
+                      // 复制需保留选区展示「已复制」反馈（由 copyingRef 锁定浮层），不收起面板；
+                      // 其余动作直接执行并关闭面板/浮层
+                      if (id === "copy") copySelected(selection.text);
+                      else {
+                        setMoreOpen(false);
+                        if (id === "add") openModal(selection.text);
+                        else openTplPicker(selection.text);
+                      }
+                    }}
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 7,
+                      padding: "7px 9px",
+                      border: 0,
+                      borderRadius: 7,
+                      background: "transparent",
+                      color: TONE.text,
+                      fontSize: 12,
+                      cursor: "pointer",
+                      textAlign: "left",
+                      whiteSpace: "nowrap",
+                      transition: "background 0.15s",
+                    }}
+                  >
+                    {id === "copy" && copied ? (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path d="M20 6 9 17l-5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    ) : (
+                      ACTION_ICON[id]
+                    )}
+                    {actionLabel(id)}
+                  </button>
+                  {id === defaultAction ? (
+                    <span
+                      style={{
+                        flexShrink: 0,
+                        fontSize: 10,
+                        lineHeight: 1,
+                        padding: "4px 6px",
+                        borderRadius: 6,
+                        color: "var(--dsw-alias-brand-primary, #4f9df5)",
+                        background: "color-mix(in srgb, var(--dsw-alias-brand-primary, #4f9df5) 12%, transparent)",
+                      }}
+                    >
+                      {T("pl.selectionIsDefault")}
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="pl-selection-setdefault"
+                      onClick={() => chooseDefaultAction(id)}
+                      data-tip={T("pl.selectionSetDefault")}
+                      aria-label={T("pl.selectionSetDefault")}
+                      style={{
+                        flexShrink: 0,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        width: 24,
+                        height: 24,
+                        padding: 0,
+                        border: 0,
+                        borderRadius: 6,
+                        background: "transparent",
+                        color: TONE.muted,
+                        cursor: "pointer",
+                        transition: "background 0.15s, color 0.15s",
+                      }}
+                    >
+                      {/* 图钉图标：点击设为默认动作 */}
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path
+                          d="M9 4h6M10 4v5.2a2 2 0 0 1-.4 1.2L8 12.5V14h8v-1.5l-1.6-2.1a2 2 0 0 1-.4-1.2V4M12 14v6"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

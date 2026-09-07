@@ -3,3 +3,4 @@ node_modules
 .build-meta.json
 debug.log
 
+/.workbuddy

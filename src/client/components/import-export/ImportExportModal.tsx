@@ -454,19 +454,6 @@ export function ImportExportModal(props: {
       aria-modal="true"
       aria-label={T("pl.moduleImportExport")}
       className={container ? undefined : maximized ? `${PL_DIALOG_OVERLAY} ${PL_DIALOG_OVERLAY_MAX}` : PL_DIALOG_OVERLAY}
-      onClick={(e) => {
-        // 点击蒙层（空白处）关闭；点击对话框内部不关闭
-        // 有二级弹窗（技能导入/导出、通用导入、预览删除确认）打开时，不响应点击关闭，需先关闭二级弹窗
-        if (
-          skillImportOpen ||
-          importEditOpen ||
-          skillExportOpen ||
-          deleteTarget
-        ) {
-          return;
-        }
-        if (!container && e.target === e.currentTarget) onClose();
-      }}
     >
       {!container && <style>{PL_DIALOG_CSS}</style>}
       <style>{`

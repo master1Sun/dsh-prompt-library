@@ -188,10 +188,9 @@ export function registerSettingsAboveMenu(
   };
 
   const buildPanel = (): HTMLElement => {
-    // 遮罩层：点击空白区域关闭
+    // 遮罩层：仅作视觉蒙层，点击空白区域不关闭面板（只能通过关闭按钮或再次点击词库按钮关闭）
     const backdrop = document.createElement("div");
     backdrop.className = "pl-sa-backdrop";
-    backdrop.addEventListener("click", closePanel);
     document.body.appendChild(backdrop);
 
     // 面板容器：居中显示，尺寸与设置弹窗一致（800x800，随屏幕自适应）

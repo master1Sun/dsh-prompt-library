@@ -1,0 +1,8 @@
+node_modules
+*.map
+.build-meta.json
+debug.log
+
+/.workbuddy
+*.tmp.html
+*.tmp.*

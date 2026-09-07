@@ -1,0 +1,107 @@
+{
+  "name": "@sunjuntao/dsh-prompt-library",
+  "version": "0.13.0",
+  "description": "DSH 提示词库插件：集中管理提示词（增删改查、标签分类、导入导出、AI 优化），聊天快捷收录与调用，附会话监控与文件预览。 DSH Prompt Library plugin: manage prompts (CRUD, tags, import/export, AI polish), quick capture & reuse in chat, plus conversation monitor and preview.",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/types/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/master1Sun/dsh-prompt-library.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "dsh",
+    "plugin",
+    "prompt",
+    "prompt-library",
+    "提示词",
+    "deepseek-harness",
+    "dsh-plugin"
+  ],
+  "author": "master1Sun",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "scripts": {
+    "link-dsh-deps": "node scripts/link-dsh-deps.mjs",
+    "build": "node scripts/build.mjs",
+    "build:dev": "node scripts/build.mjs --dev",
+    "sync": "node scripts/sync-to-profile.mjs",
+    "deploy": "npm run build:dev && npm run sync",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "node scripts/build.mjs",
+    "npm-publish": "npm publish --access public",
+    "git:patch": "pnpm version patch",
+    "git:minor": "pnpm version minor",
+    "git:major": "pnpm version major",
+    "git-push": "git push && git push --tags",
+    "release": "node scripts/release.mjs",
+    "test": "node scripts/run-tests.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1-rc.1",
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": false
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    },
+    "react": {
+      "optional": false
+    },
+    "react-dom": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.0",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.6.0"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19"
+  },
+  "dependencies": {
+    "js-yaml": "^5.3.0",
+    "@types/prismjs": "^1.26.6",
+    "jszip": "^3.10.1",
+    "prismjs": "^1.30.0"
+  }
+}

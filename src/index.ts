@@ -42,8 +42,6 @@ import {
   type SessionQueryRecord,
 } from "./host/session-scope.js";
 import { autoUpdateDaily } from "./host/update.js";
-// workbench：启动时做一次「未安装则安装」检查，每日再由定时器检查远端版本并就地更新
-import { ensureWorkbenchInstalled, checkWorkbenchUpdate } from "./host/updateWorkbench.js";
 import { autoBackup } from "./host/backup.js";
 // 操作手册：纯文本字符串，聊天消息按纯文本渲染（markdown/HTML 都无法解析），用换行符排版
 import { manualEn, manualZh } from "./manual.js";
@@ -352,7 +350,7 @@ export function apply(ctx: Context) {
   // 注意：不能直接读 ctx.sessionQuery —— 未注入时 Cordis 会抛「cannot get property without inject」，
   // 必须用 ctx.inject 等待服务注入后，在子上下文里访问；服务不可用则不注册，树里不显示会话。
   try {
-    ctx.inject(["sessionQuery"], (sessionCtx) => {
+    ctx.inject(["sessionQuery"], (sessionCtx: unknown) => {
       const sc = sessionCtx as unknown as {
         sessionQuery: {
           listSessions: () => Promise<Array<{ header: { id: string; cwd?: string } }>>;
@@ -744,14 +742,6 @@ export function apply(ctx: Context) {
     void autoUpdateDaily();
   }, 24 * 60 * 60 * 1000);
 
-  // —— workbench：启动时检测一次，未安装则安装（已装则不管） ——
-  void ensureWorkbenchInstalled();
-
-  // —— workbench 每日检查：远端有更高版本就就地更新，完成后 SSE 推前端弹「需重启」气泡 ——
-  const workbenchTimer = setInterval(() => {
-    void checkWorkbenchUpdate();
-  }, 24 * 60 * 60 * 1000);
-
   // —— 每周自动统计：每 7 天生成一次「近 7 天」统计快照写入 stats_history ——
   // 统计的只是近 7 天的增量数据（新增/使用/AI 完善），避免把历史累计反复重复统计；
   // 快照生成时若 AI 可用，会由 AI 生成一段简短的运营点评写入 comment 字段。
@@ -776,7 +766,6 @@ export function apply(ctx: Context) {
     bus.off("session/event", onSessionScope);
     if (weeklySnapshotTimer) clearInterval(weeklySnapshotTimer);
     if (versionTimer) clearInterval(versionTimer);
-    if (workbenchTimer) clearInterval(workbenchTimer);
     if (backupTimer) clearInterval(backupTimer);
   };
 }

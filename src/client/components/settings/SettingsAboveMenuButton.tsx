@@ -36,7 +36,7 @@ import { PL_DIALOG_CSS } from "../../utils/dialog-style.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-/** 7 个导航项配置。 */
+/** 导航项配置。 */
 interface NavItem {
   id: string;
   labelKey: string;
@@ -117,6 +117,13 @@ const NAV_ITEMS: NavItem[] = [
     iconColor: "#0d9488",
     iconBody: '<ellipse cx="8" cy="4" rx="5" ry="1.8"/><path d="M3 4v5.5c0 1 2.2 1.8 5 1.8s5-.8 5-1.8V4"/><path d="M3 9.5V15c0 1 2.2 1.8 5 1.8s5-.8 5-1.8V9.5"/>',
   },
+  {
+    id: "pluginReco",
+    labelKey: "pl.ctx.pluginReco",
+    iconBg: "rgba(13, 148, 136, .12)",
+    iconColor: "#0d9488",
+    iconBody: '<path d="M3 5.5 8 3l5 2.5v5L8 13 3 10.5Z"/><path d="M3 5.5 8 8l5-2.5M8 8v5"/>',
+  },
 ];
 
 /** 各导航项对应的功能类型（与 PromptAssistant panelNavKey 值一致）。 */
@@ -131,6 +138,7 @@ const PANEL_TYPE_MAP: Record<string, string> = {
   tags: "tags",
   trash: "trash",
   dbPreview: "dbPreview",
+  pluginReco: "pluginReco",
 };
 
 let pendingPanelType: string | null = null;

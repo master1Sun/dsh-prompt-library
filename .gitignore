@@ -4,3 +4,5 @@ node_modules
 debug.log
 
 /.workbuddy
+*.tmp.html
+*.tmp.*

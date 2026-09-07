@@ -15,13 +15,87 @@
  */
 import { get as httpsGet } from "node:https";
 import type { IncomingMessage } from "node:http";
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
 import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { getSettings, readGlobalLocale } from "./store.js";
 import { dshHome, logDir } from "./paths.js";
-import { installFromGit } from "./updateWorkbench.js";
+
+const execFileP = promisify(execFile);
+
+type JsonLike = { [k: string]: unknown } | null;
+
+/** 读取 JSON 文件，失败返回 null。 */
+async function readJson(p: string): Promise<JsonLike> {
+  try {
+    return JSON.parse(await readFile(p, "utf8")) as JsonLike;
+  } catch {
+    return null;
+  }
+}
+
+/** 忽略前导 v 的裸版本号。 */
+function bare(tag: string): string {
+  return tag.replace(/^v/i, "");
+}
+
+/** 判断本地路径是否为文件/目录（同步，避免 await 嵌套）。 */
+function fsExists(p: string): boolean {
+  try {
+    statSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 从目标包根路径（.../node_modules/@scope/name）推导包名。 */
+function pkgNameFromDest(dest: string): string {
+  const idx = dest.indexOf("node_modules");
+  const rel = idx >= 0 ? dest.slice(idx + "node_modules".length + 1) : dest;
+  return rel.split(/[\\/]/).join("/");
+}
+
+/**
+ * 从 git clone 指定 tag 并把发布内容铺到目标目录（lib/ + package.json + cordis.patch.yml）。
+ * 远端 tag 可能只发布编译产物而无 package.json，此时按目标路径推导包名并生成最小 package.json。
+ */
+async function installFromGit(repo: string, rawTag: string, dest: string): Promise<void> {
+  const staging = join(tmpdir(), `wb-install-${Date.now()}`);
+  await rm(staging, { recursive: true, force: true });
+  await mkdir(staging, { recursive: true });
+  try {
+    await execFileP(
+      "git",
+      ["clone", "--depth", "1", "--branch", rawTag, "--single-branch", "--", repo, staging],
+      { timeout: 120_000, windowsHide: true },
+    );
+    await stat(join(staging, "lib"));
+
+    const remotePkg = await readJson(join(staging, "package.json"));
+    let pkg: Record<string, unknown>;
+    if (remotePkg) {
+      pkg = { ...remotePkg, version: bare(String(remotePkg.version ?? "")) || bare(rawTag) };
+    } else {
+      pkg = { name: pkgNameFromDest(dest), version: bare(rawTag), type: "module", main: "./lib/index.js" };
+    }
+
+    await mkdir(dest, { recursive: true });
+    await rm(dest, { recursive: true, force: true });
+    await mkdir(dest, { recursive: true });
+    await cp(join(staging, "lib"), join(dest, "lib"), { recursive: true });
+    await writeFile(join(dest, "package.json"), JSON.stringify(pkg, null, 2) + "\n", "utf8");
+    if (fsExists(join(staging, "cordis.patch.yml"))) {
+      await cp(join(staging, "cordis.patch.yml"), join(dest, "cordis.patch.yml"));
+    }
+  } finally {
+    await rm(staging, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
 
 /** npm registry 中本包的 latest 端点（scoped 包需把 `/` 编码为 `%2f`）。 */
 const REGISTRY_URL = "https://registry.npmjs.org/@sunjuntao%2fdsh-prompt-library/latest";

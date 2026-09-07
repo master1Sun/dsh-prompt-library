@@ -95,6 +95,7 @@ import {
   setSessionPromptBindingForSession,
 } from "./session-prompts.js";
 import { checkUpdate, getUpgradeState, getVersionInfo, restartService, startUpgrade } from "./update.js";
+import { fetchPluginMarket } from "./plugin-market.js";
 import { getActivity, onActivityChange } from "./activity.js";
 import { buildAssistantStatus, computeAchievementProgress, emitStatusChange, onStatusChange } from "./gamification.js";
 import { getAnnouncement } from "./announcement.js";
@@ -2307,6 +2308,14 @@ export function makePromptRoutes(): WebRoute[] {
       // GET /plugins/prompt-library — 检测 dsh-prompt-library 是否已安装（当前宿主即该插件，恒为已安装）。
       if (method === "GET" && segments[0] === "plugins" && segments[1] === "prompt-library" && segments.length === 2) {
         return json(res, 200, { ok: true, data: { installed: true } });
+      }
+
+      // GET /plugin-market — 插件市场热门榜单（dsh-plugin.org，TTL 缓存；
+      // ?force=1 跳过 TTL 强制实时抓取）
+      if (method === "GET" && tail === "/plugin-market") {
+        const q = new URLSearchParams((req.url ?? "").split("?", 2)[1] ?? "");
+        const market = await fetchPluginMarket(q.has("force"));
+        return json(res, 200, { ok: true, data: market });
       }
 
       return json(res, 404, { ok: false, error: `no route ${method} ${tail}` });

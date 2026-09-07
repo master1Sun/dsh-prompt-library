@@ -274,7 +274,7 @@ export function isDeepSeekProviderInUse(settings: PluginSettings): boolean {
   if (llm) {
     return llm
       .listProviders()
-      .some((p) => /deepseek/i.test(`${p.id} ${p.name ?? ""}`));
+      .some((p: { id: string; name?: string }) => /deepseek/i.test(`${p.id} ${p.name ?? ""}`));
   }
   return false;
 }
@@ -391,7 +391,7 @@ async function isModelAvailable(
 ): Promise<boolean> {
   try {
     const models = await runtime.listModels(provider);
-    return models.some((m) => m.id.toLowerCase() === model.toLowerCase());
+    return models.some((m: { id: string }) => m.id.toLowerCase() === model.toLowerCase());
   } catch {
     return false;
   }
@@ -556,7 +556,7 @@ async function collectText(
   const text = assembler
     .blocks()
     .filter((b) => b.type === "text")
-    .map((b) => (b as { text: string }).text)
+    .map((b) => b.text ?? "")
     .join("")
     .trim();
   if (!text) {

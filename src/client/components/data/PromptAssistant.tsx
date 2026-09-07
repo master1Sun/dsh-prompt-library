@@ -42,6 +42,7 @@ import { WhaleStage } from "./WhaleStage.js";
 import { DashboardModal } from "../dashboard/DashboardModal.js";
 import { ImportExportModal } from "../import-export/ImportExportModal.js";
 import { LexiconManagerModal } from "./LexiconManagerModal.js";
+import { PluginRecoPanel } from "./PluginRecoPanel.js";
 import { DbPreviewPanel } from "./DbPreviewPanel.js";
 import { TagManagePanel } from "./TagManagePanel.js";
 import { RecycleManagePanel } from "./RecycleManagePanel.js";
@@ -1033,6 +1034,8 @@ export function PromptAssistant(props: Props): ReactNode {
                 return <AnnouncementModal open onClose={closePanelContent} t={T} container={panelContainerRef.current} />;
               case "dbPreview":
                 return <DbPreviewPanel t={T} />;
+              case "pluginReco":
+                return <PluginRecoPanel t={T} />;
               case "tags":
                 return (
                   <>

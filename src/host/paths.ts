@@ -44,6 +44,11 @@ export function storePath(): string {
   return join(dataDir(), "prompts.json");
 }
 
+/** 插件市场热门榜单缓存：~/.dsh/prompt-library/plugin-market.json */
+export function pluginMarketCachePath(): string {
+  return join(dataDir(), "plugin-market.json");
+}
+
 /** SQLite 数据库目录：~/.dsh/prompt-library/db/ */
 export function dbDir(): string {
   return join(dataDir(), "db");

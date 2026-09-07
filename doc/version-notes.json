@@ -1,5 +1,33 @@
 [
   {
+    "version": "0.13.0",
+    "date": "2026-09-07",
+    "zh": {
+      "title": "插件推荐面板 · 热门榜单实时获取 · 词库弹窗最大化",
+      "items": [
+        "插件推荐面板：设置弹窗新增「插件推荐」页面，集中展示 DSH 热门插件榜单，dsh-file-workbench 与 dsh-prompt-library 置顶（带「推荐」标识），其余按热度排序。",
+        "榜单实时获取：数据实时抓取自 dsh-plugin.org 热门榜单，展示版本、Stars、许可证与 Git 仓库地址；无网络时自动降级到上次缓存，再兜底内置数据，三层保障随时可看。",
+        "一键安装：详情页提供 git clone 与 dsh plugin add 安装命令，点击即可复制，快速完成插件配置。",
+        "移除 workbench 自动更新：不再自动安装/更新 dsh-file-workbench，去掉了相关定时检查与更新提醒，行为更可控。",
+        "词库管理弹窗最大化：词库管理弹窗支持一键最大化/还原，浏览与编辑长提示词更舒适。",
+        "选中文字显示修复：修复部分场景下选中文字高亮显示异常的问题。",
+        "词库浮层触发修复：# 触发的词库浮层仅在系统会话输入框生效，其他输入场景不再误弹。"
+      ]
+    },
+    "en": {
+      "title": "Plugin recommendation panel · Live hot list · Lexicon dialog maximize",
+      "items": [
+        "Plugin recommendations: the settings dialog gains a \"Plugin recommendations\" page listing the DSH hot plugins, with dsh-file-workbench and dsh-prompt-library pinned on top (marked \"Rec.\") and the rest sorted by popularity.",
+        "Live market data: the list is fetched live from the dsh-plugin.org hot list, showing version, stars, license and Git repo; without network it falls back to the last cache, then to built-in data — three layers so it is always viewable.",
+        "One-click install: the detail page offers git clone and dsh plugin add commands, copyable on click for quick plugin setup.",
+        "Workbench auto-update removed: dsh-file-workbench is no longer auto-installed/updated; the periodic checks and update notices are gone for more predictable behavior.",
+        "Lexicon dialog maximize: the lexicon manager dialog can now be maximized / restored with one click, more comfortable for long prompts.",
+        "Selection highlight fix: fixed text-selection highlight rendering abnormally in some scenarios.",
+        "Lexicon overlay trigger fix: the \"#\" lexicon overlay now triggers only in system conversation inputs, no longer popping up in other input fields."
+      ]
+    }
+  },
+  {
     "version": "0.12.1",
     "date": "2026-09-02",
     "zh": {

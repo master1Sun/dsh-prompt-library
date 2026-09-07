@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 技能管理弹窗 — 词库助手右键菜单「技能管理」打开。
  *
  * 界面与「人格管理」弹窗（PersonaManagerModal）保持一致的风格：
@@ -38,9 +38,10 @@ import {
 import { notifyDataChanged } from "../../utils/data-sync.js";
 import { plBtn } from "../../utils/button-style.js";
 import { getTone, useThemeSync } from "../../utils/theme.js";
-import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_EMBED_OVERLAY, PL_DIALOG_OVERLAY } from "../../utils/dialog-style.js";
+import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_EMBED_OVERLAY, PL_DIALOG_MAX, PL_DIALOG_OVERLAY, PL_DIALOG_OVERLAY_MAX } from "../../utils/dialog-style.js";
 import { ConfirmDialog } from "../common/ConfirmDialog.js";
 import { DialogCloseButton } from "../common/DialogCloseButton.js";
+import { WindowToggleButton } from "../common/WindowToggleButton.js";
 import { ImportConfirmModal } from "../import-export/ImportConfirmModal.js";
 import { HarnessSkillPanel } from "./HarnessSkillPanel.js";
 import { type PLT } from "../../utils/i18n.js";
@@ -115,6 +116,7 @@ function BookIcon({ color, size = 14 }: { color: string; size?: number }): React
 export function PromptInjectPanel({ open, onClose, t, container }: Props): ReactNode {
   useThemeSync();
   const TONE = getTone();
+  const [maximized, setMaximized] = useState(false);
 
   // 会话级技能列表及其加载状态
   const [prompts, setPrompts] = useState<SessionPrompt[]>([]);
@@ -1238,7 +1240,7 @@ export function PromptInjectPanel({ open, onClose, t, container }: Props): React
           role="dialog"
           aria-modal="true"
           aria-label={t("pl.inject.title")}
-          className={container ? undefined : PL_DIALOG_OVERLAY}
+          className={container ? undefined : maximized ? `${PL_DIALOG_OVERLAY} ${PL_DIALOG_OVERLAY_MAX}` : PL_DIALOG_OVERLAY}
           onClick={(e) => {
             // 点击蒙层（空白处）关闭；点击对话框内部不关闭
             if (!container && e.target === e.currentTarget) onClose();
@@ -1246,7 +1248,7 @@ export function PromptInjectPanel({ open, onClose, t, container }: Props): React
         >
           {!container && <style>{PL_DIALOG_CSS}</style>}
           <div
-            className={PL_DIALOG}
+            className={maximized ? `${PL_DIALOG} ${PL_DIALOG_MAX}` : PL_DIALOG}
             style={{
               ...(container ? {} : { width: 800, height: 800 }),
               maxWidth: "calc(100vw - 40px)",
@@ -1259,7 +1261,17 @@ export function PromptInjectPanel({ open, onClose, t, container }: Props): React
               <strong style={{ flex: 1, fontSize: 15, fontWeight: 600, color: TONE.text }}>
                 {t("pl.inject.title")}
               </strong>
-              {!container && <DialogCloseButton onClick={onClose} label={t("pl.close")} />}
+              {!container && (
+                <>
+                  <WindowToggleButton
+                    maximized={maximized}
+                    onToggle={() => setMaximized((v) => !v)}
+                    maximizeLabel={t("pl.windowMaximize")}
+                    restoreLabel={t("pl.windowRestore")}
+                  />
+                  <DialogCloseButton onClick={onClose} label={t("pl.close")} />
+                </>
+              )}
             </div>
 
             {/* 绑定说明 */}

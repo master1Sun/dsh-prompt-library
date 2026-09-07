@@ -29,12 +29,15 @@ import { plBtn } from "../../utils/button-style.js";
 import {
   PL_DIALOG,
   PL_DIALOG_CSS,
+  PL_DIALOG_MAX,
   PL_DIALOG_OVERLAY,
+  PL_DIALOG_OVERLAY_MAX,
 } from "../../utils/dialog-style.js";
 import { getTone, useThemeSync } from "../../utils/theme.js";
 import { type PLT, type PLTranslate, usePLT } from "../../utils/i18n.js";
 import { ConfirmDialog } from "../common/ConfirmDialog.js";
 import { DialogCloseButton } from "../common/DialogCloseButton.js";
+import { WindowToggleButton } from "../common/WindowToggleButton.js";
 import { BookIcon } from "../common/BookIcon.js";
 import { SkillImportModal } from "./SkillImportModal.js";
 import { ImportEditModal } from "./ImportEditModal.js";
@@ -167,6 +170,7 @@ export function ImportExportModal(props: {
   const T = usePLT(t);
   useThemeSync(); // 订阅宿主主题变化，切换白天/黑夜时刷新主题色
   const TONE = getTone();
+  const [maximized, setMaximized] = useState(false);
   // 时间格式化：与词库管理预览一致
   const fmtTime = (ts: number): string =>
     ts ? new Date(ts).toLocaleString() : "-";
@@ -449,7 +453,7 @@ export function ImportExportModal(props: {
       role="dialog"
       aria-modal="true"
       aria-label={T("pl.moduleImportExport")}
-      className={container ? undefined : PL_DIALOG_OVERLAY}
+      className={container ? undefined : maximized ? `${PL_DIALOG_OVERLAY} ${PL_DIALOG_OVERLAY_MAX}` : PL_DIALOG_OVERLAY}
       onClick={(e) => {
         // 点击蒙层（空白处）关闭；点击对话框内部不关闭
         // 有二级弹窗（技能导入/导出、通用导入、预览删除确认）打开时，不响应点击关闭，需先关闭二级弹窗
@@ -474,7 +478,7 @@ export function ImportExportModal(props: {
 .pl-lex-row--active{background:rgba(142,197,255,.10);border-color:rgba(142,197,255,.5)}
 `}</style>
       <div
-        className={PL_DIALOG}
+        className={maximized ? `${PL_DIALOG} ${PL_DIALOG_MAX}` : PL_DIALOG}
         style={{
           position: "relative",
           ...(container ? {} : { width: 800, height: 800 }),
@@ -503,7 +507,17 @@ export function ImportExportModal(props: {
           >
             {T("pl.moduleImportExport")}
           </strong>
-          {!container && <DialogCloseButton onClick={onClose} label={T("pl.close")} />}
+          {!container && (
+            <>
+              <WindowToggleButton
+                maximized={maximized}
+                onToggle={() => setMaximized((v) => !v)}
+                maximizeLabel={T("pl.windowMaximize")}
+                restoreLabel={T("pl.windowRestore")}
+              />
+              <DialogCloseButton onClick={onClose} label={T("pl.close")} />
+            </>
+          )}
         </div>
         {/* 模块说明（与人格管理 / 技能管理说明框一致） */}
         <div

@@ -252,9 +252,10 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
   }
 
   // 会话注入信息：读取 trajectory 投影里的最近一次请求（系统提示 + 工具 schema）。
-  // trajectory 插件未加载时 `views.get` 返回 undefined，相应子块自动隐藏。
+  // trajectory 插件未加载时 `s.views` 或 `views.get` 可能为 undefined，需容错，
+  // 否则会抛 `Cannot read properties of undefined (reading 'get')` 导致会话视图插槽崩溃。
   const trajectory = useSession(
-    (s) => (s.views as unknown as Map<string, TrajectorySnapshotView | undefined>).get("trajectory"),
+    (s) => (s.views as unknown as Map<string, TrajectorySnapshotView | undefined> | undefined)?.get("trajectory"),
   ) as TrajectorySnapshotView | undefined;
   const latestRequest = useMemo(() => {
     if (!trajectory?.requests) return undefined;

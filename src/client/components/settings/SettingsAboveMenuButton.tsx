@@ -217,14 +217,88 @@ export function registerSettingsAboveMenu(
     const titleSpan = document.createElement("span");
     titleSpan.textContent = getTranslation("pl.title");
     titleSpan.style.cssText = "font-size:14px;font-weight:600;color:var(--dsw-alias-label-primary,#1f2937);";
+
+    // 最大化/还原按钮：置于关闭按钮左侧；最大化时面板铺满视口，再次点击还原
+    let maximized = false;
+    const maxBtn = document.createElement("button");
+    maxBtn.type = "button";
+    maxBtn.className = "pl-sa-close-btn";
+    const setMaxIcon = (on: boolean): void => {
+      maxBtn.innerHTML = on
+        ? '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="9" width="10" height="10" rx="2"/><path d="M9 9V5h10v10h-4"/></svg>'
+        : '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>';
+      maxBtn.setAttribute("aria-label", getTranslation(on ? "pl.windowRestore" : "pl.windowMaximize"));
+      maxBtn.title = getTranslation(on ? "pl.windowRestore" : "pl.windowMaximize");
+    };
+    setMaxIcon(false);
+    const fillDesktopRect = (): { left: number; top: number; width: number; height: number } => {
+      // 桌面端宿主在顶部保留 36px 标题条，#root 自 top:36px 起；最大化应只铺满其下内容区
+      const root = document.getElementById("root");
+      const r = root?.getBoundingClientRect();
+      if (r && r.width > 0 && r.height > 0) {
+        return { left: r.left, top: r.top, width: r.width, height: r.height };
+      }
+      return { left: 0, top: 36, width: window.innerWidth, height: Math.max(0, window.innerHeight - 36) };
+    };
+    const isDesktopMode = (): boolean => {
+      const m = (document.body.getAttribute("data-dsh-desktop-mode") || "").toLowerCase();
+      return m === "compatibility" || m === "extended";
+    };
+    const applyGeometry = (): void => {
+      if (maximized) {
+        if (isDesktopMode()) {
+          const r = fillDesktopRect();
+          panel.style.left = `${r.left}px`;
+          panel.style.top = `${r.top}px`;
+          panel.style.right = "auto";
+          panel.style.bottom = "auto";
+          panel.style.width = `${r.width}px`;
+          panel.style.height = `${r.height}px`;
+        } else {
+          panel.style.left = "0";
+          panel.style.top = "0";
+          panel.style.right = "0";
+          panel.style.bottom = "0";
+          panel.style.width = "auto";
+          panel.style.height = "auto";
+        }
+        panel.style.transform = "none";
+        panel.style.maxWidth = "none";
+        panel.style.maxHeight = "none";
+        panel.style.borderRadius = "0";
+      } else {
+        panel.style.left = "50%";
+        panel.style.top = "50%";
+        panel.style.right = "auto";
+        panel.style.bottom = "auto";
+        panel.style.width = "min(850px, calc(100vw - 40px))";
+        panel.style.height = "min(800px, calc(100vh - 40px))";
+        panel.style.transform = "translate(-50%, -50%)";
+        panel.style.maxWidth = "";
+        panel.style.maxHeight = "";
+        panel.style.borderRadius = "24px";
+      }
+    };
+    maxBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      maximized = !maximized;
+      setMaxIcon(maximized);
+      applyGeometry();
+    });
+
     const closeBtn = document.createElement("button");
     closeBtn.type = "button";
     closeBtn.className = "pl-sa-close-btn";
     closeBtn.setAttribute("aria-label", getTranslation("pl.close"));
     closeBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"/></svg>';
     closeBtn.addEventListener("click", closePanel);
+    // 右侧按钮组：最大化/还原 紧挨着 关闭 ✕，整体靠右
+    const headerActions = document.createElement("div");
+    headerActions.style.cssText = "display:flex;align-items:center;gap:6px;flex-shrink:0;margin-left:12px;";
+    headerActions.appendChild(maxBtn);
+    headerActions.appendChild(closeBtn);
     header.appendChild(titleSpan);
-    header.appendChild(closeBtn);
+    header.appendChild(headerActions);
     panel.appendChild(header);
 
     // 主体区域（侧边栏 + 内容）

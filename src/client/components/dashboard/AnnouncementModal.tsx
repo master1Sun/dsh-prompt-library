@@ -24,7 +24,8 @@ import {
 } from "../../utils/api.js";
 import { getTone, useThemeSync } from "../../utils/theme.js";
 import { DialogCloseButton } from "../common/DialogCloseButton.js";
-import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../../utils/dialog-style.js";
+import { WindowToggleButton } from "../common/WindowToggleButton.js";
+import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_MAX, PL_DIALOG_OVERLAY, PL_DIALOG_OVERLAY_MAX } from "../../utils/dialog-style.js";
 
 /** 报纸衬线字体栈（报头大标题 + 栏目题）。 */
 const SERIF = 'Georgia, "Times New Roman", "Songti SC", "SimSun", "PMingLiU", serif';
@@ -175,6 +176,7 @@ function NavIcon({
 export function AnnouncementModal({ open, onClose, t, container }: Props): ReactNode {
   useThemeSync(); // 订阅宿主主题变化，切换白天/黑夜时刷新主题色
   const TONE = getTone();
+  const [maximized, setMaximized] = useState(false);
   // 语言与界面文案（t）同源推导：界面为英文（t 返回英文）时，日报/成就速报也请求英文版本，
   // 避免用浏览器/宿主 document lang 导致「界面英文、内容中文」不一致。
   const lang: "zh" | "en" = t("pl.announce.dailyTitle") === "Daily Report" ? "en" : "zh";
@@ -287,7 +289,7 @@ export function AnnouncementModal({ open, onClose, t, container }: Props): React
       role="dialog"
       aria-modal="true"
       aria-label={t("pl.announce.title")}
-      className={container ? undefined : PL_DIALOG_OVERLAY}
+      className={container ? undefined : maximized ? `${PL_DIALOG_OVERLAY} ${PL_DIALOG_OVERLAY_MAX}` : PL_DIALOG_OVERLAY}
       onClick={(e) => {
         // 点击蒙层（空白处）关闭；点击对话框内部不关闭
         if (!container && e.target === e.currentTarget) onClose();
@@ -296,7 +298,7 @@ export function AnnouncementModal({ open, onClose, t, container }: Props): React
       {!container && <style>{PL_DIALOG_CSS}</style>}
       <style>{`@keyframes plPageFade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}.pl-page-turn{animation:plPageFade .32s ease-out}`}</style>
       <div
-        className={PL_DIALOG}
+        className={maximized ? `${PL_DIALOG} ${PL_DIALOG_MAX}` : PL_DIALOG}
         style={{
           ...(container ? {} : { width: 800, height: 800 }),
           maxWidth: "calc(100vw - 40px)",
@@ -305,7 +307,17 @@ export function AnnouncementModal({ open, onClose, t, container }: Props): React
       >
         {/* 右上角关闭按钮（仅按钮触发） */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", flexShrink: 0 }}>
-          {!container && <DialogCloseButton onClick={onClose} label={t("pl.close")} />}
+          {!container && (
+            <>
+              <WindowToggleButton
+                maximized={maximized}
+                onToggle={() => setMaximized((v) => !v)}
+                maximizeLabel={t("pl.windowMaximize")}
+                restoreLabel={t("pl.windowRestore")}
+              />
+              <DialogCloseButton onClick={onClose} label={t("pl.close")} />
+            </>
+          )}
         </div>
 
         {/* 内容区：整块限制在弹窗高度内，网格自适应填充，不出现滚动条 */}

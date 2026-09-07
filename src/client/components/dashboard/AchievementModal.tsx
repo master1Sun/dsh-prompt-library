@@ -20,8 +20,9 @@ import {
 } from "../../utils/api.js";
 import { getTone, useThemeSync, contrastFg, type ThemeTone } from "../../utils/theme.js";
 import { DialogCloseButton } from "../common/DialogCloseButton.js";
+import { WindowToggleButton } from "../common/WindowToggleButton.js";
 import { BookIcon } from "../common/BookIcon.js";
-import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../../utils/dialog-style.js";
+import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_MAX, PL_DIALOG_OVERLAY, PL_DIALOG_OVERLAY_MAX } from "../../utils/dialog-style.js";
 import { LEVEL_COLORS, MAX_LEVEL } from "../../utils/sprite.js";
 
 interface Props {
@@ -1501,6 +1502,7 @@ function TarotSlotCard({ no, t, TONE, lang }: { no: number; t: PLT; TONE: ThemeT
 export function AchievementModal({ open, onClose, t, container }: Props): ReactNode {
   useThemeSync(); // 订阅宿主主题变化，切换白天/黑夜时刷新主题色
   const TONE = getTone();
+  const [maximized, setMaximized] = useState(false);
   // 区块小标题样式（跟随当前主题）
   const sectionTitleStyle: CSSProperties = {
     fontSize: 13,
@@ -1594,7 +1596,7 @@ export function AchievementModal({ open, onClose, t, container }: Props): ReactN
       role="dialog"
       aria-modal="true"
       aria-label={t("pl.achievements.title")}
-      className={container ? undefined : PL_DIALOG_OVERLAY}
+      className={container ? undefined : maximized ? `${PL_DIALOG_OVERLAY} ${PL_DIALOG_OVERLAY_MAX}` : PL_DIALOG_OVERLAY}
       onClick={(e) => {
         // 点击蒙层（空白处）关闭；点击对话框内部不关闭
         if (!container && e.target === e.currentTarget) onClose();
@@ -1602,7 +1604,7 @@ export function AchievementModal({ open, onClose, t, container }: Props): ReactN
     >
       {!container && <style>{PL_DIALOG_CSS}</style>}
       <div
-        className={PL_DIALOG}
+        className={maximized ? `${PL_DIALOG} ${PL_DIALOG_MAX}` : PL_DIALOG}
         style={{
           ...(container ? {} : { width: 800, height: 800 }),
           maxWidth: "calc(100vw - 40px)",
@@ -1615,7 +1617,17 @@ export function AchievementModal({ open, onClose, t, container }: Props): ReactN
             <BookIcon color={TONE.accent} size={15} />
             <span>{t("pl.achievements.title")}</span>
           </strong>
-          {!container && <DialogCloseButton onClick={onClose} label={t("pl.close")} />}
+          {!container && (
+            <>
+              <WindowToggleButton
+                maximized={maximized}
+                onToggle={() => setMaximized((v) => !v)}
+                maximizeLabel={t("pl.windowMaximize")}
+                restoreLabel={t("pl.windowRestore")}
+              />
+              <DialogCloseButton onClick={onClose} label={t("pl.close")} />
+            </>
+          )}
         </div>
 
         {/* 说明 */}

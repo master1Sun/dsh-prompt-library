@@ -5,14 +5,15 @@
  * 标签分布与近期/沉睡提示词等统计视角。
  * 交互约束（与人格管理一致）：可通过右上角关闭按钮或点击蒙层空白处关闭。
  */
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { type PLT } from "../../utils/i18n.js";
 import { StatsPanel } from "./StatsPanel.js";
 import { DialogCloseButton } from "../common/DialogCloseButton.js";
+import { WindowToggleButton } from "../common/WindowToggleButton.js";
 import { BookIcon } from "../common/BookIcon.js";
 import { getTone, useThemeSync } from "../../utils/theme.js";
-import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../../utils/dialog-style.js";
+import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_MAX, PL_DIALOG_OVERLAY, PL_DIALOG_OVERLAY_MAX } from "../../utils/dialog-style.js";
 
 interface Props {
   /** 是否显示。 */
@@ -29,6 +30,7 @@ interface Props {
 export function DashboardModal({ open, onClose, t, container }: Props): ReactNode {
   useThemeSync(); // 订阅宿主主题变化，切换白天/黑夜时刷新主题色
   const TONE = getTone();
+  const [maximized, setMaximized] = useState(false);
 
   if (!open) return null;
 
@@ -37,7 +39,7 @@ export function DashboardModal({ open, onClose, t, container }: Props): ReactNod
       role="dialog"
       aria-modal="true"
       aria-label={t("pl.ctx.dashboard")}
-      className={container ? undefined : PL_DIALOG_OVERLAY}
+      className={container ? undefined : maximized ? `${PL_DIALOG_OVERLAY} ${PL_DIALOG_OVERLAY_MAX}` : PL_DIALOG_OVERLAY}
       onClick={(e) => {
         // 点击蒙层（空白处）关闭；点击对话框内部不关闭
         if (!container && e.target === e.currentTarget) onClose();
@@ -45,7 +47,7 @@ export function DashboardModal({ open, onClose, t, container }: Props): ReactNod
     >
       {!container && <style>{PL_DIALOG_CSS}</style>}
       <div
-        className={PL_DIALOG}
+        className={maximized ? `${PL_DIALOG} ${PL_DIALOG_MAX}` : PL_DIALOG}
         style={{
           ...(container ? {} : { width: 800, height: 800 }),
           maxWidth: "calc(100vw - 40px)",
@@ -60,7 +62,17 @@ export function DashboardModal({ open, onClose, t, container }: Props): ReactNod
             <BookIcon color={TONE.accent} size={15} />
             <span style={{ minWidth: 0 }}>{t("pl.ctx.dashboard")}</span>
           </strong>
-          {!container && <DialogCloseButton onClick={onClose} label={t("pl.close")} />}
+          {!container && (
+            <>
+              <WindowToggleButton
+                maximized={maximized}
+                onToggle={() => setMaximized((v) => !v)}
+                maximizeLabel={t("pl.windowMaximize")}
+                restoreLabel={t("pl.windowRestore")}
+              />
+              <DialogCloseButton onClick={onClose} label={t("pl.close")} />
+            </>
+          )}
         </div>
 
         {/* 说明 */}

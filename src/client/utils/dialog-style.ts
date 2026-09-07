@@ -16,6 +16,10 @@
 export const PL_DIALOG = "pl-dialog";
 /** 弹窗遮罩容器类名（固定居中 + 半透明遮罩）。 */
 export const PL_DIALOG_OVERLAY = "pl-dialog-overlay";
+/** 最大化态：遮罩去掉内边距，弹窗铺满视口。 */
+export const PL_DIALOG_OVERLAY_MAX = "pl-dialog-overlay--max";
+/** 最大化态：弹窗铺满视口（覆盖内联宽度/高度/最大尺寸与圆角）。 */
+export const PL_DIALOG_MAX = "pl-dialog--max";
 
 import type { CSSProperties } from "react";
 
@@ -38,6 +42,13 @@ export const PL_DIALOG_EMBED_OVERLAY: CSSProperties = {
 export const PL_DIALOG_CSS = `
 .pl-dialog{box-sizing:border-box;display:flex;flex-direction:column;overflow:hidden;border-radius:24px;background:var(--dsw-specific-sidebar-fill,#f5f6f7);padding:18px 7px 18px 10px;color:var(--dsw-alias-label-primary,#f2f6fc);font-family:var(--dsw-font-family,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",Helvetica,Arial,sans-serif)}
 .pl-dialog-overlay{position:fixed;inset:0;z-index:2147483647;box-sizing:border-box;display:flex;align-items:center;justify-content:center;padding:20px;overflow:hidden;background:rgba(0,0,0,.35);backdrop-filter:var(--dsw-mask-blur,blur(12px));-webkit-backdrop-filter:var(--dsw-mask-blur,blur(12px))}
+.pl-dialog-overlay--max{padding:0}
+.pl-dialog--max{width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;border-radius:0!important}
+/* 桌面端：宿主在顶部保留 36px 标题条（#root 自 top:36px 起），最大化只铺满其下内容区 */
+body[data-dsh-desktop-mode="compatibility"] .pl-dialog-overlay--max,
+body[data-dsh-desktop-mode="extended"] .pl-dialog-overlay--max{top:36px;bottom:0}
+body[data-dsh-desktop-mode="compatibility"] .pl-dialog--max,
+body[data-dsh-desktop-mode="extended"] .pl-dialog--max{width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;border-radius:0!important}
 /* 解锁塔罗牌：卡片表面流动高光扫光 */
 .pl-card-sheen{position:absolute;inset:0;border-radius:11px;pointer-events:none;overflow:hidden;background:linear-gradient(115deg,transparent 40%,rgba(255,255,255,.5) 50%,transparent 60%);background-size:250% 250%;animation:plCardSheen 4.2s ease-in-out infinite;z-index:3}
 @keyframes plCardSheen{0%{background-position:130% 0}62%{background-position:-130% 0}100%{background-position:-130% 0}}

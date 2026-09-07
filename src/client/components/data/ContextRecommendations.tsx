@@ -25,6 +25,7 @@ import {
   usePrompt as apiUse,
 } from "../../utils/api.js";
 import { useDataChanged } from "../../utils/data-sync.js";
+import { useConversationTargetSnapshot } from "../../utils/conversation-targets.js";
 import { type PLTranslate, usePLT } from "../../utils/i18n.js";
 import {
   applyVariables,
@@ -163,10 +164,18 @@ export function ContextRecommendations(props: DockProps): ReactNode {
 
   // 宿主注入的钩子必须在组件顶层调用（不能放进 useMemo）；会话存在时必定注入，
   // 缺失时（理论上不会发生）整个组件不渲染
-  const nodes = useSession?.((s) =>
-    (s as unknown as { chat?: { legacy?: { nodes?: readonly ConversationNode[] } } } | undefined)
-      ?.chat?.legacy?.nodes,
+  const sessionId = useSession?.((s) => s.sessionId);
+  // 最新 DSH 的 chat 视图目标在 uiConversation 私有注册表上，旧快照路径仅作回退
+  const chatTarget = useConversationTargetSnapshot<{ legacy?: { nodes?: readonly ConversationNode[] } } | undefined>(
+    sessionId,
+    "chat",
   );
+  const legacyNodes = useSession?.(
+    (s) =>
+      (s as unknown as { chat?: { legacy?: { nodes?: readonly ConversationNode[] } } } | undefined)
+        ?.chat?.legacy?.nodes,
+  );
+  const nodes = (chatTarget?.legacy?.nodes?.length ?? 0) > 0 ? chatTarget!.legacy!.nodes! : legacyNodes;
   const draft = useInput?.((s) => s.draft) ?? "";
 
   // 会话上下文：最近几条用户消息的文本（宿主 StatsLine 读取聊天历史的同一途径）

@@ -35,6 +35,7 @@ import {
   type ScopeDiag,
 } from "../../utils/api.js";
 import { useDataChanged } from "../../utils/data-sync.js";
+import { useConversationTargetSnapshot } from "../../utils/conversation-targets.js";
 import {
   ACCENT_CACHED,
   ACCENT_CACHEWRITE,
@@ -116,6 +117,18 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
 
   const running = useSession((s) => s.running) ?? false;
   const openState = useSession((s) => s.openState);
+  // 当前会话 id：uiConversation 视图目标（chat/trajectory）按会话绑定读取时需要
+  const sessionId = useSession((s) => s.sessionId);
+
+  // 最新 DSH 把 chat/trajectory 视图目标迁移到 uiConversation 私有注册表，
+  // useSession 快照上的 s.chat / s.views 已不再装配（恒为空）。这里改从
+  // uiConversation.binding(sessionId).target(...) 订阅同一数据源（宿主聊天 UI 同款路径），
+  // 并保留旧快照字段读取，向后兼容旧版 DSH。
+  const chatTarget = useConversationTargetSnapshot<{ legacy?: { nodes?: readonly ConversationNode[] } } | undefined>(
+    sessionId,
+    "chat",
+  );
+  const trajectoryTarget = useConversationTargetSnapshot<TrajectorySnapshotView | undefined>(sessionId, "trajectory");
 
   // 右侧详情抽屉：点击列表条目时打开，展示该条目的全文 / 工具 schema
   const [detail, setDetail] = useState<DetailEntry | null>(null);
@@ -230,10 +243,15 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
         ? (T?.("pl.monitor.srcPath") ?? "工作区")
         : (T?.("pl.monitor.srcDefault") ?? "默认");
 
-  const nodes = useSession((s) =>
-    (s as unknown as { chat?: { legacy?: { nodes?: readonly ConversationNode[] } } } | undefined)
-      ?.chat?.legacy?.nodes,
+  // 旧快照路径（向后兼容旧版 DSH）：s.chat.legacy.nodes
+  const legacyNodes = useSession(
+    (s) =>
+      (s as unknown as { chat?: { legacy?: { nodes?: readonly ConversationNode[] } } } | undefined)
+        ?.chat?.legacy?.nodes,
   );
+  // 优先 uiConversation 目标快照，空时回退旧路径
+  const nodes =
+    (chatTarget?.legacy?.nodes?.length ?? 0) > 0 ? chatTarget!.legacy!.nodes! : legacyNodes;
 
   // Token 流速历史：记录每轮对话的输入/输出 token 数，用于绘制折线图（最多保留 50 轮）
   interface TokenVelocityPoint {
@@ -252,11 +270,13 @@ export function TokenMonitorView(props: MonitorProps): null | ReactNode {
   }
 
   // 会话注入信息：读取 trajectory 投影里的最近一次请求（系统提示 + 工具 schema）。
-  // trajectory 插件未加载时 `s.views` 或 `views.get` 可能为 undefined，需容错，
+  // 优先取 uiConversation 的 trajectory 目标（最新 DSH 的唯一活数据源），
+  // 回退旧快照路径 `s.views.get("trajectory")`；两者皆未装配时优雅降级，
   // 否则会抛 `Cannot read properties of undefined (reading 'get')` 导致会话视图插槽崩溃。
-  const trajectory = useSession(
+  const legacyTrajectory = useSession(
     (s) => (s.views as unknown as Map<string, TrajectorySnapshotView | undefined> | undefined)?.get("trajectory"),
   ) as TrajectorySnapshotView | undefined;
+  const trajectory = trajectoryTarget ?? legacyTrajectory;
   const latestRequest = useMemo(() => {
     if (!trajectory?.requests) return undefined;
     let last: TrajectoryRequestView | undefined;

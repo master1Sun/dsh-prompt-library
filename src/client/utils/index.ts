@@ -26,6 +26,7 @@ import { PreviewView } from "../components/preview/PreviewView.js";
 import { SettingsSection } from "../components/settings/SettingsSection.js";
 import { registerSettingsAboveMenu, SETTINGS_ABOVE_CSS } from "../components/settings/SettingsAboveMenuButton.js";
 import { en, NS, zh } from "./i18n.js";
+import { setUiConversation } from "./conversation-targets.js";
 import { startDataChangedSubscription } from "./data-sync.js";
 import { registerWorkspaces } from "./workspace-picker.js";
 import { getSettings } from "./api.js";
@@ -37,7 +38,17 @@ import {
 } from "./settings-nav-icon.js";
 
 /** 此插件的 apply 依赖的客户端服务。 */
-export const inject = ["slots", "locale", "workspaces"];
+export const inject = ["slots", "locale", "workspaces", "uiConversation"];
+
+/** 宿主 uiConversation 服务的最小类型（chat/trajectory 视图目标读取，见 conversation-targets.ts）。 */
+interface UiConversationLike {
+  binding(source: string | unknown): {
+    target(name: string): {
+      getSnapshot(): unknown;
+      subscribe(listener: () => void): () => void;
+    };
+  };
+}
 
 /** 我们使用的两个服务的最小 ctx 类型。 */
 interface ClientCtx {
@@ -72,11 +83,17 @@ interface ClientCtx {
     }>;
     createDirectory(path: string, name: string): Promise<string>;
   };
+  /** 宿主 UI 会话装配（由 dsh-client-ui-conversation 提供），监控读 chat/trajectory 目标的唯一活数据源。 */
+  uiConversation?: UiConversationLike;
 }
 
 export function apply(ctx: ClientCtx): void {
   // 缓存宿主工作区运行时引用，供目录选择（技能导出项目路径）使用
   registerWorkspaces(ctx.workspaces ?? null);
+
+  // 缓存宿主 uiConversation 服务：最新 DSH 的 chat/trajectory 视图目标只在
+  // 这条路径上装配，useSession 快照的 s.chat / s.views 不再承载（见 conversation-targets.ts）
+  setUiConversation((ctx as { uiConversation?: UiConversationLike }).uiConversation ?? null);
 
   // 注册完整中英文字典：系统语言切换后自动跟随
   ctx.effect(

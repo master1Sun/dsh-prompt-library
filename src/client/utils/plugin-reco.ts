@@ -94,8 +94,33 @@ export const PINNED_PLUGIN: HotPlugin = {
   pinned: true,
 };
 
+/**
+ * 置顶推荐第 3 位：dsh-QQbot（QQ 官方机器人接入本机 DSH，写死配置仅作兜底；
+ * 榜单里有该插件时，版本 / stars / 简介等走实时数据）。
+ */
+export const PINNED_QQ: HotPlugin = {
+  id: "master1Sun/dsh-QQbot",
+  name: "",
+  nameKey: "pl.pluginReco.qqName",
+  desc: "",
+  descKey: "pl.pluginReco.qqDesc",
+  version: "0.1.1",
+  license: "MIT",
+  repo: "https://github.com/master1Sun/dsh-QQbot",
+  cloneCmd: "git clone --depth 1 https://github.com/master1Sun/dsh-QQbot.git",
+  dshCmd: 'dsh plugin --profile web add "github:master1Sun/dsh-QQbot"',
+  stars: 0,
+  verified: true,
+  rank: 3,
+  pinned: true,
+};
+
 /** 置顶条目 id 集合（统一小写比较：市场返回的 owner 大小写可能与本地写法不一致）。 */
-const PINNED_IDS = new Set([PINNED_WB.id.toLowerCase(), PINNED_PLUGIN.id.toLowerCase()]);
+const PINNED_IDS = new Set([
+  PINNED_WB.id.toLowerCase(),
+  PINNED_PLUGIN.id.toLowerCase(),
+  PINNED_QQ.id.toLowerCase(),
+]);
 
 /** localStorage 缓存键（存整份 MarketData）。 */
 const CACHE_KEY = "pl.pluginReco.market.v1";
@@ -139,17 +164,18 @@ function applyLiveToPinned(p: HotPlugin, live: HotPlugin | undefined): HotPlugin
   };
 }
 
-/** 把两个置顶条目插到榜单最前（workbench 第 1、本插件第 2），市场热门从第 3 位起依次重排。 */
+/** 把三个置顶条目插到榜单最前（workbench 第 1、本插件第 2、QQbot 第 3），市场热门从第 4 位起依次重排。 */
 function withPinned(data: MarketData): MarketData {
   // id 统一小写匹配（市场 owner 大小写可能与本地写法不一致，如 master1sun vs master1Sun）
   const byId = new Map(data.items.map((p) => [p.id.toLowerCase(), p]));
   const pinned = [
     applyLiveToPinned({ ...PINNED_WB }, byId.get(PINNED_WB.id.toLowerCase())),
     applyLiveToPinned({ ...PINNED_PLUGIN }, byId.get(PINNED_PLUGIN.id.toLowerCase())),
+    applyLiveToPinned({ ...PINNED_QQ }, byId.get(PINNED_QQ.id.toLowerCase())),
   ];
   const rest = data.items
     .filter((p) => !PINNED_IDS.has(p.id.toLowerCase()))
-    .map((p, i) => ({ ...p, rank: i + 3 }));
+    .map((p, i) => ({ ...p, rank: i + 4 }));
   return { ...data, items: [...pinned, ...rest] };
 }
 

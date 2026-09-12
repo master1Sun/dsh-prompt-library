@@ -49,6 +49,11 @@ export function pluginMarketCachePath(): string {
   return join(dataDir(), "plugin-market.json");
 }
 
+/** 置顶插件的 GitHub 实时信息缓存：~/.dsh/prompt-library/plugin-github.json */
+export function pluginGithubCachePath(): string {
+  return join(dataDir(), "plugin-github.json");
+}
+
 /** SQLite 数据库目录：~/.dsh/prompt-library/db/ */
 export function dbDir(): string {
   return join(dataDir(), "db");

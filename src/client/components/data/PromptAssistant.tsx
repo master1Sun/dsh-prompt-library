@@ -3,7 +3,10 @@
  *
  * 以一个助手形象常驻屏幕，可独立拖动；悬停时展示气泡（情绪/时间信息）。
  * 与右侧面板解耦：本组件自管理位置/气泡/情绪与时间展示，不再内嵌于面板状态。
- * 左键不联动面板，右键菜单「打开词库管理」直接打开独立的词库管理弹窗。
+ * 支持两条并行的功能入口：
+ *   1) 右键助手 → 迷你菜单（数据管理 / 导入导出 / 人格 / 技能 / 看板 / 成就 / 公告）；
+ *   2) 官方右侧面板的「词库卡片菜单」（见 AssistantMenuView），经 `pl:open-*` 窗口事件驱动。
+ * 左键单击（未拖动）打开右侧面板的词库卡片菜单；左键拖动仅移动助手。
  */
 import {
   useCallback,
@@ -32,6 +35,7 @@ import {
   type DeepSeekBalance,
 } from "../../utils/api.js";
 import { type PLTranslate, usePLT } from "../../utils/i18n.js";
+import { PANEL_TAB_KIND, openPanelTab } from "../../utils/panel-tab.js";
 import { useThemeSync } from "../../utils/theme.js";
 
 import { AnnouncementModal } from "../dashboard/AnnouncementModal.js";
@@ -47,6 +51,7 @@ import { DbPreviewPanel } from "./DbPreviewPanel.js";
 import { TagManagePanel } from "./TagManagePanel.js";
 import { RecycleManagePanel } from "./RecycleManagePanel.js";
 import { PanelHeader } from "../common/PanelHeader.js";
+import { SubPanelModal } from "../common/SubPanelModal.js";
 import {
   HOVER_SEQUENCE,
   SEQUENCES,
@@ -778,21 +783,25 @@ export function PromptAssistant(props: Props): ReactNode {
     return () => ro.disconnect();
   }, [showBubble, toast, activity.text]);
 
-  // 公告弹窗：右键菜单入口打开（使用手册 + 通告 / 看板）
+  // 以下弹窗统一由官方右侧面板「词库卡片菜单」的 pl:open-* 事件驱动开合
+  // 公告弹窗（使用手册 + 通告 / 看板）
   const [announceOpen, setAnnounceOpen] = useState(false);
-  // 成就弹窗：右键菜单入口打开（等级 + 成就列表）
+  // 成就弹窗（等级 + 成就列表）
   const [achievementOpen, setAchievementOpen] = useState(false);
-  // 人格管理弹窗：右键菜单入口打开（多人格 CRUD + 会话绑定说明）
+  // 人格管理弹窗（多人格 CRUD + 会话绑定说明）
   const [personaOpen, setPersonaOpen] = useState(false);
-  // 技能注入弹窗：右键菜单「技能注入」入口打开（当前会话临时注入 / 工作区项目持久绑定）
+  // 技能注入弹窗（当前会话临时注入 / 工作区项目持久绑定）
   const [injectOpen, setInjectOpen] = useState(false);
-  // 看板弹窗：右键菜单「看板」入口打开（统计可视化）
+  // 看板弹窗（统计可视化）
   const [dashboardOpen, setDashboardOpen] = useState(false);
-  // 导入导出弹窗：右键菜单与「数据管理」平级的独立入口
+  // 导入导出弹窗：与「数据管理」平级的独立入口
   const [importExportOpen, setImportExportOpen] = useState(false);
-
-  // 词库管理弹窗：右键菜单「数据管理」入口打开
+  // 词库管理弹窗（左侧列表 / 右侧详情·标签·回收站）
   const [lexiconOpen, setLexiconOpen] = useState(false);
+  // 数据库管理弹窗（可视化增删改查 / SQL 查询）
+  const [dbOpen, setDbOpen] = useState(false);
+  // 插件推荐弹窗（DSH 插件市场热门榜单）
+  const [pluginRecoOpen, setPluginRecoOpen] = useState(false);
 
   // ── 设置面板内嵌模式：将 Modal 渲染到面板内容区而非独立弹窗 ──
   const panelContainerRef = useRef<HTMLElement | null>(null);
@@ -821,15 +830,17 @@ export function PromptAssistant(props: Props): ReactNode {
     setDashboardOpen(true);
   };
 
-  // 监听词库助手菜单按钮发出的打开事件
+  // 监听词库卡片菜单（官方右侧面板）发出的打开事件
   useEffect(() => {
     const openPersona = () => setPersonaOpen(true);
     const openSkill = () => setInjectOpen(true);
     const openLexicon = () => setLexiconOpen(true);
     const openImportExport = () => setImportExportOpen(true);
-    const openDashboard = () => openMenuDashboard();
-    const openAchievements = () => openMenuAchievements();
-    const openAnnounce = () => openMenuAnnounce();
+    const openDashboard = () => setDashboardOpen(true);
+    const openAchievements = () => setAchievementOpen(true);
+    const openAnnounce = () => setAnnounceOpen(true);
+    const openDb = () => setDbOpen(true);
+    const openPluginReco = () => setPluginRecoOpen(true);
 
     window.addEventListener("pl:open-persona-manager", openPersona);
     window.addEventListener("pl:open-skill-manager", openSkill);
@@ -838,6 +849,8 @@ export function PromptAssistant(props: Props): ReactNode {
     window.addEventListener("pl:open-dashboard", openDashboard);
     window.addEventListener("pl:open-achievement", openAchievements);
     window.addEventListener("pl:open-announcement", openAnnounce);
+    window.addEventListener("pl:open-db", openDb);
+    window.addEventListener("pl:open-plugin-reco", openPluginReco);
 
     // 设置面板内嵌模式：在面板内容区直接渲染 Modal
     const onPanelContent = (e: Event) => {
@@ -861,6 +874,8 @@ export function PromptAssistant(props: Props): ReactNode {
       window.removeEventListener("pl:open-dashboard", openDashboard);
       window.removeEventListener("pl:open-achievement", openAchievements);
       window.removeEventListener("pl:open-announcement", openAnnounce);
+      window.removeEventListener("pl:open-db", openDb);
+      window.removeEventListener("pl:open-plugin-reco", openPluginReco);
       window.removeEventListener("pl:show-panel-content", onPanelContent);
     };
   }, []);
@@ -897,7 +912,7 @@ export function PromptAssistant(props: Props): ReactNode {
     moved: boolean;
   } | null>(null);
   const startPersonDrag = (e: ReactMouseEvent<HTMLElement>) => {
-    // 仅左键支持拖动与单击开合；右键/中键不启动拖拽，交由 onContextMenu 打开公告
+    // 仅左键支持拖动；右键/中键不启动拖拽，交由 onContextMenu 弹出迷你菜单
     if (e.button !== 0) return;
     // 左键开始拖动时关闭右键菜单，避免菜单残留遮挡
     setCtxMenu(null);
@@ -931,11 +946,13 @@ export function PromptAssistant(props: Props): ReactNode {
       updatePos({ px, py });
     };
     const onUp = () => {
+      const moved = personDragRef.current?.moved ?? false;
       personDragRef.current = null;
       setDragging(false); // 恢复位移动画
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
-      // 左键单击（未移动）不触发任何互动（面板开合统一走右键菜单「打开词库管理」）
+      // 左键单击（未移动）→ 打开官方右侧面板的词库卡片菜单（宿主未就绪时静默失败）
+      if (!moved) openPanelTab(PANEL_TAB_KIND);
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -1011,6 +1028,75 @@ export function PromptAssistant(props: Props): ReactNode {
 
   const hidden = !(settings?.assistantEnabled ?? DEFAULT_SETTINGS.assistantEnabled);
 
+  // 功能弹窗：与词库助手显隐解耦，官方右侧面板的卡片菜单通过 pl:open-* 事件驱动这里开合，
+  // 因此即使关闭了助手形象，卡片菜单里的入口依然可用（关闭态下各弹窗自身返回 null）。
+  const modals = (
+    <>
+      {/* 公告弹窗（使用手册 + 通告） */}
+      <AnnouncementModal
+        open={announceOpen}
+        onClose={() => setAnnounceOpen(false)}
+        t={T}
+      />
+      {/* 成就弹窗（等级 + 成就列表） */}
+      <AchievementModal
+        open={achievementOpen}
+        onClose={() => setAchievementOpen(false)}
+        t={T}
+      />
+      {/* 人格管理弹窗（多人格 CRUD + 会话绑定说明） */}
+      <PersonaManagerModal
+        open={personaOpen}
+        onClose={() => setPersonaOpen(false)}
+        t={T}
+      />
+      {/* 技能注入弹窗（当前会话临时注入 / 工作区项目持久绑定） */}
+      <PromptInjectPanel
+        open={injectOpen}
+        onClose={() => setInjectOpen(false)}
+        t={T}
+      />
+      {/* 看板弹窗（统计可视化） */}
+      <DashboardModal
+        open={dashboardOpen}
+        onClose={() => setDashboardOpen(false)}
+        t={T}
+      />
+      {/* 导入导出：与「数据管理」平级的独立弹窗 */}
+      <ImportExportModal
+        open={importExportOpen}
+        onClose={() => setImportExportOpen(false)}
+        t={T}
+      />
+      {/* 词库管理弹窗（左侧列表 / 右侧详情·标签·回收站） */}
+      <LexiconManagerModal
+        open={lexiconOpen}
+        onClose={() => setLexiconOpen(false)}
+        t={T}
+      />
+      {/* 数据库管理弹窗（可视化增删改查 / 只读 SQL） */}
+      <SubPanelModal
+        open={dbOpen}
+        onClose={() => setDbOpen(false)}
+        title={T("pl.ctx.dbPreview")}
+        t={T}
+      >
+        <DbPreviewPanel t={T} />
+      </SubPanelModal>
+      {/* 插件推荐弹窗（插件自带标题头，此处不再重复标题） */}
+      <SubPanelModal
+        open={pluginRecoOpen}
+        onClose={() => setPluginRecoOpen(false)}
+        ariaLabel={T("pl.modulePluginReco")}
+        t={T}
+        width={900}
+        height={680}
+      >
+        <PluginRecoPanel t={T} />
+      </SubPanelModal>
+    </>
+  );
+
   // 词库菜单（设置面板）右侧内容区：与词库助手显隐相互独立，
   // 因此在 hidden 分支也要渲染，否则关闭助手后菜单里的功能会一起被隐藏。
   const panelContentPortal =
@@ -1058,7 +1144,7 @@ export function PromptAssistant(props: Props): ReactNode {
         )
       : null;
 
-  if (hidden) return <>{panelContentPortal}</>;
+  if (hidden) return <>{panelContentPortal}{modals}</>;
 
   return (
     <>
@@ -1079,7 +1165,6 @@ export function PromptAssistant(props: Props): ReactNode {
 @keyframes pl-person-happybob { 0%,100% { transform: translateY(0) scale(1,1); } 40% { transform: translateY(-8px) scale(1.06,.94); } 70% { transform: translateY(-3px); } }
 @keyframes pl-person-sadbob { 0%,100% { transform: translateY(0) rotate(0deg) scale(1,1); } 50% { transform: translateY(2px) rotate(-3deg) scale(.99,1.02); } }
 @keyframes pl-ctx-in { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: scale(1); } }
-@keyframes pl-think-ripple { 0% { transform: scale(.4); opacity: 0; } 18% { opacity: .9; } 100% { transform: scale(4.2); opacity: 0; } }
 .pl-ctx-menu { padding: 6px; border-radius: 13px; background: var(--dsw-specific-sidebar-fill, #f5f6f7); border: 1px solid var(--dsw-alias-border-l2, rgba(17, 24, 39, .14)); box-shadow: 0 10px 32px rgba(2, 6, 23, .2), 0 2px 8px rgba(2, 6, 23, .1), inset 0 1px 0 rgba(255, 255, 255, .55); animation: pl-ctx-in .16s cubic-bezier(.22, 1, .36, 1); transform-origin: top left; }
 .pl-ctx-head { display: flex; align-items: center; gap: 6px; padding: 6px 10px 8px; font-size: 12px; font-weight: 600; letter-spacing: .2px; color: var(--dsw-alias-label-secondary, #6b7280); border-bottom: 1px solid var(--dsw-alias-border-l2, rgba(17, 24, 39, .08)); margin-bottom: 4px; }
 .pl-ctx-item { display: flex; align-items: center; gap: 9px; padding: 6px 9px; font-size: 12.5px; border-radius: 9px; cursor: pointer; user-select: none; color: var(--dsw-alias-label-primary, #1f2937); transition: background .16s ease, transform .12s ease; }
@@ -1103,8 +1188,7 @@ export function PromptAssistant(props: Props): ReactNode {
           aria-label={T("pl.title")}
           onMouseDown={startPersonDrag}
           onContextMenu={(e) => {
-            // 右键：弹出迷你菜单（词库管理 / 成就 / 公告）；与左键拖动/单击互不干扰。
-            // 词库助手未启用，或工具/公告/成就入口全部关闭时不弹菜单。
+            // 右键：弹出迷你菜单（词库管理 / 成就 / 公告等）；与左键拖动/单击互不干扰。
             e.preventDefault();
             if (!ctxMenuEnabled) return;
             setCtxMenu({ x: e.clientX, y: e.clientY });
@@ -1451,7 +1535,7 @@ export function PromptAssistant(props: Props): ReactNode {
         </div>,
         document.body,
       )}
-      {/* 右键迷你菜单：点击外部区域或菜单项后关闭；「打开词库管理 / 成就 / 公告」共用此入口 */}
+      {/* 右键迷你菜单：点击外部区域或菜单项后关闭；「数据管理 / 导入导出 / 人格 / 技能 / 看板 / 成就 / 公告」共用此入口 */}
       {ctxMenu && ctxMenuEnabled && (
         <>
           {createPortal(
@@ -1614,48 +1698,8 @@ export function PromptAssistant(props: Props): ReactNode {
           )}
         </>
       )}
-      {/* 公告弹窗：右键菜单「公告」打开（使用手册 + 通告） */}
-      <AnnouncementModal
-        open={announceOpen}
-        onClose={() => setAnnounceOpen(false)}
-        t={T}
-      />
-      {/* 成就弹窗：右键菜单「成就」打开（等级 + 成就列表） */}
-      <AchievementModal
-        open={achievementOpen}
-        onClose={() => setAchievementOpen(false)}
-        t={T}
-      />
-      {/* 人格管理弹窗：右键菜单「人格管理」打开（多人格 CRUD + 会话绑定说明） */}
-      <PersonaManagerModal
-        open={personaOpen}
-        onClose={() => setPersonaOpen(false)}
-        t={T}
-      />
-      {/* 技能注入弹窗：右键菜单「技能注入」打开（当前会话临时注入 / 工作区项目持久绑定） */}
-      <PromptInjectPanel
-        open={injectOpen}
-        onClose={() => setInjectOpen(false)}
-        t={T}
-      />
-      {/* 看板弹窗：右键菜单「看板」打开（统计可视化） */}
-      <DashboardModal
-        open={dashboardOpen}
-        onClose={() => setDashboardOpen(false)}
-        t={T}
-      />
-      {/* 导入导出：右键菜单与「数据管理」平级的独立弹窗 */}
-      <ImportExportModal
-        open={importExportOpen}
-        onClose={() => setImportExportOpen(false)}
-        t={T}
-      />
-      {/* 词库管理弹窗：右键菜单「数据管理」打开（左侧列表 / 右侧详情·标签·回收站） */}
-      <LexiconManagerModal
-        open={lexiconOpen}
-        onClose={() => setLexiconOpen(false)}
-        t={T}
-      />
+      {/* 功能弹窗：由右侧面板卡片菜单的 pl:open-* 事件或右键菜单驱动 */}
+      {modals}
       {/* 设置面板内嵌内容：在 SettingsAboveMenu 面板内容区直接渲染对应 Modal */}
       {panelContentPortal}
     </>

@@ -37,6 +37,7 @@ import { getTone, useThemeSync } from "../../utils/theme.js";
 import { type PLT, type PLTranslate, usePLT } from "../../utils/i18n.js";
 import { ConfirmDialog } from "../common/ConfirmDialog.js";
 import { DialogCloseButton } from "../common/DialogCloseButton.js";
+import { DirectoryPickerModal } from "../common/DirectoryPickerModal.js";
 import { WindowToggleButton } from "../common/WindowToggleButton.js";
 import { BookIcon } from "../common/BookIcon.js";
 import { SkillImportModal } from "./SkillImportModal.js";
@@ -48,6 +49,9 @@ import {
 
 const MONO =
   'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif)';
+
+/** 记住上次导出目录的 localStorage 键。 */
+const EXPORT_DIR_KEY = "dsh-prompt-library:last-export-dir";
 
 /** 导出勾选列表中的单条提示词（紧凑卡片式，样式与词库管理列表一致）。 */
 function PromptCheckRow(props: {
@@ -329,24 +333,52 @@ export function ImportExportModal(props: {
     );
   }, [filteredPrompts, T]);
 
-  /** 导出勾选的提示词为所选格式并触发下载。 */
-  const exportSelectedPrompts = useCallback(() => {
-    const ids = Array.from(exportSelected);
-    if (ids.length === 0) {
+  /** 导出目录选择弹窗：让用户在本地选一个目录，导出文件写入该目录。 */
+  const [exportDirPickerOpen, setExportDirPickerOpen] = useState(false);
+  // 上次导出目录（持久化到 localStorage，下次打开目录选择器时直接定位）
+  const [lastExportDir, setLastExportDir] = useState<string>(() => {
+    try {
+      return localStorage.getItem(EXPORT_DIR_KEY) ?? "";
+    } catch {
+      return "";
+    }
+  });
+
+  /** 点击「导出」：先校验勾选，再让用户选择保存目录。 */
+  const requestExport = useCallback(() => {
+    if (exportSelected.size === 0) {
       showMsg(T("pl.exportNeedSelect"), "error");
       return;
     }
-    // 走后端下载：前端只传 ids + format，后端拉取数据并组织文件写入系统「下载」目录。
-    // 写完后才 resolve，避开浏览器下载「选择保存路径」对话框的时序问题，也不拉取正文大文本。
-    saveExportFile(ids, exportFormat).then(
-      (r) => {
-        setExportDoneMsg(
-          T("pl.exportedPath", { count: r.count, path: r.filePath }),
-        );
-      },
-      (e) => showMsg(e instanceof Error ? e.message : String(e), "error"),
-    );
-  }, [exportSelected, exportFormat, showMsg, T]);
+    setExportDirPickerOpen(true);
+  }, [exportSelected, showMsg, T]);
+
+  /** 选定目录后真正导出：由后端拉取数据并写入用户选择的目录。 */
+  const exportSelectedPrompts = useCallback(
+    (dir: string) => {
+      const ids = Array.from(exportSelected);
+      if (ids.length === 0) {
+        showMsg(T("pl.exportNeedSelect"), "error");
+        return;
+      }
+      // 记住本次目录，下次导出时目录选择器直接定位到它
+      setLastExportDir(dir);
+      try {
+        localStorage.setItem(EXPORT_DIR_KEY, dir);
+      } catch {
+        /* localStorage 不可用（隐私模式等）时忽略 */
+      }
+      saveExportFile(ids, exportFormat, dir).then(
+        (r) => {
+          setExportDoneMsg(
+            T("pl.exportedPath", { count: r.count, path: r.filePath }),
+          );
+        },
+        (e) => showMsg(e instanceof Error ? e.message : String(e), "error"),
+      );
+    },
+    [exportSelected, exportFormat, showMsg, T],
+  );
 
   /** 打开技能导出弹窗：把勾选的提示词转成可编辑条目。 */
   const openSkillExport = useCallback(() => {
@@ -793,8 +825,8 @@ export function ImportExportModal(props: {
                     variant="primary"
                     size="sm"
                     className={plBtn("primary", "sm")}
-                    onClick={exportSelectedPrompts}
-                    data-tip={T("pl.exportTitle")}
+                    onClick={requestExport}
+                    data-tip={T("pl.exportPickDirTitle")}
                   >
                     {T("pl.exportSelected")}
                   </Button>
@@ -1491,6 +1523,18 @@ export function ImportExportModal(props: {
           cancelLabel={T("pl.cancel")}
           onCancel={() => setDeleteTarget(null)}
           onConfirm={confirmDelete}
+        />
+
+        {/* 导出目录选择：用户选好本地目录后，导出文件由后端直接写入该目录 */}
+        <DirectoryPickerModal
+          open={exportDirPickerOpen}
+          initialPath={lastExportDir || ""}
+          onPick={(dir) => {
+            setExportDirPickerOpen(false);
+            exportSelectedPrompts(dir);
+          }}
+          onClose={() => setExportDirPickerOpen(false)}
+          t={T}
         />
 
         {/* 导出成功提示框：点击「确定」关闭；覆盖在弹窗上方，半透明遮罩区分层级 */}

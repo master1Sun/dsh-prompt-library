@@ -11,15 +11,14 @@
  * 所有响应使用 ApiResponse 信封。
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { createReadStream, existsSync, watch } from "node:fs";
-import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { basename, isAbsolute, join, relative } from "node:path";
-import { createInterface } from "node:readline";
+import { existsSync, statSync } from "node:fs";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
 
 import { fileURLToPath } from "node:url";
 import type { WebRoute } from "@deepseek-ai/dsh-host-webserver";
 import type { ApiResponse, PluginSettings, Prompt, PromptInput, PromptPatch } from "../types.js";
-import { UNMATCHED_SCOPE_PATH, type ScopeNode } from "../types.js";
 import { clearDeepSeekBalanceCache, commentOnStats, generateDraft, generateIntro, generateSkillDescriptor, isDeepSeekProviderInUse, listAiSelectables, polishPromptBody, polishPromptBodyWithSummary, queryDeepSeekBalance, todayLocalDate } from "./ai.js";
 import {
   exportAsSessionPrompts,
@@ -284,425 +283,110 @@ async function resolveCurrentProjectCwd(): Promise<string | null> {
   return records.find((r) => r.cwd)?.cwd || null;
 }
 
-// ── 会话预览（读取会话所属文件夹下的 md 文件） ────────────────────────
+/**
+ * 目录浏览（自建后端能力）。
+ *
+ * 新版 DSH 运行时不再稳定提供 `ctx.workspaces` 的 browse / native 能力，
+ * 插件的「选择目录」（技能导出路径、扫描文件夹等）因此会判定为不可用。
+ * 这里在插件自己的 HTTP 路由上补一套最小目录浏览：列出一层子目录 + 面包屑 + 新建目录。
+ */
 
-/** 文本文件截流触发阈值（2 MiB）：超过该大小的文件只返回部分行预览，避免超大内容拖垮渲染。 */
-const MAX_PREVIEW_FILE_SIZE = 2 * 1024 * 1024;
-
-/** 图片文件大小上限（10 MiB，图片通常较大但浏览器可处理 base64）。 */
-const MAX_IMAGE_FILE_SIZE = 10 * 1024 * 1024;
-
-/** 非日志文本预览的行数上限：超过即只返回首部，防止超大文本一次性渲染卡死界面。 */
-const TEXT_LINE_CAP = 1800;
-
-/** 全文搜索：单个文件内命中的行数上限（超限只取前 N 行，卡住结果体积）。 */
-const SEARCH_MATCHES_PER_FILE = 5;
-
-/** 全文搜索：总命中条数上限。 */
-const SEARCH_TOTAL_MATCHES = 300;
-
-/** 全文搜索：参与搜索的文本文件大小上限（超过不读，过大文件搜索代价高）。 */
-const SEARCH_MAX_FILE_SIZE = 4 * 1024 * 1024;
-
-/** 递归遍历时跳过的噪音目录（避免大仓库拖慢扫描）。 */
-const PREVIEW_SKIP_DIRS = new Set(["node_modules", ".git", ".svn", ".hg", "dist", "build"]);
-
-/** 预览文件数量上限（超出即停止继续收集，避免超大仓库卡死）。 */
-const MAX_PREVIEW_FILES = 300;
-
-/** 支持预览的文件类型（按扩展名识别）。 */
-type PreviewFileType =
-  | "md" | "json" | "txt" | "csv"
-  | "ts" | "js" | "py" | "go" | "rs" | "java" | "c" | "cpp"
-  | "png" | "jpg" | "jpeg" | "gif" | "svg"
-  | "mp4";
-
-const PREVIEW_EXT_TYPES: Record<string, PreviewFileType> = {
-  // Markdown
-  ".md": "md",
-  ".markdown": "md",
-  // JSON
-  ".json": "json",
-  // Plain text
-  ".txt": "txt",
-  // CSV
-  ".csv": "csv",
-  // Programming languages
-  ".ts": "ts",
-  ".tsx": "ts",
-  ".js": "js",
-  ".jsx": "js",
-  ".py": "py",
-  ".go": "go",
-  ".rs": "rs",
-  ".java": "java",
-  ".c": "c",
-  ".h": "c",
-  ".cpp": "cpp",
-  ".cc": "cpp",
-  ".cxx": "cpp",
-  ".hpp": "cpp",
-  // Images
-  ".png": "png",
-  ".jpg": "jpg",
-  ".jpeg": "jpeg",
-  ".gif": "gif",
-  ".svg": "svg",
-  // Videos
-  ".mp4": "mp4",
-};
-
-/** 按文件名识别、无扩展名的文本/配置文件（映射为 txt 以便按纯文本预览与全文检索）。
- * 键为小写 basename（含 .env 这类点开头文件名）。 */
-const PREVIEW_NAME_TYPES: Record<string, PreviewFileType> = {
-  ".env": "txt",
-  ".envrc": "txt",
-  ".gitignore": "txt",
-  ".gitattributes": "txt",
-  ".npmrc": "txt",
-  ".npmignore": "txt",
-  ".prettierrc": "txt",
-  ".babelrc": "txt",
-  ".eslintrc": "txt",
-  ".editorconfig": "txt",
-  "dockerfile": "txt",
-  "makefile": "txt",
-  "rakefile": "txt",
-  "gemfile": "txt",
-  "justfile": "txt",
-  "procfile": "txt",
-  "vagrantfile": "txt",
-  "caddyfile": "txt",
-};
-
-/** 按文件名判断类型；不支持/不合法（含路径分隔符、.. 遍历）返回 null，杜绝路径穿越。 */
-function previewTypeOf(name: string): PreviewFileType | null {
-  if (!name) return null;
-  if (name.includes("/") || name.includes("\\") || name.includes("..")) return null;
-  const lower = name.toLowerCase();
-  // 先按 basename 精确匹配无扩展名配置文件（如 Dockerfile、.gitignore、.env）
-  const named = PREVIEW_NAME_TYPES[lower];
-  if (named) return named;
-  // .env.local / .env.production 这类带环境后缀的 env 文件
-  if (lower.startsWith(".env.")) return "txt";
-  const ext = name.slice(name.lastIndexOf(".")).toLowerCase();
-  return PREVIEW_EXT_TYPES[ext] ?? null;
-}
-
-/** 判断是否为二进制文件类型（需要 base64 编码）。 */
-function isBinaryType(type: PreviewFileType): boolean {
-  return ["png", "jpg", "jpeg", "gif", "svg", "mp4"].includes(type);
-}
-
-/** 校验合法的单个文件名/目录名（只能是 basename：非空、不含分隔符、不含 ..）。 */
-function safeBasename(name: unknown): name is string {
-  return (
-    typeof name === "string" &&
-    !!name.trim() &&
-    !name.includes("/") &&
-    !name.includes("\\") &&
-    !name.includes("..")
-  );
-}
-
-/** 按扩展名推断 MIME；未知类型回退 application/octet-stream（用于原始文件下载）。 */
-function mimeOf(name: string): string {
-  const ext = name.slice(name.lastIndexOf(".") + 1).toLowerCase();
-  return (
-    {
-      md: "text/markdown",
-      json: "application/json",
-      txt: "text/plain",
-      csv: "text/csv",
-      yml: "text/yaml",
-      yaml: "text/yaml",
-      toml: "text/x-toml",
-      xml: "application/xml",
-      html: "text/html",
-      htm: "text/html",
-      css: "text/css",
-      js: "text/javascript",
-      mjs: "text/javascript",
-      cjs: "text/javascript",
-      ts: "text/plain",
-      py: "text/x-python",
-      go: "text/plain",
-      rs: "text/plain",
-      java: "text/plain",
-      c: "text/plain",
-      cpp: "text/plain",
-      log: "text/plain",
-      png: "image/png",
-      jpg: "image/jpeg",
-      jpeg: "image/jpeg",
-      gif: "image/gif",
-      svg: "image/svg+xml",
-      webp: "image/webp",
-      ico: "image/x-icon",
-      pdf: "application/pdf",
-      zip: "application/zip",
-      gz: "application/gzip",
-      mp4: "video/mp4",
-      webm: "video/webm",
-      mp3: "audio/mpeg",
-    } as Record<string, string>
-  )[ext] ?? "application/octet-stream";
-}
-
-/** 预览列表项：文件带 type，目录带 dir 标记（空目录也入列，前端据此显示目录节点）。 */
-type PreviewListEntry =
-  | { name: string; path: string; size: number; modified: number; type: PreviewFileType; dir?: false }
-  | { name: string; path: string; size: number; modified: number; dir: true };
-
-/** 递归列出目录下所有可预览文件（md/json/txt/csv 等，跳过噪音目录、限数量），name 为相对根目录的路径。
- * 目录（含空目录）也作为条目返回，前端据此在树中展示空目录节点。 */
-async function listPreviewFiles(dir: string): Promise<PreviewListEntry[]> {
-  const list: PreviewListEntry[] = [];
-  const walk = async (d: string): Promise<void> => {
-    if (list.length >= MAX_PREVIEW_FILES) return;
-    let entries;
-    try {
-      entries = await readdir(d, { withFileTypes: true });
-    } catch {
-      // 目录不存在或不可读：跳过该目录
-      return;
-    }
-    for (const e of entries) {
-      if (list.length >= MAX_PREVIEW_FILES) return;
-      const full = join(d, e.name);
-      if (e.isDirectory()) {
-        if (PREVIEW_SKIP_DIRS.has(e.name)) continue;
-        // 先递归收集子级，再入列目录本身（空目录也显示）
-        await walk(full);
-        if (list.length >= MAX_PREVIEW_FILES) return;
-        try {
-          const s = await stat(full);
-          list.push({
-            name: full.slice(dir.length).replace(/\\/g, "/").replace(/^\/+/, ""),
-            path: full,
-            size: 0,
-            modified: s.mtimeMs,
-            dir: true,
-          });
-        } catch {
-          /* 单条 stat 失败忽略，不阻塞其余 */
-        }
-      } else if (e.isFile()) {
-        const type = previewTypeOf(e.name);
-        if (!type) continue;
-        try {
-          const s = await stat(full);
-          list.push({
-            name: full.slice(dir.length).replace(/\\/g, "/").replace(/^\/+/, ""),
-            path: full,
-            size: s.size,
-            type,
-            modified: s.mtimeMs,
-          });
-        } catch {
-          /* 单条 stat 失败忽略，不阻塞其余 */
-        }
-      }
-    }
-  };
-  await walk(dir);
-  return list.sort((a, b) => a.name.localeCompare(b.name));
-}
-
-/** 解析会话所属文件夹：在「工作区 → 项目 → 会话」树上找到该会话挂载的「最深」工作区/项目节点路径。
- * 不直接取会话记录的 cwd，而是按会话在树上的归属（哪个文件夹下）确定根目录。 */
-async function resolveSessionFolder(sessid: string): Promise<string | null> {
-  if (!sessid) return null;
-  const tree = await listSessionScopeTree();
-  let found: string | null = null;
-  const walk = (node: ScopeNode): void => {
-    if (found) return;
-    for (const s of node.sessions ?? []) {
-      if (s.id === sessid && node.path !== UNMATCHED_SCOPE_PATH) {
-        found = node.path;
-        return;
-      }
-    }
-    for (const child of node.children) walk(child);
-  };
-  for (const ws of tree) walk(ws);
-  return found;
-}
-
-/** 读取单个可预览文件内容（支持文本/代码/配置/日志/图片；拒绝路径穿越、限大小）；不合法或不存在返回 null。 */
-async function readPreviewFile(
-  p: string,
-): Promise<{
+/** 目录浏览的单条结果。 */
+interface DirEntry {
   name: string;
   path: string;
-  content: string;
-  size: number;
-  type: PreviewFileType;
-  truncated?: boolean;
-  totalLines?: number;
-} | null> {
-  const type = previewTypeOf(basename(p));
-  if (!type) return null;
-  if (p.includes("..")) return null;
-  if (!existsSync(p)) return null;
-  const s = await stat(p);
-  if (!s.isFile()) return null;
-
-  // 根据文件类型应用大小限制：仅二进制文件有硬上限；文本文件 >2MB 时改为截流预览（见下）
-  if (isBinaryType(type) && s.size > MAX_IMAGE_FILE_SIZE) {
-    throw new Error("file too large");
-  }
-
-  // 二进制文件：读取 Buffer 并 base64 编码
-  if (isBinaryType(type)) {
-    const buffer = await readFile(p);
-    const content = buffer.toString("base64");
-    return { name: basename(p), path: p, content, size: s.size, type };
-  }
-
-  // 文本文件：读取 UTF-8 内容
-  let content = await readFile(p, "utf8");
-
-  // 大文本截流：文件超过 2MB 时只返回部分行，避免超大内容一次性渲染导致界面卡死。
-  // 文本（md/txt/csv/json/code 等）只返回首部（从头阅读更自然）。
-  let truncated: boolean | undefined;
-  let totalLines: number | undefined;
-  if (s.size > MAX_PREVIEW_FILE_SIZE) {
-    const lines = content.split("\n");
-    totalLines = lines.length;
-    if (lines.length > TEXT_LINE_CAP) {
-      content = lines.slice(0, TEXT_LINE_CAP).join("\n");
-      truncated = true;
-    }
-  }
-
-  return {
-    name: basename(p),
-    path: p,
-    content,
-    size: s.size,
-    type,
-    ...(truncated !== undefined && { truncated }),
-    ...(totalLines !== undefined && { totalLines }),
-  };
+  hidden: boolean;
 }
 
-/** 是否可参与全文搜索的文本文件类型（排除二进制/图片/过大文件）。 */
-function searchableType(type: PreviewFileType): boolean {
-  return !["png", "jpg", "jpeg", "gif", "svg", "mp4"].includes(type);
+/** 目录浏览结果：当前路径、宿主 home、祖先链与一层子目录。 */
+interface DirListing {
+  path: string;
+  home: string;
+  crumbs: DirEntry[];
+  entries: DirEntry[];
+  truncated: boolean;
 }
 
-/** 递归全文搜索（grep）：对根目录下所有可预览文本文件做大小写可选的子串匹配，
- * 返回命中 `{ path, name, type, size, line, index, text }` 列表，命中行截断展示，数量受限。 */
-async function searchPreviewFiles(
-  dir: string,
-  query: string,
-  caseSensitive: boolean,
-): Promise<Array<{ path: string; name: string; type: PreviewFileType; size: number; line: number; index: number; text: string }>> {
-  const matches: Array<{ path: string; name: string; type: PreviewFileType; size: number; line: number; index: number; text: string }> = [];
-  const needle = caseSensitive ? query : query.toLowerCase();
-  const walk = async (d: string): Promise<void> => {
-    if (matches.length >= SEARCH_TOTAL_MATCHES) return;
-    let entries;
-    try {
-      entries = await readdir(d, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      if (matches.length >= SEARCH_TOTAL_MATCHES) return;
-      const full = join(d, e.name);
-      if (e.isDirectory()) {
-        if (PREVIEW_SKIP_DIRS.has(e.name)) continue;
-        await walk(full);
-      } else if (e.isFile()) {
-        const type = previewTypeOf(e.name);
-        if (!type || !searchableType(type)) continue;
+/** 单次列举的目录上限，超出标记 truncated（防止超大目录拖慢 UI）。 */
+const DIR_LIST_LIMIT = 500;
+
+/** Windows 盘符根（C:\）或 POSIX 根（/）。 */
+function rootOf(abs: string): string {
+  const m = /^([A-Za-z]:[\\/])/.exec(abs);
+  if (m) return m[1];
+  return "/";
+}
+
+/** 把绝对路径拆成祖先链（含根与自身）。 */
+function crumbsOf(abs: string): DirEntry[] {
+  const root = rootOf(abs);
+  // 分隔符跟随根形态：POSIX 用 "/"，Windows 盘符根用 "\"
+  const sep = root === "/" ? "/" : "\\";
+  const joinSeg = (base: string, part: string): string =>
+    /[\\/]$/.test(base) ? `${base}${part}` : `${base}${sep}${part}`;
+  const out: DirEntry[] = [{ name: root, path: root, hidden: false }];
+  const rest = abs.slice(root.length).replace(/[\\/]+$/, "");
+  if (!rest) return out;
+  let cur = root;
+  for (const part of rest.split(/[\\/]+/)) {
+    if (!part) continue;
+    cur = joinSeg(cur, part);
+    out.push({ name: part, path: cur, hidden: part.startsWith(".") });
+  }
+  return out;
+}
+
+/** 规范化用户传入的路径：相对路径基于 home 解析。 */
+function resolveDirInput(input: string | undefined, home: string): string {
+  const raw = (input ?? "").trim();
+  if (!raw) return home;
+  return isAbsolute(raw) ? resolve(raw) : resolve(home, raw);
+}
+
+/** 列出指定目录（缺省为 home）的一层子目录，带面包屑。 */
+async function listFsDirectory(input?: string): Promise<DirListing> {
+  const home = homedir();
+  const dir = resolveDirInput(input, home);
+  const st = await stat(dir);
+  if (!st.isDirectory()) throw new Error(`not a directory: ${dir}`);
+  const all = await readdir(dir, { withFileTypes: true });
+  const dirs = all
+    .filter((d) => {
+      if (d.isDirectory()) return true;
+      // 符号链接：按目标是否为目录判定（无法判定时不列出）
+      if (d.isSymbolicLink()) {
         try {
-          const s = await stat(full);
-          if (s.size > SEARCH_MAX_FILE_SIZE) continue;
-          const text = await readFile(full, "utf8");
-          const lines = text.split("\n");
-          let perFile = 0;
-          for (let i = 0; i < lines.length && perFile < SEARCH_MATCHES_PER_FILE; i++) {
-            const lineText = lines[i];
-            const idx = caseSensitive ? lineText.indexOf(query) : lineText.toLowerCase().indexOf(needle);
-            if (idx >= 0) {
-              perFile++;
-              const trimmed = lineText.trim();
-              matches.push({
-                path: full,
-                name: basename(full),
-                type,
-                size: s.size,
-                line: i + 1,
-                index: idx,
-                text:
-                  trimmed.length > 160
-                    ? `${trimmed.slice(0, 160)}…`
-                    : trimmed || " ",
-              });
-            }
-          }
+          return statSync(join(dir, d.name)).isDirectory();
         } catch {
-          /* 单个文件读取失败忽略 */
+          return false;
         }
       }
-    }
+      return false;
+    })
+    .map<DirEntry>((d) => ({
+      name: d.name,
+      path: join(dir, d.name),
+      hidden: d.name.startsWith("."),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  return {
+    path: dir,
+    home,
+    crumbs: crumbsOf(dir),
+    entries: dirs.slice(0, DIR_LIST_LIMIT),
+    truncated: dirs.length > DIR_LIST_LIMIT,
   };
-  await walk(dir);
-  return matches;
 }
 
-/** 按行片段读取文本文件：返回 `[startOffset, startOffset+limit)` 行窗口，避免一次性传输整文件。
- * 使用流式行读取：仅缓存目标窗口行，常量内存（不再有 4MB 硬上限，超大文件也能分片预览）。
- * 仅限文本类文件；文件不合法/二进制返回 null。 */
-async function readPreviewFileLines(
-  p: string,
-  offset: number,
-  limit: number,
-): Promise<{ name: string; path: string; size: number; type: PreviewFileType; lines: string[]; total: number; offset: number } | null> {
-  const type = previewTypeOf(basename(p));
-  if (!type || !searchableType(type)) return null;
-  if (p.includes("..")) return null;
-  if (!existsSync(p)) return null;
-  const s = await stat(p);
-  if (!s.isFile()) return null;
-  const start = Math.max(0, offset);
-  const cap = Math.min(10000, Math.max(1, limit)); // 单次窗口上限
-  const end = start + cap;
-  // 单遍流式：沿途累计 total（供虚拟滚动占位高度），仅保留 [start,end) 窗口行
-  return await new Promise((resolve, reject) => {
-    const lines: string[] = [];
-    let total = 0;
-    let rl: ReturnType<typeof createInterface> | undefined;
-    try {
-      rl = createInterface({ input: createReadStream(p, { encoding: "utf8" }), crlfDelay: Infinity });
-    } catch (err) {
-      reject(err);
-      return;
-    }
-    rl.on("line", (ln) => {
-      if (total >= start && total < end) lines.push(ln);
-      total++;
-    });
-    rl.on("close", () =>
-      resolve({ name: basename(p), path: p, size: s.size, type, lines, total, offset: start }),
-    );
-    rl.on("error", reject);
-  });
-}
-
-/** 解析会话所属预览根目录：优先组装端记录的 cwd，其次会话 header.cwd，最后回退到会话树的归属节点。
- * 返回空串表示未解析到（前端展示「无会话所属文件夹」）。 */
-async function resolvePreviewRoot(sessid: string): Promise<string> {
-  if (!sessid) return "";
-  const cwd1 = getActiveSessionCwd(sessid);
-  if (cwd1) return cwd1;
-  const rec = (await listSessionRecords()).find((r) => r.id === sessid);
-  if (rec?.cwd) return rec.cwd;
-  const treeFolder = await resolveSessionFolder(sessid);
-  return treeFolder ?? "";
+/** 在指定父目录下新建子目录，返回新目录绝对路径。 */
+async function createFsDirectory(parent: string, name: string): Promise<string> {
+  const home = homedir();
+  const base = resolveDirInput(parent, home);
+  const clean = name.trim().replace(/[\\/]+/g, "");
+  if (!clean) throw new Error("invalid directory name");
+  const target = join(base, clean);
+  await mkdir(target, { recursive: false });
+  return target;
 }
 
 export function makePromptRoutes(): WebRoute[] {
@@ -842,7 +526,12 @@ export function makePromptRoutes(): WebRoute[] {
       // 写盘由后端完成，桌面端不弹「选择保存路径」对话框，且写完后才响应，前端随之提示成功。
       if (method === "POST" && segments[0] === "export" && segments[1] === "save") {
         const body = await readJsonBody(req);
-        const obj = (typeof body === "object" && body !== null ? body : {}) as { ids?: unknown; format?: unknown };
+        const obj = (typeof body === "object" && body !== null ? body : {}) as {
+          ids?: unknown;
+          format?: unknown;
+          /** 目标目录；缺省写入系统「下载」目录。由前端目录选择器给出。 */
+          dir?: unknown;
+        };
         const ids = Array.isArray(obj.ids) ? obj.ids.filter((x): x is string => typeof x === "string") : undefined;
         const format = typeof obj.format === "string" ? obj.format : "json";
         const data = await exportPrompts(ids && ids.length > 0 ? ids : undefined);
@@ -851,8 +540,9 @@ export function makePromptRoutes(): WebRoute[] {
           data.prompts.map((p) => ({ title: p.title, body: p.body, tags: p.tags, summary: p.summary })),
         );
         if (!file) return json(res, 400, { ok: false, error: "bad request" });
-        const dir = downloadDir();
-        await mkdir(dir, { recursive: true });
+        // 目标目录：前端传入的用户选择目录优先，否则回落系统下载目录
+        const requested = typeof obj.dir === "string" ? obj.dir.trim() : "";
+        const dir = requested ? requested : downloadDir();
         // 同名处理：下载目录已有同名文件时，按 Windows 风格追加序号 `name (n).ext`，避免覆盖
         const ext = file.fileName.match(/\.([^.]*)$/)?.[1] ?? "";
         const base = ext ? file.fileName.slice(0, -(ext.length + 1)) : file.fileName;
@@ -863,7 +553,16 @@ export function makePromptRoutes(): WebRoute[] {
           n++;
         }
         const target = join(dir, finalName);
-        await writeFile(target, file.content, "utf8");
+        try {
+          await mkdir(dir, { recursive: true });
+          await writeFile(target, file.content, "utf8");
+        } catch (e) {
+          // 目标目录不可写 / 路径非法时给出明确错误，前端直接提示
+          return json(res, 400, {
+            ok: false,
+            error: `write failed: ${e instanceof Error ? e.message : String(e)}`,
+          });
+        }
         return json(res, 200, { ok: true, data: { count: data.prompts.length, filePath: target } });
       }
 
@@ -925,6 +624,42 @@ export function makePromptRoutes(): WebRoute[] {
       if (method === "POST" && tail === "/skills/import") {
         const result = await importSkillsFromDisk();
         return json(res, 200, { ok: true, data: result });
+      }
+
+      // GET /fs/list?path= — 目录浏览：列出一层子目录 + 面包屑（自建能力，不依赖宿主 workspaces）
+      if (method === "GET" && tail === "/fs/list") {
+        const path = new URL(req.url ?? "/", "http://localhost").searchParams.get("path") ?? "";
+        try {
+          return json(res, 200, { ok: true, data: await listFsDirectory(path || undefined) });
+        } catch (e) {
+          return json(res, 400, {
+            ok: false,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
+
+      // POST /fs/mkdir — 在指定父目录下新建子目录（目录选择弹窗「新建文件夹」）
+      if (method === "POST" && tail === "/fs/mkdir") {
+        const b = await readJsonBody(req);
+        const parent =
+          typeof b === "object" && b !== null && typeof (b as { path?: unknown }).path === "string"
+            ? (b as { path: string }).path
+            : "";
+        const name =
+          typeof b === "object" && b !== null && typeof (b as { name?: unknown }).name === "string"
+            ? (b as { name: string }).name
+            : "";
+        if (!name.trim()) return json(res, 400, { ok: false, error: "invalid body: {path, name}" });
+        try {
+          const data = await createFsDirectory(parent, name);
+          return json(res, 200, { ok: true, data: { path: data } });
+        } catch (e) {
+          return json(res, 400, {
+            ok: false,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
       }
 
       // GET /skills/available — 列出 ~/.dsh/skills 下可导入的技能（解析为可编辑条目，供导入弹窗勾选）
@@ -1927,380 +1662,6 @@ export function makePromptRoutes(): WebRoute[] {
           return json(res, 404, {
             ok: false,
             error: err instanceof Error ? err.message : "asset not found",
-          });
-        }
-      }
-
-      // GET /preview/list?sessid=&dir= — 列出（递归）所有可预览文件（md/json/txt/csv）。
-      // 根目录确定：优先「打开文件夹」手动指定的 dir（source=manual，不经过会话解析）；
-      // 否则按「当前会话所在工作目录」确定：优先组装端记录的 cwd，其次会话自身 header.cwd，
-      // 最后才回退到「工作区 → 项目 → 会话」树上的归属节点（无 cwd 记录时兜底）。
-      // source 说明命中来源，便于排查「找不到目录」。会话切换时跟随新的会话 id 重新解析。
-      if (method === "GET" && segments[0] === "preview" && segments[1] === "list" && segments.length === 2) {
-        const q = new URLSearchParams((req.url ?? "").split("?", 2)[1] ?? "");
-        const manualDir = (q.get("dir") ?? "").trim();
-        const sessid = (q.get("sessid") ?? "").trim() || getCurrentSessionScope() || "";
-        let dir = "";
-        let source = "none";
-        if (manualDir) {
-          dir = manualDir;
-          source = "manual";
-        } else if (sessid) {
-          const cwd1 = getActiveSessionCwd(sessid);
-          if (cwd1) {
-            dir = cwd1;
-            source = "assembly";
-          } else {
-            const rec = (await listSessionRecords()).find((r) => r.id === sessid);
-            if (rec?.cwd) {
-              dir = rec.cwd;
-              source = "record";
-            } else {
-              const treeFolder = await resolveSessionFolder(sessid);
-              if (treeFolder) {
-                dir = treeFolder;
-                source = "tree";
-              }
-            }
-          }
-        }
-        if (!dir) return json(res, 200, { ok: true, data: { dir: "", files: [], source } });
-        const files = await listPreviewFiles(dir);
-        return json(res, 200, { ok: true, data: { dir, files, source } });
-      }
-
-      // GET /preview/read?path= — 读取单个可预览文件内容（md/json/txt/csv，供右侧渲染）
-      if (method === "GET" && segments[0] === "preview" && segments[1] === "read" && segments.length === 2) {
-        const q = new URLSearchParams((req.url ?? "").split("?", 2)[1] ?? "");
-        const p = q.get("path") ?? "";
-        if (!p) return json(res, 400, { ok: false, error: "invalid query: path" });
-        try {
-          const data = await readPreviewFile(p);
-          if (!data) return json(res, 404, { ok: false, error: "file not found or invalid" });
-          return json(res, 200, { ok: true, data });
-        } catch (err) {
-          return json(res, 400, {
-            ok: false,
-            error: err instanceof Error ? err.message : "read failed",
-          });
-        }
-      }
-
-      // GET /preview/download?path= — 不经截断读取文件的原始字节（Base64 返回，供浏览器下载任意类型文件）。
-      if (method === "GET" && segments[0] === "preview" && segments[1] === "download" && segments.length === 2) {
-        const q = new URLSearchParams((req.url ?? "").split("?", 2)[1] ?? "");
-        const p = q.get("path") ?? "";
-        if (!p) return json(res, 400, { ok: false, error: "invalid query: path" });
-        if (p.includes("..")) return json(res, 403, { ok: false, error: "path traversal not allowed" });
-        try {
-          if (!existsSync(p)) return json(res, 404, { ok: false, error: "file not found" });
-          const s = await stat(p);
-          if (!s.isFile()) return json(res, 400, { ok: false, error: "not a file" });
-          const buf = await readFile(p); // 不传编码 → 原始 Buffer，无截断
-          return json(res, 200, {
-            ok: true,
-            data: {
-              name: basename(p),
-              mime: mimeOf(basename(p)),
-              size: s.size,
-              base64: buf.toString("base64"),
-            },
-          });
-        } catch (err) {
-          return json(res, 400, {
-            ok: false,
-            error: err instanceof Error ? err.message : "download failed",
-          });
-        }
-      }
-
-      // GET /preview/active — 取当前会话 id（预览面板回退源：useSession 不可用时轮询此端点）。
-      if (method === "GET" && segments[0] === "preview" && segments[1] === "active" && segments.length === 2) {
-        return json(res, 200, { ok: true, data: { sessid: getCurrentSessionScope() ?? "" } });
-      }
-
-      // POST /preview/save — 保存文件内容（预览面板右侧「保存」按钮回写磁盘）。
-      if (method === "POST" && segments[0] === "preview" && segments[1] === "save" && segments.length === 2) {
-        const body = await readJsonBody(req).catch(() => null);
-        const data = (body ?? {}) as { path?: unknown; content?: unknown };
-        const path = typeof data.path === "string" ? data.path : "";
-        if (!path || typeof data.content !== "string") {
-          return json(res, 400, { ok: false, error: "invalid request: path and content required" });
-        }
-        // 安全检查：拒绝路径穿越
-        if (path.includes("..")) {
-          return json(res, 403, { ok: false, error: "path traversal not allowed" });
-        }
-        try {
-          await writeFile(path, data.content, "utf8");
-          return json(res, 200, { ok: true, data: { success: true } });
-        } catch (err) {
-          return json(res, 500, {
-            ok: false,
-            error: err instanceof Error ? err.message : "write failed",
-          });
-        }
-      }
-
-      // POST /preview/rename — 重命名文件或目录（新名只能是 basename，拒绝路径穿越）。
-      if (method === "POST" && segments[0] === "preview" && segments[1] === "rename" && segments.length === 2) {
-        const body = await readJsonBody(req).catch(() => null);
-        const b = (body ?? {}) as { path?: unknown; name?: unknown };
-        const p = typeof b.path === "string" ? b.path : "";
-        if (!p || p.includes("..") || !safeBasename(b.name)) {
-          return json(res, 400, { ok: false, error: "invalid request: path and name required" });
-        }
-        try {
-          const newPath = join(basename(p) === p ? "" : p.slice(0, p.length - basename(p).length), b.name);
-          if (newPath === p) return json(res, 400, { ok: false, error: "name unchanged" });
-          await rename(p, newPath);
-          return json(res, 200, { ok: true, data: { success: true, path: newPath } });
-        } catch (err) {
-          return json(res, 500, {
-            ok: false,
-            error: err instanceof Error ? err.message : "rename failed",
-          });
-        }
-      }
-
-      // POST /preview/delete — 删除文件或目录（目录递归删除，不可恢复）。
-      if (method === "POST" && segments[0] === "preview" && segments[1] === "delete" && segments.length === 2) {
-        const body = await readJsonBody(req).catch(() => null);
-        const b = (body ?? {}) as { path?: unknown };
-        const p = typeof b.path === "string" ? b.path : "";
-        if (!p || p.includes("..")) return json(res, 400, { ok: false, error: "invalid request: path required" });
-        try {
-          await rm(p, { recursive: true, force: true });
-          return json(res, 200, { ok: true, data: { success: true } });
-        } catch (err) {
-          return json(res, 500, {
-            ok: false,
-            error: err instanceof Error ? err.message : "delete failed",
-          });
-        }
-      }
-
-      // POST /preview/mkdir — 在 dir 下新建子目录。dir 允许为空表示当前列表根目录。
-      if (method === "POST" && segments[0] === "preview" && segments[1] === "mkdir" && segments.length === 2) {
-        const body = await readJsonBody(req).catch(() => null);
-        const b = (body ?? {}) as { dir?: unknown; name?: unknown };
-        const dir = typeof b.dir === "string" ? b.dir : "";
-        if (dir.includes("..") || !safeBasename(b.name)) {
-          return json(res, 400, { ok: false, error: "invalid request: dir and name required" });
-        }
-        try {
-          await mkdir(join(dir, b.name), { recursive: false });
-          return json(res, 200, { ok: true, data: { success: true } });
-        } catch (err) {
-          return json(res, 500, {
-            ok: false,
-            error: err instanceof Error ? err.message : "mkdir failed",
-          });
-        }
-      }
-
-      // POST /preview/newfile — 在 dir 下新建空白文件。dir 允许为空表示当前列表根目录。
-      if (method === "POST" && segments[0] === "preview" && segments[1] === "newfile" && segments.length === 2) {
-        const body = await readJsonBody(req).catch(() => null);
-        const b = (body ?? {}) as { dir?: unknown; name?: unknown };
-        const dir = typeof b.dir === "string" ? b.dir : "";
-        if (dir.includes("..") || !safeBasename(b.name)) {
-          return json(res, 400, { ok: false, error: "invalid request: dir and name required" });
-        }
-        try {
-          await writeFile(join(dir, b.name), "", "utf8");
-          return json(res, 200, { ok: true, data: { success: true } });
-        } catch (err) {
-          return json(res, 500, {
-            ok: false,
-            error: err instanceof Error ? err.message : "create failed",
-          });
-        }
-      }
-
-      // POST /preview/rootmtime — 取当前预览根目录的总 mtime 快照（dir/sessid 解析口径与 list 一致）。
-      // 前端据此判断目录是否变化，避免无变化时全量重扫（增量刷新）。
-      if (method === "POST" && segments[0] === "preview" && segments[1] === "rootmtime" && segments.length === 2) {
-        const body = await readJsonBody(req).catch(() => null);
-        const b = (body ?? {}) as { dir?: unknown; sessid?: unknown };
-        const manualDir = typeof b.dir === "string" ? b.dir.trim() : "";
-        const sessid = (typeof b.sessid === "string" ? b.sessid.trim() : "") || getCurrentSessionScope() || "";
-        let dir = manualDir;
-        if (!dir) dir = await resolvePreviewRoot(sessid);
-        if (!dir || !existsSync(dir)) return json(res, 200, { ok: true, data: { dir, mtime: 0 } });
-        let newest = 0;
-        try {
-          const walk = async (d: string, depth: number): Promise<void> => {
-            if (depth > 6) return;
-            let entries;
-            try {
-              entries = await readdir(d, { withFileTypes: true });
-            } catch {
-              return;
-            }
-            for (const e of entries) {
-              const full = join(d, e.name);
-              if (e.isDirectory()) {
-                if (PREVIEW_SKIP_DIRS.has(e.name)) continue;
-                await walk(full, depth + 1);
-              } else {
-                try {
-                  const s = await stat(full);
-                  if (s.mtimeMs > newest) newest = s.mtimeMs;
-                } catch { /* 忽略 */ }
-              }
-            }
-          };
-          const rootStat = await stat(dir);
-          if (rootStat.mtimeMs > newest) newest = rootStat.mtimeMs;
-          await walk(dir, 0);
-        } catch {
-          /* 快照失败时返回已有 newest */
-        }
-        return json(res, 200, { ok: true, data: { dir, mtime: newest } });
-      }
-
-      // GET /preview/watch?dir=&sessid= — SSE 推送预览根目录的实时变更（替代轮询 rootmtime）。
-      // 客户端建立连接后立即收到一次握手，之后目录内任意文件/目录变化（fs.watch 递归监听，防抖合并）
-      // 都推送 { changed: true }；客户端据此触发增量刷新。连接关闭时清理 watcher 与心跳。
-      if (method === "GET" && segments[0] === "preview" && segments[1] === "watch" && segments.length === 2) {
-        const q = new URLSearchParams((req.url ?? "").split("?", 2)[1] ?? "");
-        const dirArg = (q.get("dir") ?? "").trim();
-        const sessid = (q.get("sessid") ?? "").trim() || getCurrentSessionScope() || "";
-        let dir = dirArg && !dirArg.includes("..") ? dirArg : "";
-        if (!dir) dir = await resolvePreviewRoot(sessid);
-        if (!dir || !existsSync(dir)) return json(res, 200, { ok: true, data: { closed: true, reason: "no dir" } });
-
-        res.writeHead(200, {
-          "content-type": "text/event-stream",
-          "cache-control": "no-cache",
-          connection: "keep-alive",
-        });
-        res.write(`data: ${JSON.stringify({ changed: false })}\n\n`);
-
-        let alive = true;
-        let watcher: ReturnType<typeof watch> | undefined;
-        try {
-          watcher = watch(dir, { recursive: true });
-        } catch {
-          // 递归监听不可用（旧平台/权限受限）时回退为仅监听根目录
-          try {
-            watcher = watch(dir);
-          } catch {
-            watcher = undefined;
-          }
-        }
-
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const notify = () => {
-          if (!alive) return;
-          // 防抖合并短时间内密集的文件系统事件为一次推送
-          if (timer) clearTimeout(timer);
-          timer = setTimeout(() => {
-            if (alive) res.write(`data: ${JSON.stringify({ changed: true })}\n\n`);
-          }, 250);
-        };
-        watcher?.on("change", notify);
-        watcher?.on("error", () => {
-          /* 监听出错不主动断开，保持连接等待下次变更 */
-        });
-
-        // 心跳注释行：避免长连接被空闲超时掐断
-        const hb = setInterval(() => {
-          if (alive) res.write(": ping\n\n");
-        }, 15000);
-
-        req.on("close", () => {
-          alive = false;
-          if (timer) clearTimeout(timer);
-          clearInterval(hb);
-          watcher?.close();
-          res.end();
-        });
-        return;
-      }
-
-      // POST /preview/search — 全文搜索（grep）。dir 为空时按 sessid 解析根目录。
-      if (method === "POST" && segments[0] === "preview" && segments[1] === "search" && segments.length === 2) {
-        const body = await readJsonBody(req).catch(() => null);
-        const b = (body ?? {}) as { dir?: unknown; sessid?: unknown; query?: unknown; caseSensitive?: unknown };
-        const manualDir = typeof b.dir === "string" ? b.dir.trim() : "";
-        const sessid = (typeof b.sessid === "string" ? b.sessid.trim() : "") || getCurrentSessionScope() || "";
-        const query = typeof b.query === "string" ? b.query : "";
-        const caseSensitive = b.caseSensitive === true;
-        if (!query.trim()) return json(res, 400, { ok: false, error: "invalid request: query required" });
-        const dir = manualDir || (await resolvePreviewRoot(sessid));
-        if (!dir) return json(res, 200, { ok: true, data: { dir: "", matches: [] } });
-        const matches = await searchPreviewFiles(dir, query, caseSensitive);
-        return json(res, 200, { ok: true, data: { dir, matches } });
-      }
-
-      // GET /preview/lines?path=&offset=&limit= — 按行窗口读取文本文件（供长文本/日志虚拟滚动）。
-      if (method === "GET" && segments[0] === "preview" && segments[1] === "lines" && segments.length === 2) {
-        const q = new URLSearchParams((req.url ?? "").split("?", 2)[1] ?? "");
-        const p = q.get("path") ?? "";
-        const offset = Math.max(0, parseInt(q.get("offset") ?? "0", 10) || 0);
-        const limit = Math.min(5000, Math.max(1, parseInt(q.get("limit") ?? "200", 10) || 200));
-        if (!p) return json(res, 400, { ok: false, error: "invalid query: path" });
-        try {
-          const data = await readPreviewFileLines(p, offset, limit);
-          if (!data) return json(res, 404, { ok: false, error: "not a readable text file" });
-          return json(res, 200, { ok: true, data });
-        } catch (err) {
-          return json(res, 400, {
-            ok: false,
-            error: err instanceof Error ? err.message : "read lines failed",
-          });
-        }
-      }
-
-      // POST /preview/move — 移动文件或目录到目标目录下（保持原名）。不允许移动到自身内部。
-      if (method === "POST" && segments[0] === "preview" && segments[1] === "move" && segments.length === 2) {
-        const body = await readJsonBody(req).catch(() => null);
-        const b = (body ?? {}) as { path?: unknown; dir?: unknown };
-        const p = typeof b.path === "string" ? b.path : "";
-        const targetDir = typeof b.dir === "string" ? b.dir : "";
-        if (!p || !targetDir || p.includes("..") || targetDir.includes("..")) {
-          return json(res, 400, { ok: false, error: "invalid request: path and dir required" });
-        }
-        try {
-          const src = p;
-          const name = basename(src);
-          const dest = join(targetDir, name);
-          if (src === dest) return json(res, 400, { ok: false, error: "already in target" });
-          // 拒绝把目录移动到自身（或其子目录）内部：targetDir 是 src 的后代路径
-          const rel = relative(src, targetDir);
-          if (rel !== "" && !rel.startsWith("..") && !isAbsolute(rel)) {
-            return json(res, 400, { ok: false, error: "cannot move into itself" });
-          }
-          await rename(src, dest);
-          return json(res, 200, { ok: true, data: { success: true, path: dest } });
-        } catch (err) {
-          return json(res, 500, {
-            ok: false,
-            error: err instanceof Error ? err.message : "move failed",
-          });
-        }
-      }
-
-      // POST /preview/copy — 复制文件或目录到目标目录下（保持原名）。目录递归复制。
-      if (method === "POST" && segments[0] === "preview" && segments[1] === "copy" && segments.length === 2) {
-        const body = await readJsonBody(req).catch(() => null);
-        const b = (body ?? {}) as { path?: unknown; dir?: unknown };
-        const p = typeof b.path === "string" ? b.path : "";
-        const targetDir = typeof b.dir === "string" ? b.dir : "";
-        if (!p || !targetDir || p.includes("..") || targetDir.includes("..")) {
-          return json(res, 400, { ok: false, error: "invalid request: path and dir required" });
-        }
-        try {
-          const dest = join(targetDir, basename(p));
-          if (dest === p) return json(res, 400, { ok: false, error: "already in target" });
-          await cp(p, dest, { recursive: true, errorOnExist: false });
-          return json(res, 200, { ok: true, data: { success: true, path: dest } });
-        } catch (err) {
-          return json(res, 500, {
-            ok: false,
-            error: err instanceof Error ? err.message : "copy failed",
           });
         }
       }

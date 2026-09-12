@@ -109,11 +109,20 @@ export interface ExportSaveResult {
 }
 
 /**
- * 走后端下载：前端只传勾选的 ids 与导出格式，由后端拉取数据、组织文件并写入系统「下载」目录。
+ * 导出到指定目录：前端只传勾选的 ids、导出格式与目标目录，由后端拉取数据、
+ * 组织文件并写入该目录（dir 缺省时后端回落系统「下载」目录）。
  * 仅在文件真正写入磁盘后 resolve，不再有浏览器下载时序问题。
  */
-export function saveExportFile(ids: string[], format: string): Promise<ExportSaveResult> {
-  return send<ExportSaveResult>("POST", "/api/prompt-library/export/save", { ids, format });
+export function saveExportFile(
+  ids: string[],
+  format: string,
+  dir?: string,
+): Promise<ExportSaveResult> {
+  return send<ExportSaveResult>("POST", "/api/prompt-library/export/save", {
+    ids,
+    format,
+    ...(dir ? { dir } : {}),
+  });
 }
 
 /** 导入提示词的结果：成功/更新/跳过条数 + 逐条结果。 */
@@ -189,6 +198,36 @@ export interface SkillSource {
   summary: string;
   /** 是否已入库（同名技能已关联过提示词 → 再次导入为覆盖更新）。 */
   exists: boolean;
+}
+
+/** 目录浏览的单条结果（自建后端能力，见 host/fs 路由）。 */
+export interface DirEntry {
+  name: string;
+  path: string;
+  hidden: boolean;
+}
+
+/** 目录浏览结果：当前路径、宿主 home、祖先链与一层子目录。 */
+export interface DirListing {
+  path: string;
+  home: string;
+  crumbs: DirEntry[];
+  entries: DirEntry[];
+  truncated: boolean;
+}
+
+/**
+ * 列出指定目录（缺省为宿主 home）的一层子目录。
+ * 走插件自建的 `/fs/list` 路由，不依赖宿主 workspaces 能力。
+ */
+export function listFsDirectory(path?: string): Promise<DirListing> {
+  const qs = path ? `?path=${encodeURIComponent(path)}` : "";
+  return send<DirListing>("GET", `/api/prompt-library/fs/list${qs}`);
+}
+
+/** 在指定父目录下新建子目录，返回新目录绝对路径。 */
+export function createFsDirectory(path: string, name: string): Promise<{ path: string }> {
+  return send<{ path: string }>("POST", "/api/prompt-library/fs/mkdir", { path, name });
 }
 
 /** 列出 ~/.dsh/skills 下可导入的技能（解析为可编辑条目，供导入弹窗勾选）。 */
@@ -1101,205 +1140,7 @@ export function deleteBackup(name: string): Promise<{ deleted: boolean }> {
   return send<{ deleted: boolean }>("POST", "/api/prompt-library/backups/delete", { name });
 }
 
-// ── 会话预览（读取当前会话所在工作目录下的可预览文件）────────────────────
-
-/** 可预览文件类型（md / json / txt / csv / 代码 / 图片 / 视频）。 */
-export type PreviewFileType =
-  | "md" | "json" | "txt" | "csv"
-  | "ts" | "js" | "py" | "go" | "rs" | "java" | "c" | "cpp"
-  | "png" | "jpg" | "jpeg" | "gif" | "svg"
-  | "mp4";
-
-/** 当前会话工作目录下单个可预览文件信息。 */
-export interface PreviewFileEntry {
-  /** 相对根目录的路径（含子目录，如 docs/guide.md）。 */
-  name: string;
-  /** 文件绝对路径（读取内容用）。 */
-  path: string;
-  size: number;
-  modified: number;
-  type: PreviewFileType;
-  /** 目录标记：为 true 时表示该条目是目录（含空目录），type 无意义。 */
-  dir?: boolean;
-}
-
-/** 列出当前会话所在工作目录下（递归）所有可预览文件；会话切换时后端按新会话 id 重新解析根目录。
- * source 说明根目录命中来源（assembly=组装端 cwd / record=会话 header.cwd / tree=树归属 / none=未解析到）。 */
-export function listPreviewFiles(
-  sessid: string,
-): Promise<{ dir: string; files: PreviewFileEntry[]; source: string }> {
-  return send<{ dir: string; files: PreviewFileEntry[]; source: string }>(
-    "GET",
-    `/api/prompt-library/preview/list?sessid=${encodeURIComponent(sessid)}`,
-  );
-}
-
-/** 手动指定目录（「打开文件夹」选择）：直接列出该目录下（递归）所有可预览文件，不经过会话解析。 */
-export function listPreviewFilesByDir(
-  dir: string,
-): Promise<{ dir: string; files: PreviewFileEntry[]; source: string }> {
-  return send<{ dir: string; files: PreviewFileEntry[]; source: string }>(
-    "GET",
-    `/api/prompt-library/preview/list?dir=${encodeURIComponent(dir)}`,
-  );
-}
-
-/** 读取单个可预览文件内容（右侧渲染用）。 */
-export function readPreviewFile(
-  path: string,
-): Promise<{
-  name: string;
-  path: string;
-  content: string;
-  size: number;
-  type: PreviewFileType;
-  truncated?: boolean;
-  totalLines?: number;
-}> {
-  return send<
-    {
-      name: string;
-      path: string;
-      content: string;
-      size: number;
-      type: PreviewFileType;
-      truncated?: boolean;
-      totalLines?: number;
-    }
-  >(
-    "GET",
-    `/api/prompt-library/preview/read?path=${encodeURIComponent(path)}`,
-  );
-}
-
-/** 取当前会话 id（预览面板回退源：useSession 不可用时轮询此端点）。 */
-export function getActiveSessionId(): Promise<{ sessid: string }> {
-  return send<{ sessid: string }>("GET", "/api/prompt-library/preview/active");
-}
-
-/** 保存预览文件内容。 */
-export function savePreviewFile(
-  path: string,
-  content: string,
-): Promise<{ success: boolean }> {
-  return send<{ success: boolean }>("POST", "/api/prompt-library/preview/save", { path, content });
-}
-
-/** 不经截断读取原始字节（Base64），用于下载任意类型文件到本地。 */
-export function downloadPreviewFile(
-  path: string,
-): Promise<{ name: string; mime: string; size: number; base64: string }> {
-  return send<{ name: string; mime: string; size: number; base64: string }>(
-    "GET",
-    `/api/prompt-library/preview/download?path=${encodeURIComponent(path)}`,
-  );
-}
-
-/** 重命名文件/目录（name 只接受 basename，拒绝路径穿越）。 */
-export function previewRename(
-  path: string,
-  name: string,
-): Promise<{ success: boolean; path: string }> {
-  return send<{ success: boolean; path: string }>("POST", "/api/prompt-library/preview/rename", {
-    path,
-    name,
-  });
-}
-
-/** 删除文件/目录（目录递归删除，不可恢复）。 */
-export function previewDelete(path: string): Promise<{ success: boolean }> {
-  return send<{ success: boolean }>("POST", "/api/prompt-library/preview/delete", { path });
-}
-
-/** 在 dir 下新建子目录（dir 为空表示当前列表根目录）。 */
-export function previewMkdir(
-  dir: string,
-  name: string,
-): Promise<{ success: boolean }> {
-  return send<{ success: boolean }>("POST", "/api/prompt-library/preview/mkdir", { dir, name });
-}
-
-/** 在 dir 下新建空白文件（dir 为空表示当前列表根目录）。 */
-export function previewNewFile(
-  dir: string,
-  name: string,
-): Promise<{ success: boolean }> {
-  return send<{ success: boolean }>("POST", "/api/prompt-library/preview/newfile", {
-    dir,
-    name,
-  });
-}
-
-/** 单个全文搜索命中项：文件 + 命中行号 + 该行内容片段。 */
-export interface PreviewSearchMatch {
-  path: string;
-  name: string;
-  type: PreviewFileType;
-  size: number;
-  line: number;
-  index: number;
-  text: string;
-}
-
-/** 全文搜索（grep）：对会话根目录（或手动 dir）下文本文件做子串匹配，返回命中行。 */
-export function searchPreviewFiles(
-  params: { dir?: string; sessid?: string; query: string; caseSensitive?: boolean },
-): Promise<{ dir: string; matches: PreviewSearchMatch[] }> {
-  return send<{ dir: string; matches: PreviewSearchMatch[] }>(
-    "POST",
-    "/api/prompt-library/preview/search",
-    params,
-  );
-}
-
-/** 按行窗口读取文本文件：返回 `[offset, offset+limit)` 行及总行数（供长文本/日志虚拟滚动）。 */
-export function readPreviewFileLines(
-  path: string,
-  offset: number,
-  limit: number,
-): Promise<{
-  name: string;
-  path: string;
-  size: number;
-  type: PreviewFileType;
-  lines: string[];
-  total: number;
-  offset: number;
-}> {
-  return send<
-    {
-      name: string;
-      path: string;
-      size: number;
-      type: PreviewFileType;
-      lines: string[];
-      total: number;
-      offset: number;
-    }
-  >(
-    "GET",
-    `/api/prompt-library/preview/lines?path=${encodeURIComponent(path)}&offset=${offset}&limit=${limit}`,
-  );
-}
-
-/** 移动文件/目录到目标目录下（保持原名）。 */
-export function previewMove(path: string, dir: string): Promise<{ success: boolean; path: string }> {
-  return send<{ success: boolean; path: string }>("POST", "/api/prompt-library/preview/move", { path, dir });
-}
-
-/** 复制文件/目录到目标目录下（保持原名，目录递归复制）。 */
-export function previewCopy(path: string, dir: string): Promise<{ success: boolean; path: string }> {
-  return send<{ success: boolean; path: string }>("POST", "/api/prompt-library/preview/copy", { path, dir });
-}
-
-/** 取当前预览根目录的总 mtime 快照（dir/sessid 口径与 list 一致），用于增量刷新判断目录是否变化。 */
-export function previewRootMtime(
-  params: { dir?: string; sessid?: string },
-): Promise<{ dir: string; mtime: number }> {
-  return send<{ dir: string; mtime: number }>("POST", "/api/prompt-library/preview/rootmtime", params);
-}
-
-/** 检测 dsh-prompt-library 插件是否已安装（预览/监控并入本插件，恒为已安装）。 */
+/** 检测 dsh-prompt-library 插件是否已安装（本插件自身，恒为已安装）。 */
 export function checkPromptLibraryInstalled(): Promise<{ installed: boolean }> {
   return send<{ installed: boolean }>("GET", "/api/prompt-library/plugins/prompt-library");
 }

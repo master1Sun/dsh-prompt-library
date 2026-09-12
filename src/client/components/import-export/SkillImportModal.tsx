@@ -42,7 +42,7 @@ import {
   pickExportDirectory,
 } from "../../utils/workspace-picker.js";
 import { insertVariableAt } from "../data/TemplateVariables.js";
-import { DirectoryPickerModal } from "../preview/DirectoryPickerModal.js";
+import { DirectoryPickerModal } from "../common/DirectoryPickerModal.js";
 import { DialogCloseButton } from "../common/DialogCloseButton.js";
 import { BookIcon } from "../common/BookIcon.js";
 

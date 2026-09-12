@@ -1,5 +1,35 @@
 [
   {
+    "version": "0.14.0",
+    "date": "2026-09-13",
+    "zh": {
+      "title": "官方右侧面板 · 预览/监控下线 · 导出自选目录",
+      "items": [
+        "官方右侧面板：词库入口迁入宿主官方右侧面板，以卡片菜单展示数据管理、导入导出、人格管理、技能管理、看板、成就、公告、数据库与插件推荐，点击卡片即打开对应功能。",
+        "面板多语言：右侧面板接入插件 i18n，标题、卡片与引导文案随系统语言实时切换，无需重启。",
+        "两条入口并行：词库助手右键菜单保留不变，与右侧面板卡片菜单并存；左键单击助手直接打开右侧词库面板，拖动行为不受影响。",
+        "移除会话预览与会话监控：下线「预览」「监控」两个会话视图及其全部接口、路由与设置开关，功能更聚焦；目录选择弹窗已迁为通用组件，继续服务技能导入。",
+        "导出自选目录：导入导出的「导出」改为先选择本地目录再写盘，并记住上次选择的目录，下次直接定位，不再固定写入系统下载目录。",
+        "目录选择修复：宿主不再提供目录浏览能力时，改由插件自建目录浏览（浏览 + 新建文件夹），技能导入与「扫描文件夹」恢复正常。",
+        "插件推荐实时版本：置顶的 file-workbench、词库与 QQbot 三款插件的版本、Stars 与许可证改为从 GitHub 实时获取（30 分钟缓存），不再依赖市场站收录的滞后版本。",
+        "弹窗最大化：数据库与插件推荐弹窗新增最大化 / 还原按钮，浏览长数据表与插件详情更舒适。"
+      ]
+    },
+    "en": {
+      "title": "Official right panel · Preview/Monitor removed · Export to a chosen folder",
+      "items": [
+        "Official right panel: the library entry moves into the host's official right panel as a card menu — data management, import/export, personas, skills, dashboard, achievements, announcements, database and plugin recommendations, each opening on click.",
+        "Panel localization: the right panel is wired to plugin i18n, so titles, cards and guide text follow the system language and switch instantly without a restart.",
+        "Two entries in parallel: the assistant's context menu stays as-is alongside the right-panel card menu; left-clicking the assistant opens the right panel, dragging is unaffected.",
+        "Preview and monitor removed: the \"Preview\" and \"Monitor\" session views are retired along with all their APIs, routes and settings toggles for a more focused plugin; the directory picker survives as a shared component for skill import.",
+        "Export to a chosen folder: \"Export\" in import/export now asks for a local folder first and remembers the last choice for next time, instead of always writing to the system Downloads folder.",
+        "Directory picker fix: when the host no longer exposes directory browsing, the plugin serves it itself (browse + create folder), restoring skill import and \"Scan folder\".",
+        "Live pinned plugin versions: the three pinned plugins (file-workbench, prompt-library, QQbot) now read version, stars and license straight from GitHub (30-minute cache) instead of the lagging market listings.",
+        "Dialog maximize: the database and plugin-recommendation dialogs gain a maximize / restore button, more comfortable for long tables and plugin details."
+      ]
+    }
+  },
+  {
     "version": "0.13.0",
     "date": "2026-09-07",
     "zh": {

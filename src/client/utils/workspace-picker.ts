@@ -1,18 +1,18 @@
 /**
- * 宿主工作区运行时访问器 — 提供原生目录选择与浏览式目录列表能力。
+ * 目录选择能力访问器 — 宿主原生选择器 / 宿主浏览能力 / 插件自建后端 三级回退。
  *
- * dsh 客户端运行时在 apply 阶段把 WorkspaceRuntime 挂到 ctx.workspaces。
- * 桌面端（web 平台）通常只提供 `browse` 能力（listDirectory / createDirectory），
- * 原生 `native` 能力的 pickDirectory 会抛错；调用方应先尝试原生选择器，
- * 失败时回退到内置的浏览式目录选择弹窗。
+ * dsh 客户端运行时在 apply 阶段可能把 WorkspaceRuntime 挂到 ctx.workspaces，
+ * 但新版宿主不再稳定提供 `pickDirectory` / `listDirectory`（运行时 bundle 中已无该实现），
+ * 因此宿主能力缺失时回退到插件自建的 `/fs/list`、`/fs/mkdir` 路由，
+ * 保证「选择目录 / 扫描文件夹」始终可用。
  */
-import type { DirectoryListing } from "@deepseek-ai/dsh-client-runtime/client";
+import { createFsDirectory, type DirListing, listFsDirectory } from "./api.js";
 
-/** 目录选择所需的最小结构（与宿主 IWorkspaces 对齐）。 */
+/** 目录选择所需的最小结构（与宿主 IWorkspaces 对齐，字段可能缺失）。 */
 interface WorkspacesHost {
-  pickDirectory(): Promise<string | null>;
-  listDirectory(path?: string, signal?: AbortSignal): Promise<DirectoryListing>;
-  createDirectory(path: string, name: string): Promise<string>;
+  pickDirectory?: () => Promise<string | null>;
+  listDirectory?: (path?: string, signal?: AbortSignal) => Promise<DirListing>;
+  createDirectory?: (path: string, name: string) => Promise<string>;
 }
 
 let workspaces: WorkspacesHost | null = null;
@@ -27,9 +27,12 @@ export function isDirectoryPickerAvailable(): boolean {
   return !!workspaces && typeof workspaces.pickDirectory === "function";
 }
 
-/** 宿主浏览式目录列表（browse capability）是否可用。 */
+/**
+ * 浏览式目录选择是否可用。
+ * 宿主 browse 能力缺失时仍有插件自建后端兜底，故恒为 true。
+ */
 export function isDirectoryBrowserAvailable(): boolean {
-  return !!workspaces && typeof workspaces.listDirectory === "function";
+  return true;
 }
 
 /**
@@ -44,20 +47,29 @@ export async function pickExportDirectory(): Promise<string | null> {
 }
 
 /** 列出指定目录（缺省为宿主 home）的一层子目录与面包屑。 */
-export function listExportDirectory(
+export async function listExportDirectory(
   path?: string,
   signal?: AbortSignal,
-): Promise<DirectoryListing> {
-  if (!workspaces || typeof workspaces.listDirectory !== "function") {
-    return Promise.reject(new Error("browse capability unavailable"));
+): Promise<DirListing> {
+  if (workspaces && typeof workspaces.listDirectory === "function") {
+    try {
+      return await workspaces.listDirectory(path, signal);
+    } catch {
+      // 宿主 browse 能力不可用 → 回退插件自建后端
+    }
   }
-  return workspaces.listDirectory(path, signal);
+  return listFsDirectory(path);
 }
 
 /** 在指定父目录下新建子目录，返回新目录的绝对路径。 */
 export async function createExportDirectory(path: string, name: string): Promise<string> {
-  if (!workspaces || typeof workspaces.createDirectory !== "function") {
-    throw new Error("browse capability unavailable");
+  if (workspaces && typeof workspaces.createDirectory === "function") {
+    try {
+      return await workspaces.createDirectory(path, name);
+    } catch {
+      // 宿主 browse 能力不可用 → 回退插件自建后端
+    }
   }
-  return workspaces.createDirectory(path, name);
+  const created = await createFsDirectory(path, name);
+  return created.path;
 }

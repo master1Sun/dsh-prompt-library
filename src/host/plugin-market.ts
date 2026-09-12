@@ -14,7 +14,7 @@
 import { get as httpsGet } from "node:https";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { pluginMarketCachePath } from "./paths.js";
+import { pluginGithubCachePath, pluginMarketCachePath } from "./paths.js";
 
 /** 热门榜单页（全量 SSR，约 14MB，记录按热门排序内嵌于 flight payload）。 */
 const HOT_LIST_URL = "https://dsh-plugin.org/plugins";
@@ -24,6 +24,10 @@ const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const TOP_N = 8;
 /** 榜单页抓取超时（毫秒）。 */
 const LIST_TIMEOUT_MS = 30_000;
+/** GitHub API 请求超时（毫秒）。 */
+const GITHUB_TIMEOUT_MS = 12_000;
+/** GitHub 实时信息缓存有效期（毫秒）：30 分钟（未认证限流 60 次/小时，不可频繁抓）。 */
+const GITHUB_TTL_MS = 30 * 60 * 1000;
 
 /** 统一展示的插件条目。 */
 export interface MarketPlugin {
@@ -200,7 +204,18 @@ function parseHotRecords(html: string): MarketPlugin[] {
  * 这些插件不一定在热门前 TOP_N 里，需从榜单页全量记录中额外解析，
  * 否则客户端拿不到它们的实时版本 / stars。
  */
-const PINNED_SLUGS = ["dsh-file-workbench-lib", "dsh-prompt-library"];
+const PINNED_SLUGS = ["dsh-file-workbench-lib", "dsh-prompt-library", "dsh-QQbot"];
+
+/**
+ * 置顶插件仓库（与客户端 plugin-reco.ts 的 PINNED_WB / PINNED_PLUGIN / PINNED_QQ 一一对应）。
+ * 这三个插件展示在推荐位最前，其版本 / stars / 许可证以 GitHub 实时数据为准，
+ * 市场站数据仅在网络不可达或限流时兜底（市场站收录版本常滞后于 GitHub 发布）。
+ */
+const PINNED_REPOS = [
+  "master1Sun/dsh-file-workbench-lib",
+  "master1Sun/dsh-prompt-library",
+  "master1Sun/dsh-QQbot",
+];
 
 /** 从榜单页全量记录中解析置顶插件的完整记录（rank 置 0，排序由客户端负责）。 */
 function parsePinnedRecords(html: string): MarketPlugin[] {
@@ -218,6 +233,194 @@ function parsePinnedRecords(html: string): MarketPlugin[] {
       found = recordFromWindow(win, slug);
     }
     if (found) out.push(found);
+  }
+  return out;
+}
+
+/** 置顶插件的 GitHub 实时信息。 */
+interface GithubInfo {
+  /** 最新版本号（latest release 的 tag；无 release 时取最新 tag）。 */
+  version: string;
+  stars: number;
+  license: string;
+}
+
+/** GitHub 信息缓存文件。 */
+interface GithubCacheFile {
+  fetchedAt: number;
+  /** key 为「小写 owner/repo」。 */
+  items: Record<string, GithubInfo>;
+}
+
+/** GET 一个 JSON 接口（GitHub API），非 200 或超时直接 reject。 */
+function fetchJson(url: string): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const req = httpsGet(
+      url,
+      {
+        headers: {
+          "user-agent": "dsh-prompt-library",
+          accept: "application/vnd.github+json",
+        },
+      },
+      (res) => {
+        if (res.statusCode !== 200) {
+          res.resume();
+          reject(new Error(`HTTP ${res.statusCode} for ${url}`));
+          return;
+        }
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () => {
+          try {
+            resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+          } catch (e) {
+            reject(e instanceof Error ? e : new Error(String(e)));
+          }
+        });
+        res.on("error", reject);
+      },
+    );
+    req.setTimeout(GITHUB_TIMEOUT_MS, () => {
+      req.destroy(new Error(`timeout after ${GITHUB_TIMEOUT_MS}ms for ${url}`));
+    });
+    req.on("error", reject);
+  });
+}
+
+/**
+ * 拉取单个仓库的实时信息：
+ * - stars / license 取 `GET /repos/{repo}`；
+ * - 版本取 `GET /repos/{repo}/releases/latest`，无 release（404）时退化为最新 tag。
+ * 任一环节失败返回 null，由调用方沿用兜底值。
+ */
+async function fetchGithubInfo(repo: string): Promise<GithubInfo | null> {
+  try {
+    const meta = (await fetchJson(`https://api.github.com/repos/${repo}`)) as {
+      stargazers_count?: number;
+      license?: { spdx_id?: string | null } | null;
+    };
+    let version = "";
+    try {
+      const rel = (await fetchJson(
+        `https://api.github.com/repos/${repo}/releases/latest`,
+      )) as { tag_name?: string };
+      version = bareVersion(rel.tag_name ?? "");
+    } catch {
+      try {
+        const tags = (await fetchJson(
+          `https://api.github.com/repos/${repo}/tags?per_page=1`,
+        )) as Array<{ name?: string }>;
+        version = bareVersion(Array.isArray(tags) ? tags[0]?.name ?? "" : "");
+      } catch {
+        version = "";
+      }
+    }
+    const spdx = meta.license?.spdx_id ?? "";
+    return {
+      version,
+      stars: typeof meta.stargazers_count === "number" ? meta.stargazers_count : 0,
+      license: spdx && spdx !== "NOASSERTION" ? spdx : "—",
+    };
+  } catch (err) {
+    console.error(
+      "[plugin-market] github fetch failed:",
+      repo,
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
+}
+
+/** 读取 GitHub 信息缓存（损坏返回 null）。 */
+async function readGithubCache(): Promise<GithubCacheFile | null> {
+  try {
+    const raw = await readFile(pluginGithubCachePath(), "utf8");
+    const parsed = JSON.parse(raw) as GithubCacheFile;
+    if (parsed && typeof parsed.fetchedAt === "number" && parsed.items) return parsed;
+  } catch {
+    /* 无缓存 / 损坏 */
+  }
+  return null;
+}
+
+/** 写 GitHub 信息缓存（失败静默忽略）。 */
+async function writeGithubCache(cache: GithubCacheFile): Promise<void> {
+  try {
+    const p = pluginGithubCachePath();
+    await mkdir(dirname(p), { recursive: true });
+    await writeFile(p, JSON.stringify(cache), "utf8");
+  } catch {
+    /* 忽略写入失败 */
+  }
+}
+
+/** in-flight 去重：并发请求共享同一次 GitHub 抓取。 */
+let githubInflight: Promise<GithubCacheFile> | null = null;
+
+/** 实际执行 GitHub 抓取：TTL 内走缓存，失败项沿用上一次缓存值。 */
+async function doFetchGithub(force: boolean): Promise<GithubCacheFile> {
+  const cached = await readGithubCache();
+  if (!force && cached && Date.now() - cached.fetchedAt < GITHUB_TTL_MS) return cached;
+  const entries = await Promise.all(
+    PINNED_REPOS.map(async (repo) =>
+      [repo, await fetchGithubInfo(repo)] as const,
+    ),
+  );
+  const items: Record<string, GithubInfo> = { ...(cached?.items ?? {}) };
+  for (const [repo, info] of entries) {
+    if (info) items[repo.toLowerCase()] = info;
+  }
+  const out: GithubCacheFile = { fetchedAt: Date.now(), items };
+  await writeGithubCache(out);
+  return out;
+}
+
+/** 获取置顶插件的 GitHub 实时信息（版本 / stars / 许可证）。 */
+function fetchPinnedGithub(force: boolean): Promise<GithubCacheFile> {
+  if (!githubInflight) {
+    githubInflight = doFetchGithub(force).finally(() => {
+      githubInflight = null;
+    });
+  }
+  return githubInflight;
+}
+
+/**
+ * 把 GitHub 实时信息合并进榜单条目：
+ * 榜单里已有该仓库则覆盖版本 / stars / 许可证；没有则按仓库构造一条最小条目
+ * （名称与简介留空，客户端会用 i18n 文案填充）。
+ */
+function mergeGithub(items: MarketPlugin[], gh: GithubCacheFile | null): MarketPlugin[] {
+  if (!gh || Object.keys(gh.items).length === 0) return items;
+  const out = items.map((p) => ({ ...p }));
+  for (const repo of PINNED_REPOS) {
+    const info = gh.items[repo.toLowerCase()];
+    if (!info) continue;
+    const idx = out.findIndex((p) => p.id.toLowerCase() === repo.toLowerCase());
+    if (idx >= 0) {
+      const cur = out[idx] as MarketPlugin;
+      out[idx] = {
+        ...cur,
+        version: info.version || cur.version,
+        stars: info.stars > 0 ? info.stars : cur.stars,
+        license: info.license && info.license !== "—" ? info.license : cur.license,
+      };
+      continue;
+    }
+    out.push({
+      id: repo,
+      name: "",
+      desc: "",
+      version: info.version || "—",
+      license: info.license || "—",
+      repo: `https://github.com/${repo}`,
+      cloneCmd: `git clone --depth 1 https://github.com/${repo}.git`,
+      dshCmd: `dsh plugin --profile web add "github:${repo}"`,
+      stars: info.stars,
+      verified: true,
+      rank: 0,
+    });
   }
   return out;
 }
@@ -258,6 +461,18 @@ let inflight: Promise<MarketResult> | null = null;
 /** 实际执行抓取流程。 */
 async function doFetch(force: boolean): Promise<MarketResult> {
   const cached = await readCache();
+  const market = await fetchMarketList(force, cached);
+  // 置顶插件的版本 / stars / 许可证以 GitHub 实时数据为准（市场站收录常滞后）。
+  // force 时同步强行刷新；否则按 GitHub 自身的 TTL（30 分钟）决定是否回源。
+  const gh = await fetchPinnedGithub(force).catch(() => null);
+  return { ...market, items: mergeGithub(market.items, gh) };
+}
+
+/** 抓取榜单本体：TTL 内走磁盘缓存 → 实时抓 dsh-plugin.org → 失败回退缓存 / 内置。 */
+async function fetchMarketList(
+  force: boolean,
+  cached: MarketCacheFile | null,
+): Promise<MarketResult> {
   if (!force && cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
     return { source: "cache", fetchedAt: cached.fetchedAt, items: cached.items };
   }

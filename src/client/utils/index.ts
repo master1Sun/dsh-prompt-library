@@ -20,25 +20,33 @@ import "../components/common/Tooltip.js";
 import { PromptLibraryButton } from "../components/data/PromptLibraryButton.js";
 import { AIPolishButton } from "../components/data/AIPolishButton.js";
 import { ContextRecommendations } from "../components/data/ContextRecommendations.js";
-// 会话监控 / 文件预览已拆分为独立插件 dsh-session-monitor，能力代码保留、仅停用注册：
-// import { TokenMonitorView } from "../components/monitor/TokenMonitorView.js";
-// import { PreviewView } from "../components/preview/PreviewView.js";
+import { AssistantMenuTitleView, PromptLibraryGlyph } from "../components/data/AssistantMenuTitleView.js";
+import { AssistantMenuView } from "../components/data/AssistantMenuView.js";
 import { SettingsSection } from "../components/settings/SettingsSection.js";
 import { registerSettingsAboveMenu, SETTINGS_ABOVE_CSS } from "../components/settings/SettingsAboveMenuButton.js";
-import { en, NS, zh } from "./i18n.js";
+import { en, LOCALE_CHANGED_EVENT, NS, setBoundT, zh } from "./i18n.js";
 import { setUiConversation } from "./conversation-targets.js";
 import { startDataChangedSubscription } from "./data-sync.js";
 import { registerWorkspaces } from "./workspace-picker.js";
 import { getSettings } from "./api.js";
-import { registerProducedFileIntercept } from "./preview-target.js";
-import {
-  registerSettingsNavIcon,
+import { registerSettingsNavIcon,
   SETTINGS_NAV_CSS,
   SETTINGS_NAV_MARKER_PROMPT,
 } from "./settings-nav-icon.js";
+import { PANEL_TAB_KIND, setOpenTab } from "./panel-tab.js";
+
+/** 本实现在 tab 系统中的身份，也是主体/标题注册时的 key（约定用包名）。 */
+const PANEL_TAB_ID = "@sunjuntao/dsh-prompt-library";
 
 /** 此插件的 apply 依赖的客户端服务。 */
-export const inject = ["slots", "locale", "workspaces", "uiConversation"];
+export const inject = [
+  "slots",
+  "locale",
+  "workspaces",
+  "uiConversation",
+  "sidebarRightTabs",
+  "sidebarRight",
+];
 
 /** 宿主 uiConversation 服务的最小类型（chat/trajectory 视图目标读取，见 conversation-targets.ts）。 */
 interface UiConversationLike {
@@ -56,13 +64,18 @@ interface ClientCtx {
   locale: {
     register(namespace: string, dicts: Record<string, Record<string, string>>): unknown;
     bind(namespace: string): (key: string, params?: Record<string, unknown>) => string;
+    /** 语言切换订阅（可选能力，缺失时面板不做主动刷新）。 */
+    subscribe?(listener: () => void): () => void;
   };
   slots: {
     inject(slotName: string, factory: () => () => void): unknown;
     register(
       options: {
         name: string;
-        id: string;
+        /** 具名座位 id（普通插槽用）。 */
+        id?: string;
+        /** 键值型座位 key（如 sidebar.right.pane.tab，取 tab 定义的 id）。 */
+        key?: string;
         order?: number;
         locale?: string;
         label?: () => string;
@@ -83,6 +96,13 @@ interface ClientCtx {
     }>;
     createDirectory(path: string, name: string): Promise<string>;
   };
+  /** 新版右侧面板：tab 类型注册表与打开能力（由 dsh-client-ui-sidebar-right 提供）。 */
+  sidebarRightTabs?: {
+    register(definition: Record<string, unknown>): () => void;
+  };
+  sidebarRight?: {
+    openTab(kind: string): void;
+  };
   /** 宿主 UI 会话装配（由 dsh-client-ui-conversation 提供），监控读 chat/trajectory 目标的唯一活数据源。 */
   uiConversation?: UiConversationLike;
 }
@@ -90,6 +110,9 @@ interface ClientCtx {
 export function apply(ctx: ClientCtx): void {
   // 缓存宿主工作区运行时引用，供目录选择（技能导出项目路径）使用
   registerWorkspaces(ctx.workspaces ?? null);
+
+  // 把「打开右侧面板 tab」的能力交给组件层（组件拿不到 ctx）
+  setOpenTab(ctx.sidebarRight ? (kind) => ctx.sidebarRight!.openTab(kind) : null);
 
   // 缓存宿主 uiConversation 服务：最新 DSH 的 chat/trajectory 视图目标只在
   // 这条路径上装配，useSession 快照的 s.chat / s.views 不再承载（见 conversation-targets.ts）
@@ -110,14 +133,25 @@ export function apply(ctx: ClientCtx): void {
     },
     "prompt-library: sse subscription",
   );
-  // 拦截官方聊天结果内「产物文件」卡片的点击，改跳自研预览面板打开该文件。
-  // 与独立插件 dsh-session-monitor 的接线一致：
-  ctx.effect(
-    () => registerProducedFileIntercept(),
-    "prompt-library: produced-file intercept",
-  );
   // 绑定命名空间的翻译函数，用于设置导航标签（每次读取当前语言）
   const t = ctx.locale.bind(NS);
+  // 登记为模块级回退：右侧面板等由宿主直接渲染的座位拿不到 t prop，
+  // 走 setBoundT 后仍能跟随系统语言（见 i18n.ts 的 usePLT）。
+  setBoundT(t);
+
+  // 宿主语言切换时广播，供右侧面板等不重新挂载的座位重渲染取词
+  ctx.effect(
+    () => {
+      try {
+        return ctx.locale.subscribe?.(() => {
+          window.dispatchEvent(new CustomEvent(LOCALE_CHANGED_EVENT));
+        });
+      } catch {
+        return () => {};
+      }
+    },
+    "prompt-library: locale change broadcast",
+  );
 
   // 注册 composer 工具栏按钮
   ctx.slots.inject("conversation.input.left", () =>
@@ -160,6 +194,49 @@ export function apply(ctx: ClientCtx): void {
     ),
   );
 
+  // 词库卡片菜单：注册进「新版右侧面板」（@deepseek-ai/dsh-client-ui-sidebar-right），
+  // 走官方两段式路径 —— ① 类型 ② 主体 ③ chip 标题：
+  //   ① sidebarRightTabs.register({ id, kind, title, guide })
+  //   ② slots.register('sidebar.right.pane.tab',       key = id)
+  //   ③ slots.register('sidebar.right.pane.tab.title', key = id)
+  // 面板内以卡片网格承载原先词库助手右键菜单里的功能入口，卡片点击派发 pl:open-* 事件。
+  // 右侧栏服务缺失时静默降级，不影响插件其余能力。
+  try {
+    ctx.effect(
+      () =>
+        ctx.sidebarRightTabs?.register({
+          id: PANEL_TAB_ID,
+          kind: PANEL_TAB_KIND,
+          title: () => t("pl.view.menu"),
+          guide: [
+            {
+              order: 100,
+              title: () => t("pl.panel.guide.title"),
+              description: () => t("pl.panel.guide.desc"),
+              icon: PromptLibraryGlyph,
+            },
+          ],
+        }),
+      "prompt-library: panel tab type",
+    );
+
+    ctx.slots.inject("sidebar.right.pane.tab", () =>
+      ctx.slots.register(
+        { name: "sidebar.right.pane.tab", key: PANEL_TAB_ID, locale: NS },
+        AssistantMenuView as (props: unknown) => ReactNode,
+      ),
+    );
+
+    ctx.slots.inject("sidebar.right.pane.tab.title", () =>
+      ctx.slots.register(
+        { name: "sidebar.right.pane.tab.title", key: PANEL_TAB_ID, locale: NS },
+        AssistantMenuTitleView as (props: unknown) => ReactNode,
+      ),
+    );
+  } catch (e) {
+    console.warn("[dsh-prompt-library] 右侧面板注册失败（已降级）：", e);
+  }
+
   // 设置导航图标：与聊天栏提示词按钮保持一致
   ctx.effect(
     () => {
@@ -183,81 +260,6 @@ export function apply(ctx: ClientCtx): void {
     },
     "prompt-library: settings navigation icon",
   );
-
-  // 会话监控 / 会话预览：作为 conversation.view 插槽的两个视图标签。
-  // 显隐由设置「显示与交互」里的监控/预览开关控制；关闭时撤回注册（标签隐藏），开启时重新注入。
-  // ctx.effect(
-  //   () => {
-  //     let monitorDispose: (() => void) | null = null;
-  //     let previewDispose: (() => void) | null = null;
-
-  //     const syncViews = async (): Promise<void> => {
-  //       let enabled: { monitor: boolean; preview: boolean } = { monitor: true, preview: true };
-  //       try {
-  //         const s = await getSettings();
-  //         enabled = { monitor: s.monitorEnabled !== false, preview: s.previewEnabled !== false };
-  //       } catch {
-  //         /* 读取失败时按默认开启处理 */
-  //       }
-  //       // try {
-  //       //   // if (enabled.monitor && !monitorDispose) {
-  //       //   //   monitorDispose = ctx.slots.inject(
-  //       //   //     "conversation.view",
-  //       //   //     () =>
-  //       //   //       ctx.slots.register(
-  //       //   //         {
-  //       //   //           name: "conversation.view",
-  //       //   //           id: "prompt-library-monitor",
-  //       //   //           order: 20,
-  //       //   //           locale: NS,
-  //       //   //           label: () => t("pl.view.tokenMonitor"),
-  //       //   //         },
-  //       //   //         TokenMonitorView as (props: unknown) => ReactNode,
-  //       //   //       ),
-  //       //   //   ) as unknown as () => void;
-  //       //   // } else if (!enabled.monitor && monitorDispose) {
-  //       //   //   monitorDispose();
-  //       //   //   monitorDispose = null;
-  //       //   // }
-  //       //   // if (enabled.preview && !previewDispose) {
-  //       //   //   previewDispose = ctx.slots.inject(
-  //       //   //     "conversation.view",
-  //       //   //     () =>
-  //       //   //       ctx.slots.register(
-  //       //   //         {
-  //       //   //           name: "conversation.view",
-  //       //   //           id: "prompt-library-preview",
-  //       //   //           order: 21,
-  //       //   //           locale: NS,
-  //       //   //           label: () => t("pl.view.preview"),
-  //       //   //         },
-  //       //   //         PreviewView as (props: unknown) => ReactNode,
-  //       //   //       ),
-  //       //   //   ) as unknown as () => void;
-  //       //   // } else if (!enabled.preview && previewDispose) {
-  //       //   //   previewDispose();
-  //       //   //   previewDispose = null;
-  //       //   // }
-  //       // } catch {
-  //       //   /* 单次同步失败可忽略，下次设置变更时重试 */
-  //       // }
-  //     };
-
-  //     const onSettingsChanged = (): void => {
-  //       void syncViews();
-  //     };
-  //     void syncViews();
-  //     window.addEventListener("pl:settings-changed", onSettingsChanged);
-  //     return () => {
-  //       window.removeEventListener("pl:settings-changed", onSettingsChanged);
-  //       monitorDispose?.();
-  //       previewDispose?.();
-  //       monitorDispose = null;
-  //       previewDispose = null;
-  //     };
-  //   },
-  //   "prompt-library: monitor/preview view visibility",
-  // );
 
   // 注册设置面板到 harness 原生设置界面
   ctx.slots.inject("settings.section", () =>

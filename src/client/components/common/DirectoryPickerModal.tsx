@@ -18,7 +18,7 @@ import {
   type ReactNode,
 } from "react";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
-import type { DirectoryListing } from "@deepseek-ai/dsh-client-runtime/client";
+import type { DirListing } from "../../utils/api.js";
 import { plBtn } from "../../utils/button-style.js";
 import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../../utils/dialog-style.js";
 import type { PLTranslate } from "../../utils/i18n.js";
@@ -80,7 +80,7 @@ export function DirectoryPickerModal(props: {
 }): ReactNode {
   const { open, initialPath, onPick, onClose, t } = props;
 
-  const [listing, setListing] = useState<DirectoryListing | null>(null);
+  const [listing, setListing] = useState<DirListing | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [newFolderOpen, setNewFolderOpen] = useState(false);

@@ -24,6 +24,34 @@ const TONE = {
   border: "var(--dsw-alias-border-l3, rgba(196, 211, 232, 0.31))",
 } as const;
 
+/** 本地存储键：记录最近一次「已弹出」的日期，实现「每天只提示一次」。 */
+const NOTICE_KEY = "pl-version-notice-last-shown";
+
+/** 本地日期 YYYY-MM-DD（按用户时区）。 */
+function todayKey(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** 今天是否已经弹出过（隐私模式/读不到时按「未弹过」处理，避免漏报）。 */
+function alreadyShownToday(): boolean {
+  try {
+    return localStorage.getItem(NOTICE_KEY) === todayKey();
+  } catch {
+    return false;
+  }
+}
+
+/** 标记今天已弹出。 */
+function markShownToday(): void {
+  try {
+    localStorage.setItem(NOTICE_KEY, todayKey());
+  } catch {
+    /* 只读场景忽略 */
+  }
+}
+
 export function VersionUpdateNotice({ t }: { t?: PLTranslate }): ReactNode {
   const T = usePLT(t);
   const [show, setShow] = useState(false);
@@ -38,9 +66,13 @@ export function VersionUpdateNotice({ t }: { t?: PLTranslate }): ReactNode {
         // server 为服务端运行版本，installed 为磁盘已安装版本；二者不一致说明更新后未重启。
         // server === "0.0.0" 属于调试环境未注入版本号的情况，忽略以免误报。
         if (alive && v.server && v.installed && v.server !== "0.0.0" && v.server !== v.installed) {
-          setShow(true);
-          setServer(v.server);
-          setInstalled(v.installed);
+          // 每天只自动弹出一次：今天已弹过则不再弹（localStorage 记录日期）。
+          if (!alreadyShownToday()) {
+            markShownToday();
+            setShow(true);
+            setServer(v.server);
+            setInstalled(v.installed);
+          }
         }
       })
       .catch(() => {

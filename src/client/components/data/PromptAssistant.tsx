@@ -35,7 +35,8 @@ import {
   type DeepSeekBalance,
 } from "../../utils/api.js";
 import { type PLTranslate, usePLT } from "../../utils/i18n.js";
-import { PANEL_TAB_KIND, openPanelTab } from "../../utils/panel-tab.js";
+// 已注释：左键单击打开面板的桥接（openPanelTab / PANEL_TAB_KIND），恢复左键点击时取消此注释
+// import { PANEL_TAB_KIND, openPanelTab } from "../../utils/panel-tab.js";
 import { useThemeSync } from "../../utils/theme.js";
 
 import { AnnouncementModal } from "../dashboard/AnnouncementModal.js";
@@ -946,13 +947,13 @@ export function PromptAssistant(props: Props): ReactNode {
       updatePos({ px, py });
     };
     const onUp = () => {
-      const moved = personDragRef.current?.moved ?? false;
+      // const moved = personDragRef.current?.moved ?? false; // 左键单击响应已禁用
       personDragRef.current = null;
       setDragging(false); // 恢复位移动画
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
-      // 左键单击（未移动）→ 打开官方右侧面板的词库卡片菜单（宿主未就绪时静默失败）
-      if (!moved) openPanelTab(PANEL_TAB_KIND);
+      // 左键单击（未移动）打开面板：暂时注释掉，仅保留拖动能力
+      // if (!moved) openPanelTab(PANEL_TAB_KIND);
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -1187,12 +1188,8 @@ export function PromptAssistant(props: Props): ReactNode {
         <div
           aria-label={T("pl.title")}
           onMouseDown={startPersonDrag}
-          onContextMenu={(e) => {
-            // 右键：弹出迷你菜单（词库管理 / 成就 / 公告等）；与左键拖动/单击互不干扰。
-            e.preventDefault();
-            if (!ctxMenuEnabled) return;
-            setCtxMenu({ x: e.clientX, y: e.clientY });
-          }}
+          onContextMenu={undefined /* 已注释：右键迷你菜单（右键点击暂不弹） */}
+
           onMouseEnter={() => {
             hoverRef.current = true;
             setHovering(true);

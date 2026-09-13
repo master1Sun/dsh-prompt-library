@@ -38,6 +38,19 @@ import { PANEL_TAB_KIND, setOpenTab } from "./panel-tab.js";
 /** 本实现在 tab 系统中的身份，也是主体/标题注册时的 key（约定用包名）。 */
 const PANEL_TAB_ID = "@sunjuntao/dsh-prompt-library";
 
+/**
+ * 左侧主导航栏收起态样式：把「词库」面板行（宿主按 sidebarRightTabs 的 guide 自动渲染）
+ * 的 hover/active 背景由圆角方块改成正圆（50%），与顶部圆形按钮（iconButton）一致。
+ * 按 aria-label（中「词库」/英「Library」）命中，无需插件自行注入图标槽。
+ */
+const LEFT_NAV_CSS = `
+.hHd-Xa_collapsed .hHd-Xa_panelRow[aria-label="词库"],
+.hHd-Xa_collapsed .hHd-Xa_panelRow[aria-label="Library"] {
+  border-radius: 50%;
+  overflow: hidden;
+}
+`;
+
 /** 此插件的 apply 依赖的客户端服务。 */
 export const inject = [
   "slots",
@@ -76,6 +89,8 @@ interface ClientCtx {
         id?: string;
         /** 键值型座位 key（如 sidebar.right.pane.tab，取 tab 定义的 id）。 */
         key?: string;
+        /** 过滤键（如 sidebar.panellist，仅渲染匹配 only 的面板图标）。 */
+        only?: string;
         order?: number;
         locale?: string;
         label?: () => string;
@@ -273,6 +288,22 @@ export function apply(ctx: ClientCtx): void {
       },
       SettingsSection as (props: unknown) => ReactNode,
     ),
+  );
+
+  // 左侧主导航栏收起态：把「词库」面板行的 hover/active 背景由圆角方块改成正圆，
+  // 与顶部圆形按钮（iconButton）一致；按 aria-label（中「词库」/英「Library」）命中宿主原生按钮。
+  ctx.effect(
+    () => {
+      let style = document.getElementById("pl-left-nav-style") as HTMLStyleElement | null;
+      if (!style) {
+        style = document.createElement("style");
+        style.id = "pl-left-nav-style";
+        style.textContent = LEFT_NAV_CSS;
+        document.head.appendChild(style);
+      }
+      return () => style?.remove();
+    },
+    "prompt-library: left nav collapsed circular hover",
   );
 
   // 设置按钮上方词库菜单按钮：通过 MutationObserver 找到原生「设置」按钮，在其上方注入同样样式的按钮

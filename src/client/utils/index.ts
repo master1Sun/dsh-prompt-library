@@ -216,37 +216,109 @@ export function apply(ctx: ClientCtx): void {
   //   ③ slots.register('sidebar.right.pane.tab.title', key = id)
   // 面板内以卡片网格承载原先词库助手右键菜单里的功能入口，卡片点击派发 pl:open-* 事件。
   // 右侧栏服务缺失时静默降级，不影响插件其余能力。
+  //
+  // 【整体开/关】三件套全部受设置 rightPanelEnabled 控制，而不是只控制 ①：
+  // 关闭时 ①类型 ②主体 ③标题 **一并注销**，本插件对右侧栏零注入 —— 右侧栏既不出现
+  // 词库 chip 入口，也不残留已注册的面板主体/标题组件；开启时即时补注册（无需刷新）。
+  // （注：dsh-QQbot 采用「只控 ①、②③ 常驻」的做法，那是错的——②③ 常驻会让宿主仍渲染
+  //   面板内容，表现为「只藏了面板里的按钮」。）
   try {
     ctx.effect(
-      () =>
-        ctx.sidebarRightTabs?.register({
-          id: PANEL_TAB_ID,
-          kind: PANEL_TAB_KIND,
-          title: () => t("pl.view.menu"),
-          guide: [
-            {
-              order: 100,
-              title: () => t("pl.panel.guide.title"),
-              description: () => t("pl.panel.guide.desc"),
-              icon: PromptLibraryGlyph,
-            },
-          ],
-        }),
-      "prompt-library: panel tab type",
-    );
+      () => {
+        let disposed = false;
+        let active = false;
+        let disposeTab: (() => void) | null = null;
+        let disposeBody: (() => void) | null = null;
+        let disposeTitle: (() => void) | null = null;
 
-    ctx.slots.inject("sidebar.right.pane.tab", () =>
-      ctx.slots.register(
-        { name: "sidebar.right.pane.tab", key: PANEL_TAB_ID, locale: NS },
-        AssistantMenuView as (props: unknown) => ReactNode,
-      ),
-    );
+        // 三件套统一销毁；任一步失败都不阻断其余，避免残留半截注册。
+        const teardown = (): void => {
+          for (const dispose of [disposeTab, disposeBody, disposeTitle]) {
+            try {
+              dispose?.();
+            } catch {
+              /* 已被宿主回收时忽略 */
+            }
+          }
+          disposeTab = null;
+          disposeBody = null;
+          disposeTitle = null;
+          active = false;
+        };
 
-    ctx.slots.inject("sidebar.right.pane.tab.title", () =>
-      ctx.slots.register(
-        { name: "sidebar.right.pane.tab.title", key: PANEL_TAB_ID, locale: NS },
-        AssistantMenuTitleView as (props: unknown) => ReactNode,
-      ),
+        const applyEnabled = (enabled: boolean): void => {
+          if (disposed || enabled === active) return;
+          if (!enabled) {
+            teardown();
+            return;
+          }
+          // 注册走异步同步路径，需自行兜错，否则失败会成为未处理的 Promise 拒绝。
+          // 失败时回滚已注册的部分，保持「全有或全无」。
+          try {
+            disposeTab =
+              ctx.sidebarRightTabs?.register({
+                id: PANEL_TAB_ID,
+                kind: PANEL_TAB_KIND,
+                title: () => t("pl.view.menu"),
+                guide: [
+                  {
+                    order: 100,
+                    title: () => t("pl.panel.guide.title"),
+                    description: () => t("pl.panel.guide.desc"),
+                    icon: PromptLibraryGlyph,
+                  },
+                ],
+              }) ?? null;
+            // slots.inject 返回该 effect 的销毁函数（与 ctx.effect 的返回值同源），
+            // 本地 drizzle 类型未声明，故显式断言。
+            disposeBody =
+              (ctx.slots.inject("sidebar.right.pane.tab", () =>
+                ctx.slots.register(
+                  { name: "sidebar.right.pane.tab", key: PANEL_TAB_ID, locale: NS },
+                  AssistantMenuView as (props: unknown) => ReactNode,
+                ),
+              ) as unknown as (() => void) | undefined) ?? null;
+            disposeTitle =
+              (ctx.slots.inject("sidebar.right.pane.tab.title", () =>
+                ctx.slots.register(
+                  { name: "sidebar.right.pane.tab.title", key: PANEL_TAB_ID, locale: NS },
+                  AssistantMenuTitleView as (props: unknown) => ReactNode,
+                ),
+              ) as unknown as (() => void) | undefined) ?? null;
+            active = true;
+          } catch (err) {
+            console.warn("[dsh-prompt-library] 右侧面板注册失败，已回滚：", err);
+            teardown();
+          }
+        };
+
+        const sync = (): void => {
+          getSettings()
+            .then((s) => applyEnabled(s.rightPanelEnabled ?? true))
+            .catch(() => applyEnabled(true));
+        };
+
+        sync();
+        // 设置保存成功后派发的事件 detail 即最新设置，直接用其值切换，避免再读一次的时间差；
+        // detail 缺失（如别的模块广播）时回退到重新读取。
+        const onSettingsChanged = (e: Event): void => {
+          const detail = (e as CustomEvent).detail as
+            | { rightPanelEnabled?: unknown }
+            | undefined;
+          if (detail && typeof detail.rightPanelEnabled === "boolean") {
+            applyEnabled(detail.rightPanelEnabled);
+          } else {
+            sync();
+          }
+        };
+        window.addEventListener("pl:settings-changed", onSettingsChanged);
+        return () => {
+          disposed = true;
+          window.removeEventListener("pl:settings-changed", onSettingsChanged);
+          teardown();
+        };
+      },
+      "prompt-library: right panel (tab type + body + title)",
     );
   } catch (e) {
     console.warn("[dsh-prompt-library] 右侧面板注册失败（已降级）：", e);

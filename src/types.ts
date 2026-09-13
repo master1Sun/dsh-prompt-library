@@ -176,7 +176,7 @@ export interface PluginSettings {
   panelHeight: number;
   /** 词库助手显隐（主开关）：关闭后右侧面板也无法启用。 */
   assistantEnabled: boolean;
-  /** 是否启用右侧侧边栏展开/折叠（需先勾选词库助手才可选）。 */
+  /** 是否显示官方右侧栏中的「词库」面板 tab（设置 › 显示与交互）。关闭后不注册该 tab，右侧栏不再出现词库入口；默认开启。 */
   rightPanelEnabled: boolean;
   /** 是否显示左侧设置按钮上方的词库按钮。 */
   settingsAboveMenuEnabled: boolean;
@@ -250,7 +250,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   assistantCharacter: "whale", // 词库助手助手形象：鲸鱼款·静态（默认）
   autoLearnManualConfirm: true, // 手动确认学习（检测到可学习内容时弹保存/取消，确认后才入库）
   assistantEnabled: true, // 词库助手显隐（主开关，关闭后右侧面板也无法启用）
-  rightPanelEnabled: true, // 是否启用右侧侧边栏展开/折叠（需先开启词库助手）
+  rightPanelEnabled: true, // 是否显示官方右侧栏「词库」面板 tab（关闭后右侧栏不再出现词库入口）
   settingsAboveMenuEnabled: true, // 是否显示左侧设置按钮上方的词库按钮（默认开启）
   showComposerButton: true, // 是否在聊天框工具栏显示词库按钮
   composerButtonIconOnly: true, // 词库按钮用纯图标显示（隐藏文字，仅保留图标）

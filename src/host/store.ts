@@ -2348,9 +2348,9 @@ async function readSystemSettingsNamespace(): Promise<Partial<PluginSettings> | 
 /**
  * 不落盘设置项：这些开关已从设置界面移除（词库助手下的显隐控制），
  * 不写入配置文件，读取时一律回退默认值，保持默认态以便后续复用。
+ * 注：`rightPanelEnabled` 已在「设置 › 显示与交互」重新提供开关，故**不再**排除，需正常落盘读取。
  */
 const PERSIST_EXCLUDED_KEYS = new Set<keyof PluginSettings>([
-  "rightPanelEnabled",
   "dataManagementEnabled",
   "personaEnabled",
   "injectEnabled",

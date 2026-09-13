@@ -818,6 +818,14 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             ]}
           />
         </div>
+        {/* 右侧面板显隐：控制官方右侧栏中「词库」面板 tab 的注册与显示；
+            关闭后右侧栏不再出现词库入口（含数据管理/数据库/插件推荐等卡片），设置变更即时生效。 */}
+        <ToggleRow
+          label={T("pl.set.rightPanel")}
+          desc={T("pl.set.rightPanelDesc")}
+          checked={draft.rightPanelEnabled}
+          onChange={(v) => updateAndSave({ rightPanelEnabled: v })}
+        />
         <ToggleRow
           label={T("pl.set.settingsAboveMenu")}
           desc={T("pl.set.settingsAboveMenuDesc")}

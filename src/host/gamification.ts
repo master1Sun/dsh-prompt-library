@@ -6,7 +6,7 @@
  * - 成就：根据统计指标（使用/收藏/AI 完善/连续活跃/新增/回收站治理等）判定解锁状态；
  * - 彩蛋：按当前本地时间（时段 + 周末 + 公历节日）挑选一条应景文案。
  *
- * 纯函数 + 数据只读，不做持久化；客户端通过 SSE 订阅 `/assistant/status/stream` 实时获取快照，
+ * 纯函数 + 数据只读，不做持久化；客户端通过 WS 订阅 `/assistant/stream` 实时获取快照，
  * 再本地记忆「已播报过的成就」，避免重复弹成就气泡。
  */
 import { EventEmitter } from "node:events";
@@ -698,9 +698,9 @@ export function buildAchievementNews(
   return items;
 }
 
-// ── SSE 事件发射器：状态变化时通知订阅者 ────────────────────────────────
+// ── 状态变化事件发射器：状态变化时通知 WS 订阅者 ────────────────────────
 
-/** 游戏化状态 SSE 事件发射器。 */
+/** 游戏化状态变化事件发射器。 */
 const statusEmitter = new EventEmitter();
 statusEmitter.setMaxListeners(100);
 
@@ -718,7 +718,7 @@ export function onStatusChange(
   };
 }
 
-/** 内部：触发状态变化事件，通知所有 SSE 订阅者。 */
+/** 内部：触发状态变化事件，通知所有 WS 订阅者。 */
 export function emitStatusChange(): void {
   statusEmitter.emit("change");
 }

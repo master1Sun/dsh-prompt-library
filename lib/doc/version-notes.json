@@ -1,5 +1,27 @@
 [
   {
+    "version": "0.15.0",
+    "date": "2026-09-16",
+    "zh": {
+      "title": "实时推送改为 WebSocket",
+      "items": [
+        "SSE 全面下线：数据变更广播与词库助手状态流由 SSE 长连接改为 WebSocket，消除连接数上限与代理缓冲问题。",
+        "单连接复用：全插件仅保留 /api/prompt-library/events 一条 WS，助手活动阶段与游戏化状态以 type 字段区分复用同一连接。",
+        "自动重连：客户端内置 1s→10s 退避重连，重连后自动补发语言设置并重新推送最新快照。",
+        "零依赖实现：host 侧自带 RFC 6455 子集实现（握手、分帧、掩码、ping/pong 心跳、close 帧），不引入第三方包。"
+      ]
+    },
+    "en": {
+      "title": "Realtime push moves to WebSocket",
+      "items": [
+        "SSE retired: data-change broadcast and the assistant status stream move from SSE to WebSocket, removing the connection-cap and proxy-buffering issues.",
+        "One connection: a single /api/prompt-library/events socket carries everything; assistant activity and gamification snapshots are discriminated by a type field.",
+        "Auto reconnect: the client reconnects with 1s→10s backoff, replays the language setting and receives a fresh snapshot after each reconnect.",
+        "Zero dependency: the host ships its own RFC 6455 subset (handshake, framing, masking, ping/pong heartbeat, close frames) with no third-party package."
+      ]
+    }
+  },
+  {
     "version": "0.14.0",
     "date": "2026-09-13",
     "zh": {

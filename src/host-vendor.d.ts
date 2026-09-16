@@ -9,6 +9,7 @@
  * 仍统一通过 ctx.inject + as 断言访问，缺的形状靠索引签名兜底为宽松类型。
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
 
 declare module "@deepseek-ai/cordis" {
   /** Cordis 上下文：inject 等待服务注入；服务槽位通过索引签名宽松访问。 */
@@ -74,6 +75,13 @@ declare module "@deepseek-ai/dsh-host-webserver" {
     kind: string;
     path: string;
     handler(req: IncomingMessage, res: ServerResponse): void | Promise<void>;
+    [key: string]: unknown;
+  }
+
+  /** 精确路径的 HTTP upgrade 路由（本插件用它承载 WebSocket 连接）。 */
+  export interface WebUpgradeRoute {
+    path: string;
+    handler(req: IncomingMessage, socket: Duplex, head: Buffer): void | Promise<void>;
     [key: string]: unknown;
   }
 }

@@ -138,7 +138,7 @@ export function apply(ctx: ClientCtx): void {
     () => ctx.locale.register(NS, { zh, en }),
     "prompt-library: dictionaries",
   );
-  // 页面加载即建立到 host 的 SSE 订阅，从而在组件挂载前就具备接收
+  // 页面加载即建立到 host 的 WS 订阅，从而在组件挂载前就具备接收
   // `/prompts -AI`（fill-draft）/ `/prompts -e`（export-download）的能力，
   // 避免依赖某个按钮的 useEffect 才建连而漏再接早到的推送。
   ctx.effect(
@@ -146,7 +146,7 @@ export function apply(ctx: ClientCtx): void {
       startDataChangedSubscription();
       return () => {};
     },
-    "prompt-library: sse subscription",
+    "prompt-library: ws subscription",
   );
   // 绑定命名空间的翻译函数，用于设置导航标签（每次读取当前语言）
   const t = ctx.locale.bind(NS);

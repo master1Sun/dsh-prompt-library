@@ -15,6 +15,7 @@ import type {
   SessionPrompt,
   TrashItem,
 } from "../../types.js";
+import { setPushLang, subscribePush } from "./ws.js";
 
 const BASE = "/api/prompt-library/prompts";
 const PERSONAS_BASE = "/api/prompt-library/personas";
@@ -690,11 +691,12 @@ export function getActivity(lang?: string): Promise<ActivitySnapshot> {
 }
 
 /**
- * SSE 订阅「词库助手」状态流：建立与服务器的单条长连接，同时接收活动阶段与游戏化状态。
- * 返回取消订阅函数，调用后关闭连接并停止接收更新。
+ * 在共享的那条 WS 连接上订阅「词库助手」状态流：同时接收活动阶段与游戏化状态。
+ * 消息为 JSON 信封：`{type:"activity", data}` / `{type:"status", data}`。
+ * 返回取消订阅函数（只摘监听，不关连接）。
  * @param handlers.onActivity 每次收到活动快照时回调
  * @param handlers.onStatus 每次收到游戏化状态快照时回调
- * @param lang 文案语言（zh/en）
+ * @param lang 文案语言（zh/en），通过连接下发 set-lang 生效
  */
 export function subscribeAssistant(
   handlers: {
@@ -703,47 +705,14 @@ export function subscribeAssistant(
   },
   lang?: string,
 ): () => void {
-  const q = lang ? `?lang=${encodeURIComponent(lang)}` : "";
-  const url = `/api/prompt-library/assistant/stream${q}`;
-
-  // 使用原生 EventSource API（浏览器内置支持 SSE）
-  const eventSource = new EventSource(url);
-  let connected = false;
-
-  eventSource.onopen = () => {
-    connected = true;
-  };
-
-  eventSource.addEventListener("activity", (event) => {
-    try {
-      const snapshot: ActivitySnapshot = JSON.parse((event as MessageEvent).data);
-      handlers.onActivity(snapshot);
-    } catch {
-      // 解析失败忽略
+  if (lang) setPushLang(lang);
+  return subscribePush((message) => {
+    if (message.type === "activity" && message.data) {
+      handlers.onActivity(message.data as ActivitySnapshot);
+    } else if (message.type === "status" && message.data) {
+      handlers.onStatus(message.data as AssistantStatus);
     }
   });
-
-  eventSource.addEventListener("status", (event) => {
-    try {
-      const status: AssistantStatus = JSON.parse((event as MessageEvent).data);
-      handlers.onStatus(status);
-    } catch {
-      // 解析失败忽略
-    }
-  });
-
-  eventSource.onerror = () => {
-    if (connected) {
-      // 已连接后出错，可能是服务器断开
-      console.warn("[Assistant SSE] Connection lost, falling back to polling");
-    }
-    // SSE 连接错误时自动关闭，避免无限重试
-    eventSource.close();
-  };
-
-  return () => {
-    eventSource.close();
-  };
 }
 
 // ── DeepSeek 余额判断 ─────────────────────────────────────────────

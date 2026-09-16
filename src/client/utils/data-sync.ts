@@ -5,6 +5,7 @@
  * 提示词后，通过 window 自定义事件通知所有提示词组件重新加载，保证内容实时一致。
  */
 import { useEffect, useRef } from "react";
+import { subscribePush } from "./ws.js";
 
 const DATA_CHANGED_EVENT = "pl:data-changed";
 const FILL_DRAFT_EVENT = "pl:fill-draft";
@@ -15,82 +16,84 @@ export function notifyDataChanged(): void {
   window.dispatchEvent(new CustomEvent(DATA_CHANGED_EVENT));
 }
 
-const SSE_URL = "/api/prompt-library/events";
-
+// 全插件只有一条 WS 连接（见 utils/ws.ts：/api/prompt-library/events），
+// 这里只注册监听，不负责建连。
 let subscribed = false;
-let esRef: EventSource | null = null;
+let unsubscribe: (() => void) | null = null;
 
-/**
- * 建立一次到 host 的 SSE 订阅，把 `data-changed` 事件翻译成已有的
- * `pl:data-changed` window 事件。host 侧改动（如 `/prompts` 保存）也能让
- * 所有打开的面板即时刷新。只允许在浏览器端调用一次；连接断开由 EventSource
- * 自动重连；页面卸载或首次建立失败时释放引用，允许后续重新订阅。
- */
-export function startDataChangedSubscription(): void {
-  if (subscribed || typeof window === "undefined" || typeof EventSource === "undefined") return;
-  subscribed = true;
-  try {
-    const es = new EventSource(SSE_URL);
-    esRef = es;
-    es.addEventListener("data-changed", () => notifyDataChanged());
-    // host 侧 `/prompts -AI` 推送的润色正文：转发给填充监听的组件。
-    es.addEventListener("fill-draft", (ev) => {
-      let body = "";
-      try {
-        body = ev.data ? (JSON.parse(ev.data) as string) : "";
-      } catch {
-        body = "";
-      }
+/** 处理一条 host 推送的消息（信封的 type 对应原先的 SSE 命名事件）。 */
+function handleMessage(message: { type?: string; [key: string]: unknown }): void {
+  switch (message.type) {
+    case "data-changed": {
+      notifyDataChanged();
+      return;
+    }
+    case "fill-draft": {
+      // host 侧 `/prompts -AI` 推送的润色正文：转发给填充监听的组件。
+      const body = typeof message.body === "string" ? message.body : "";
       if (!body) return;
       window.dispatchEvent(new CustomEvent(FILL_DRAFT_EVENT, { detail: { body } }));
-    });
-    // host 侧 `/prompts -e` 推送的 JSON 备份：直接在浏览器本地触发下载。
-    es.addEventListener("export-download", (ev) => {
+      return;
+    }
+    case "export-download": {
+      // host 侧 `/prompts -e` 推送的 JSON 备份：直接在浏览器本地触发下载。
       let count = 0;
-      try {
-        const { name, json } = JSON.parse(ev.data) as { name?: string; json?: string };
-        if (!json) return;
+      const json = typeof message.json === "string" ? message.json : "";
+      const name = typeof message.name === "string" ? message.name : "";
+      if (json) {
         try {
           const parsed = JSON.parse(json) as { prompts?: unknown[] };
           count = Array.isArray(parsed.prompts) ? parsed.prompts.length : 0;
         } catch {
           count = 0;
         }
-        const blob = new Blob([json], { type: "application/json" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = name || `prompt-library-backup-${Date.now()}.json`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-      } catch {
-        /* 解析失败则静默忽略，不打断其他事件。 */
+        try {
+          const blob = new Blob([json], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = name || `prompt-library-backup-${Date.now()}.json`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+        } catch {
+          /* 下载失败则静默忽略，不打断其他事件。 */
+        }
       }
       // 通知 UI 弹成功提示（如聊天框导出按钮）
       if (count > 0) {
         window.dispatchEvent(new CustomEvent(EXPORT_DOWNLOADED_EVENT, { detail: { count } }));
       }
-    });
-    // 插件热重载/页面卸载前关闭连接，避免 EventSource 泄漏
-    const onUnload = () => {
-      es.close();
-      esRef = null;
-      subscribed = false;
-    };
-    window.addEventListener("beforeunload", onUnload, { once: true });
-  } catch {
-    // 个别环境不支持注入时降级为手动刷新；重置标志，后续有机会可重试订阅
-    subscribed = false;
-    esRef = null;
+      return;
+    }
+    default:
+      return;
   }
 }
 
-/** 主动关闭并释放 SSE 订阅连接（页面卸载时由外部调用，防止泄漏）。 */
+/**
+ * 在共享的那条 WS 连接上挂一个监听，把 `data-changed` 等消息翻译成已有的
+ * `pl:data-changed` window 事件。host 侧改动（如 `/prompts` 保存）也能让
+ * 所有打开的面板即时刷新。只允许在浏览器端调用一次；连接断开由共享连接
+ * 自动重连，页面卸载时由浏览器关闭连接。
+ */
+export function startDataChangedSubscription(): void {
+  if (subscribed || typeof window === "undefined") return;
+  subscribed = true;
+  try {
+    unsubscribe = subscribePush(handleMessage);
+  } catch {
+    // 个别环境不支持时降级为手动刷新；重置标志，后续有机会可重试订阅
+    subscribed = false;
+    unsubscribe = null;
+  }
+}
+
+/** 摘掉本模块的 WS 监听（连接本身是共享的，不在这里关闭）。 */
 export function disposeDataChangedSubscription(): void {
-  esRef?.close();
-  esRef = null;
+  unsubscribe?.();
+  unsubscribe = null;
   subscribed = false;
 }
 

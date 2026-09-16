@@ -563,7 +563,7 @@ export function PromptAssistant(props: Props): ReactNode {
     [],
   );
 
-  // 实时订阅词库助手状态：活动阶段 + 游戏化等级/成就/彩蛋，合并为一条 SSE 连接。
+  // 实时订阅词库助手状态：活动阶段 + 游戏化等级/成就/彩蛋，合并为一条 WS 连接。
   useEffect(() => {
     let cancelled = false;
     const lang: "zh" | "en" = (

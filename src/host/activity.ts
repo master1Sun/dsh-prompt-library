@@ -2,8 +2,9 @@
  * 词库助手「活动状态机」— 把官方 DSH 会话活动投影成可驱动助手动画的 phase。
  *
  * 监听 `session/event` 官方事件，投影为 thinking / waiting / tool / review /
- * done / failed / idle 七个阶段，客户端通过 SSE 订阅 `GET /api/prompt-library/activity/stream`
- * 或在无 SSE 支持时轮询 `GET /api/prompt-library/activity` 拿到当前 phase 后驱动蓝脸助手动画。
+ * done / failed / idle 七个阶段，客户端通过 WS 订阅 `/api/prompt-library/assistant/stream`
+ *（见 host/assistant-stream.ts）实时获取，或轮询 `GET /api/prompt-library/activity`
+ * 拿到当前 phase 后驱动蓝脸助手动画。
  *
  * 同时按最近聊天内容粗分类「聊天主题风格」（code/writing/translate/qa/general），
  * 从 host 端文案表（见 phrases.ts）挑选与主题、阶段、语言匹配的一条文案随快照返回，
@@ -239,9 +240,9 @@ function extractTopicText(event: SessionEventLike): string {
 let displayMachine: ActivityMachine | undefined;
 /** 是否仍有活跃会话。 */
 let displayActive = false;
-/** SSE 事件发射器：状态变化时通知所有订阅者。 */
-const sseEmitter = new EventEmitter();
-sseEmitter.setMaxListeners(100);
+/** 状态变化事件发射器：状态变化时通知所有 WS 订阅者。 */
+const changeEmitter = new EventEmitter();
+changeEmitter.setMaxListeners(100);
 
 /** 读取当前活动快照（供路由返回给客户端；lang 决定文案语言）。 */
 export function getActivity(lang: CopyLang = "zh"): ActivitySnapshot {
@@ -265,17 +266,17 @@ export function onActivityChange(
     // 使用默认语言，实际语言由路由层通过 getActivity 参数控制
     callback(getActivity("zh"));
   };
-  sseEmitter.on("change", handler);
+  changeEmitter.on("change", handler);
   // 立即发送当前状态
   callback(getActivity("zh"));
   return () => {
-    sseEmitter.off("change", handler);
+    changeEmitter.off("change", handler);
   };
 }
 
-/** 内部：触发状态变化事件，通知所有 SSE 订阅者。 */
+/** 内部：触发状态变化事件，通知所有 WS 订阅者。 */
 function emitActivityChange(): void {
-  sseEmitter.emit("change");
+  changeEmitter.emit("change");
 }
 
 /**
@@ -310,7 +311,7 @@ export function registerActivity(ctx: Context): () => void {
     displayActive = true;
     displayMachine?.onInput(next);
     displayMachine?.onSessionActive();
-    // 状态变化后通知所有 SSE 订阅者
+    // 状态变化后通知所有 WS 订阅者
     emitActivityChange();
   };
 

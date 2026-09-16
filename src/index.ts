@@ -8,7 +8,7 @@
 import type { Context } from "@deepseek-ai/cordis";
 import { makePromptRoutes } from "./host/routes.js";
 import { registerActivity } from "./host/activity.js";
-import { dataChangedRoute, emitExportDownload } from "./host/events.js";
+import { dataChangedUpgradeRoute, emitExportDownload } from "./host/events.js";
 import {
   autoLearn,
   computeLibraryStats,
@@ -485,8 +485,16 @@ export function apply(ctx: Context) {
 
   ctx.inject(["webServer"], (httpCtx: Context) => {
     httpCtx.effect(() => {
-      const all = [...routes, dataChangedRoute];
-      const disposers = all.map((route) => httpCtx.webServer.register(route));
+      const disposers = routes.map((route) => httpCtx.webServer.register(route));
+      // 全插件只有一条 WS 连接（/api/prompt-library/events），承载数据变更广播
+      // 与词库助手状态流；注册在 upgrade 表。宿主版本没有 registerUpgrade 时
+      // 静默跳过（仅丢实时推送，不影响其余 HTTP 路由）。
+      const server = httpCtx.webServer as unknown as {
+        registerUpgrade?: (route: unknown) => () => void;
+      };
+      if (typeof server.registerUpgrade === "function") {
+        disposers.push(server.registerUpgrade(dataChangedUpgradeRoute));
+      }
       return () => {
         for (const dispose of disposers) dispose();
       };

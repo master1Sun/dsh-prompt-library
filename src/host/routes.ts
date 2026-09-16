@@ -95,8 +95,8 @@ import {
 } from "./session-prompts.js";
 import { checkUpdate, getUpgradeState, getVersionInfo, restartService, startUpgrade } from "./update.js";
 import { fetchPluginMarket } from "./plugin-market.js";
-import { getActivity, onActivityChange } from "./activity.js";
-import { buildAssistantStatus, computeAchievementProgress, emitStatusChange, onStatusChange } from "./gamification.js";
+import { getActivity } from "./activity.js";
+import { buildAssistantStatus, computeAchievementProgress, emitStatusChange } from "./gamification.js";
 import { getAnnouncement } from "./announcement.js";
 import { getIssue, listIssueDates } from "./daily.js";
 import { deleteBackup, listBackups, restoreBackup, runBackup, type BackupFormat } from "./backup.js";
@@ -1026,71 +1026,9 @@ export function makePromptRoutes(): WebRoute[] {
         return json(res, 200, { ok: true, data });
       }
 
-      // GET /assistant/stream — SSE 实时订阅「词库助手」状态流：活动阶段 + 游戏化状态合并为一条连接。
-      // 客户端建立连接后立即收到当前活动快照（event: activity）与游戏化快照（event: status），
-      // 之后任一侧状态变化时分别推送对应命名事件。支持 lang 查询参数控制文案语言。
-      if (method === "GET" && tail === "/assistant/stream") {
-        let lang = "zh";
-        try {
-          const raw = req.url ?? "";
-          const q = raw.includes("?") ? raw.slice(raw.indexOf("?") + 1) : "";
-          const lv = new URLSearchParams(q).get("lang");
-          if (lv) lang = lv;
-        } catch {
-          /* 解析失败用默认 zh */
-        }
-        const langNorm = lang.toLowerCase().startsWith("en") ? "en" : "zh";
-
-        // 设置 SSE 响应头
-        res.writeHead(200, {
-          "content-type": "text/event-stream",
-          "cache-control": "no-cache",
-          connection: "keep-alive",
-        });
-
-        // 活动状态：立即推送一次当前快照
-        const writeActivity = () => {
-          const snapshot = getActivity(langNorm);
-          res.write(`event: activity\ndata: ${JSON.stringify(snapshot)}\n\n`);
-        };
-        writeActivity();
-
-        // 游戏化状态：构建并立即推送一次当前快照
-        const buildStatus = async () => {
-          const [stats, streak, points] = await Promise.all([
-            computeLibraryStats().catch(() => undefined),
-            computeStreak().catch(() => 0),
-            computePoints().catch(() => ({
-              gross: 0,
-              decay: 0,
-              net: 0,
-              inactiveDays: 0,
-              lastActiveAt: 0,
-            })),
-          ]);
-          const progress = syncAchievementProgress(computeAchievementProgress(stats, streak));
-          return buildAssistantStatus(stats, streak, langNorm, points, progress);
-        };
-        const writeStatus = async () => {
-          const status = await buildStatus();
-          res.write(`event: status\ndata: ${JSON.stringify(status)}\n\n`);
-        };
-        await writeStatus();
-
-        // 订阅两侧状态变化（回调中按当前语言重新取快照）
-        const unsubActivity = onActivityChange(writeActivity);
-        const unsubStatus = onStatusChange(writeStatus);
-
-        // 客户端断开时清理
-        const cleanup = () => {
-          unsubActivity();
-          unsubStatus();
-          res.end();
-        };
-        req.on("close", cleanup);
-
-        return;
-      }
+      // 注：原 `/assistant/stream` 的长连接已并入插件唯一的那条 WS
+      //（/api/prompt-library/events，见 host/events.ts + host/assistant-stream.ts），
+      // 这里不再处理该子路径。
 
       // GET /assistant/status — 词库助手游戏化快照：等级 + 成就 + 时间/节日彩蛋，
       // 驱动助手等级徽章、成就解锁气泡与应景彩蛋；支持 lang 查询参数

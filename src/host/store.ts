@@ -11,21 +11,17 @@
  * 所有读写在单进程单连接上串行执行，天然避免并发交错导致的丢失更新。
  */
 import { readFile, rm, writeFile } from "node:fs/promises";
-import { mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { randomUUID } from "node:crypto";
 // 惰性加载 node:sqlite（屏蔽实验特性警告），DatabaseSync 仅作类型使用
 import { createDatabase } from "./node-sqlite.js";
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { load, dump } from "js-yaml";
 import type { PluginSettings, Prompt, TrashItem } from "../types.js";
 import { clampTitle, DEFAULT_SETTINGS, TITLE_MAX_LEN } from "../types.js";
-import { enrichLearnedPrompt, isAiAvailable } from "./ai.js";
-import { emitDataChanged } from "./events.js";
 import {
   dbPath,
-  newspapersDir,
-  personaSoulPath,
   sessionPromptPath,
   SETTINGS_NAMESPACE,
   soulPath,
@@ -126,37 +122,8 @@ function getDb(): DatabaseSync {
       updatedAt INTEGER NOT NULL
     );
   `);
-  // 等级积分账本：记录每一笔积分事件（使用/AI完善/自学习/新增收藏/每日活跃），
-  // 供词库助手等级积分制「每日加积分 + 长期未用时按周期衰减」使用。
-  next.exec(`
-    CREATE TABLE IF NOT EXISTS pl_points_log (
-      id        INTEGER PRIMARY KEY AUTOINCREMENT,
-      kind      TEXT NOT NULL,
-      points    INTEGER NOT NULL,
-      createdAt INTEGER NOT NULL,
-      dayKey    TEXT NOT NULL
-    );
-  `);
-  next.exec("CREATE INDEX IF NOT EXISTS idx_pl_points_createdAt ON pl_points_log (createdAt)");
-  // 成就进度持久化表：每条成就一行，记录其历史最大进度。
-  // 进度只增不减——即使词库数据回退（删除提示词 / 清空回收站 / 连续活跃断档）也不影响已达成进度。
-  next.exec(`
-    CREATE TABLE IF NOT EXISTS pl_achievement_progress (
-      id        TEXT PRIMARY KEY,
-      progress  INTEGER NOT NULL DEFAULT 0,
-      updatedAt INTEGER NOT NULL
-    );
-  `);
-  // 统计历史表：每 7 天自动生成的词库统计快照（含 AI 点评）。
-  next.exec(`
-    CREATE TABLE IF NOT EXISTS stats_history (
-      id        INTEGER PRIMARY KEY AUTOINCREMENT,
-      stats     TEXT NOT NULL,
-      comment   TEXT,
-      createdAt INTEGER NOT NULL
-    );
-  `);
   // 多人格数据表：自定义人格的元信息 + SOUL 正文（正文直接存库，不再落盘 md 文件）。
+  // （技能管理界面仅读取本表用于展示已绑定人格名称；人格 CRUD 已移除。）
   next.exec(`
     CREATE TABLE IF NOT EXISTS personas (
       id        TEXT PRIMARY KEY,
@@ -175,6 +142,7 @@ function getDb(): DatabaseSync {
   }
   // 工作区/项目路径 → 人格 绑定表：按目录路径记录当前启用人格。
   // 路径即「工作区或其下项目」的绝对路径，人格解析时按「最深的祖先/相等匹配」生效。
+  // （技能管理界面仅读取本表用于展示路径级人格绑定；人格写入口已移除。）
   next.exec(`
     CREATE TABLE IF NOT EXISTS persona_scope_bindings (
       path      TEXT PRIMARY KEY,
@@ -183,7 +151,7 @@ function getDb(): DatabaseSync {
     );
   `);
   // 工作区/项目路径 → 会话级技能 绑定表：按目录路径记录绑定的技能 id 列表（JSON 数组）。
-  // 与人格绑定同表结构语义（存库），解析规则一致（最深的祖先/相等匹配）。
+  // 解析规则：最深的祖先/相等匹配。
   next.exec(`
     CREATE TABLE IF NOT EXISTS prompt_scope_bindings (
       path      TEXT PRIMARY KEY,
@@ -222,28 +190,6 @@ function getDb(): DatabaseSync {
       updatedAt  INTEGER NOT NULL
     );
   `);
-  // 公告报纸表：每日词库日报 + 成就速报（中英各一行），正文以 JSON 结构化存库，不再落盘 md 文件。
-  next.exec(`
-    CREATE TABLE IF NOT EXISTS newspapers (
-      date       TEXT NOT NULL,
-      lang       TEXT NOT NULL,
-      report     TEXT,
-      news       TEXT,
-      newsSource TEXT,
-      createdAt  INTEGER NOT NULL,
-      PRIMARY KEY (date, lang)
-    );
-  `);
-  // 每日心情表：按「本地日期」记录当天会话成功/失败次数，驱动助手表情与气泡。
-  // 取代原先 localStorage 的 pl:mood:* 键，支持跨端持久化与按天聚合。
-  next.exec(`
-    CREATE TABLE IF NOT EXISTS pl_daily_mood (
-      dayKey    TEXT PRIMARY KEY,
-      happy     INTEGER NOT NULL DEFAULT 0,
-      sad       INTEGER NOT NULL DEFAULT 0,
-      updatedAt INTEGER NOT NULL
-    );
-  `);
   // 提示词版本历史表：创建/更新/精炼时写一份快照，支持回溯任意历史状态。
   next.exec(`
     CREATE TABLE IF NOT EXISTS pl_prompt_versions (
@@ -265,9 +211,6 @@ function getDb(): DatabaseSync {
   // 首次使用（词库为空）时写入一条默认提示词与标签，作为上手引导。
   seedDefaultPromptIfEmpty(next);
   db = next;
-  // 一次性回填等级积分账本：从历史记录折算历史积分，保证老用户升级积分制后等级不回退。
-  // 之后只按新增活动实时累计，不再重复回填。
-  seedPointsLedger(next);
   // 一次性迁移历史 JSON 数据（失败静默，不影响使用）。
   migrateLegacyJsonIfNeeded().catch(() => {});
   // 一次性把旧 md 文件中的正文迁入数据库（人格 SOUL / 会话技能正文 / 公告报纸），
@@ -278,37 +221,6 @@ function getDb(): DatabaseSync {
     // 迁移失败静默，不影响使用
   }
   return next;
-}
-
-/** 关闭数据库连接（供测试/收尾使用）。 */
-export function closeDb(): void {
-  if (db) {
-    try {
-      db.close();
-    } catch {
-      /* 忽略关闭错误 */
-    }
-    db = undefined;
-  }
-}
-
-/**
- * 强制重新打开数据库连接：先关闭现有连接，再按当前库文件重新初始化。
- * 供「恢复数据库备份」使用——把备份文件覆盖到 dbPath 后调用，
- * 新连接会按新文件重建表结构并执行历史列迁移。
- */
-export function reopenDb(): void {
-  closeDb();
-  getDb();
-}
-
-/** 把 WAL 日志合并回主库文件（TRUNCATE 会清空 WAL），供备份前产生一致、完整的库文件。 */
-export function checkpointDb(): void {
-  try {
-    getDb().exec("PRAGMA wal_checkpoint(TRUNCATE)");
-  } catch {
-    /* 检查点失败不阻断；备份仍尝试复制主库文件 */
-  }
 }
 
 /** 读取 meta 表值（key 不存在或读取失败时返回空串）。 */
@@ -364,9 +276,9 @@ function seedDefaultPromptIfEmpty(cur: DatabaseSync): void {
         "这是你保存的第一条提示词，也是词库的上手引导。",
         "",
         "你可以这样使用本插件：",
-        "· 在输入框输入 `/prompts -add 把这段好的提示词保存下来`，不错过任何好词；",
-        "· 输入 `/prompts -AI 请把这段优化得更专业`，AI 优化后结果会打印出来供复制；",
-        "· 输入 `/prompts -h` 查看完整使用手册。",
+        "· 打开左侧菜单的「数据管理」浏览、编辑、检索整库；",
+        "· 在聊天输入框旁用「AI 优化 / AI 完善」按钮加工选中文本；",
+        "· 在「导入导出」里备份或恢复整个词库。",
         "",
         "也可以直接编辑这条提示词，替换为你自己的内容，并在设置里为它打上标签。",
       ].join("\n")
@@ -374,9 +286,9 @@ function seedDefaultPromptIfEmpty(cur: DatabaseSync): void {
         "This is the first prompt you saved and your quick guide to the prompt library.",
         "",
         "Here is how to use this plugin:",
-        "· Type `/prompts -add save this great prompt` in the input box to keep any good prompt;",
-        "· Type `/prompts -AI polish this to be more professional` and the polished result is printed for you to copy;",
-        "· Type `/prompts -h` to see the full manual.",
+        "· Open \"Data Management\" in the left menu to browse, edit and search the whole library;",
+        "· Use the \"AI polish / AI enrich\" buttons next to the chat input to process selected text;",
+        "· Back up or restore the whole library from \"Import / Export\".",
         "",
         "You can also edit this prompt and replace it with your own content, and tag it in the settings.",
       ].join("\n");
@@ -406,27 +318,25 @@ function seedDefaultPromptIfEmpty(cur: DatabaseSync): void {
 //
 // 注意：这段文本会进入宿主 systemPrompt 的 section，宿主会把其中完整的
 // `{{...}}` 当作模板变量引用并强制校验变量名（须匹配 /^[a-z][a-z0-9_]*$/）。
-// 这里不得书写任何字面 {{}}；使用规则/手册不再打印到聊天框，而是由
-// index.ts 注入的 HARNESS 会话上下文（文件化）提供，用户可用 /prompts -h 查看。
+// 这里不得书写任何字面 {{}}。
 
 /** 首次欢迎时注入到 system prompt 的简短问候（不再输出整本手册）。 */
 const WELCOME_SYSTEM = [
   "（首次使用引导）这是你与带「词库」插件的助手第一次对话。",
   "请在本次会话的【第一条回复】中用一句简洁、自然、友好的话欢迎用户即可。",
-  "不要输出插件使用手册全文；若用户主动询问插件功能，可引导其输入 /prompts -h 查看使用手册。",
 ].join("\n");
 
-/** 已把欢迎指令绑定到某个会话 scope。 */
+/** 已展示过首次欢迎（持久化标记读取后锁定，进程内只判定一次）。 */
 let welcomeBound = false;
-/** 绑定到的会话 scope（用于同一会话多次组装的持续注入）。 */
+/** 首次欢迎实际绑定到的会话 scope（仅该会话能看到欢迎指令，后续组装不再注入）。 */
 let welcomeScope: unknown;
 
 /**
- * 判断本次组装（属于会话 scope）是否应注入首次欢迎开场指令：
- * - 持久化标记 welcomeShown 已存在：整个安装生命周期只欢迎一次，直接不注入（跨进程重启仍成立）；
- * - 第一次调用（全局首次）：注入，并把 scope 绑定起来，同时写 welcomeShown 标记持久化；
- * - 同一 scope 再次组装：保持注入（该会话第一条回复仍能看到指令）；
- * - 首次已消费且不是绑定 scope：不再注入。
+ * 判断本次组装是否应注入首次欢迎开场指令：
+ * - 已绑定到某会话 scope：仅当同一会话再次组装时返回欢迎文本（保证首条回复必含欢迎），
+ *   其他会话一律不注入；
+ * - 持久化标记 welcomeShown 已存在（跨重启只欢迎一次）：不注入；
+ * - 全局首次：把本次组装的会话 scope 记为欢迎会话并写持久化标记。
  * 返回需要追加到 system prompt 的文本，空串表示不注入。
  */
 export function welcomePromptOnce(scope: unknown): string {
@@ -651,7 +561,7 @@ async function migrateLegacyJsonIfNeeded(): Promise<void> {
 }
 
 /**
- * 一次性把旧 md 文件中的正文迁入数据库（默认/自定义人格 SOUL、会话级技能正文、公告报纸）。
+ * 一次性把旧 md 文件中的正文迁入数据库（全局默认人格 SOUL、会话级技能正文）。
  *
  * 仅在数据库中对应正文为空时从 md 文件读入（幂等）；迁移后正文以库为准，
  * 后续读写不再依赖 md 文件（原文件保留不删除）。任何单条失败都静默忽略。
@@ -666,17 +576,7 @@ function migrateMdContentToDb(): void {
       /* 文件不存在，忽略 */
     }
   }
-  // 2. 自定义人格 SOUL：character/personas/<id>.md → personas.body
-  for (const p of listPersonas()) {
-    if (p.body) continue;
-    try {
-      const content = stripBom(readFileSync(personaSoulPath(p.id), "utf8")).trim();
-      if (content) updatePersonaMeta(p.id, { body: content });
-    } catch {
-      /* 文件不存在，忽略 */
-    }
-  }
-  // 3. 会话级技能正文：session-prompts/<id>.md → session_prompts.body
+  // 2. 会话级技能正文：session-prompts/<id>.md → session_prompts.body
   for (const r of listSessionPromptRecords()) {
     if (r.body) continue;
     try {
@@ -686,64 +586,6 @@ function migrateMdContentToDb(): void {
       /* 文件不存在，忽略 */
     }
   }
-  // 4. 公告报纸：newspapers/<lang>/YYYY-MM-DD.md → newspapers 表（表为空时导入全部历史期）
-  if (listNewspaperDates().length === 0) {
-    for (const lang of ["zh", "en"] as const) {
-      const dir = join(newspapersDir(), lang);
-      let names: string[] = [];
-      try {
-        names = readdirSync(dir).filter((n) => /^\d{4}-\d{2}-\d{2}\.md$/.test(n));
-      } catch {
-        /* 目录不存在 */
-      }
-      for (const name of names) {
-        const date = name.slice(0, 10);
-        try {
-          const issue = parseLegacyNewspaperMd(date, lang, stripBom(readFileSync(join(dir, name), "utf8")));
-          if (issue) setNewspaperRecord(issue);
-        } catch {
-          /* 单条读取失败忽略 */
-        }
-      }
-    }
-  }
-}
-
-/** 从旧报纸 md 反解析出结构化记录（与旧 daily.ts 的 md 排版一致）。 */
-function parseLegacyNewspaperMd(
-  date: string,
-  lang: "zh" | "en",
-  content: string,
-): NewspaperRecord | undefined {
-  const report: Array<{ headline: string; body: string }> = [];
-  const news: Array<{ title: string; summary: string; url: string }> = [];
-  let section: "report" | "news" | null = null;
-  for (const line of content.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    if (trimmed.startsWith("## ")) {
-      const lower = trimmed.toLowerCase();
-      if (lower.includes("daily report") || lower.includes("每日日报")) section = "report";
-      else if (lower.includes("achievement") || lower.includes("成就速报")) section = "news";
-      else section = null;
-      continue;
-    }
-    if (section === "report") {
-      const m = trimmed.match(/^-\s*\*\*(.+?)\*\*\s*[:：]\s*(.*)$/);
-      if (m) report.push({ headline: m[1]!.trim(), body: m[2]!.trim() });
-    } else if (section === "news") {
-      const m = trimmed.match(/^(\d+)\.\s*\*\*(.+?)\*\*\s*(?:—\s*)?(.*)$/);
-      if (m) news.push({ title: m[2]!.trim(), summary: m[3]!.trim(), url: "" });
-    }
-  }
-  if (report.length === 0 && news.length === 0) return undefined;
-  return {
-    date,
-    lang,
-    report: report.length > 0 ? report : null,
-    news: news.length > 0 ? news : null,
-    newsSource: "achievement",
-  };
 }
 
 /**
@@ -793,37 +635,23 @@ function hasAnyPrompts(): boolean {
 
 /**
  * 如果超过最大数量，删除最不常用的提示词。
- * 优先删除使用次数为 0 且最旧的。
+ * 使用次数少、更新旧者优先淘汰。
  */
-async function enforceMaxCount(maxCount: number, autoLearnTag?: string): Promise<void> {
+async function enforceMaxCount(maxCount: number): Promise<void> {
   const cur = getDb();
   const { total } = cur.prepare("SELECT COUNT(*) AS total FROM prompts").get() as { total: number };
   if (total <= maxCount) return;
   const toRemove = total - maxCount;
 
-  // 识别「自动学习」条目：标签为配置的自动学习标签或默认 auto-learned。
-  // 淘汰时优先删除它们，保护用户手工创建/维护的提示词不被误删。
-  const learnTags = new Set(["auto-learned"]);
-  if (autoLearnTag?.trim()) learnTags.add(autoLearnTag.trim());
-  const isAutoLearned = (tagsJson: string | null): boolean => {
-    if (!tagsJson) return false;
-    return [...learnTags].some((tag) => tagsJson.includes(`"${tag}"`));
-  };
-
   const rows = cur
-    .prepare("SELECT id, tags, usageCount, updatedAt FROM prompts")
-    .all() as unknown as Array<{ id: string; tags: string | null; usageCount: number; updatedAt: number }>;
+    .prepare("SELECT id, usageCount, updatedAt FROM prompts")
+    .all() as unknown as Array<{ id: string; usageCount: number; updatedAt: number }>;
   // 最少使用 + 最旧者优先（排序函数）
   const byLeastUsed = (
     a: { usageCount: number; updatedAt: number },
     b: { usageCount: number; updatedAt: number },
   ): number => a.usageCount - b.usageCount || a.updatedAt - b.updatedAt;
-  const candidates = [...rows.filter((r) => isAutoLearned(r.tags)).sort(byLeastUsed)];
-
-  // 自动学习条目不足时，再退化为最旧的普通条目（保证数量上限仍生效）
-  if (candidates.length < toRemove) {
-    candidates.push(...rows.filter((r) => !isAutoLearned(r.tags)).sort(byLeastUsed));
-  }
+  const candidates = [...rows.sort(byLeastUsed)];
 
   const rm = cur.prepare("DELETE FROM prompts WHERE id = ?");
   for (const { id } of candidates.slice(0, toRemove)) rm.run(id);
@@ -916,11 +744,9 @@ export function createPrompt(input: {
         now,
       );
     // 用用户配置的真实上限做后台淘汰（getSettingsSync 只回默认值）
-    void getSettings().then((s) => enforceMaxCount(s.maxPromptCount, s.autoLearnTag));
+    void getSettings().then((s) => enforceMaxCount(s.maxPromptCount));
     // 版本历史：创建时快照 v1
     snapshotPromptVersion(prompt, "create");
-    // 等级积分：新增收藏 +1
-    void addPoints("collect");
     return Promise.resolve(prompt);
   } catch (e) {
     return Promise.reject(e);
@@ -998,8 +824,6 @@ export function updatePrompt(
     if (contentChanged) {
       snapshotPromptVersion(next, aiRefined && !current.aiRefined ? "refine" : "update");
     }
-    // 等级积分：首次 AI 完善时 +3（重复完善不加，只记一次）
-    if (aiRefined && !current.aiRefined) void addPoints("ai");
     return Promise.resolve(next);
   } catch (e) {
     return Promise.reject(e);
@@ -1019,8 +843,6 @@ export function recordUsage(id: string): Promise<Prompt | undefined> {
       .run(ts, ts, id);
     // 写入使用历史，供每周统计精确统计「近 7 天使用次数 / 活跃提示词 / 最常使用」
     cur.prepare("INSERT INTO usage_log (promptId, usedAt) VALUES (?, ?)").run(id, ts);
-    // 等级积分：使用 +1
-    void addPoints("use");
     const row = cur.prepare("SELECT * FROM prompts WHERE id = ?").get(id) as unknown as PromptRow | undefined;
     if (!row) return Promise.resolve(undefined);
     return Promise.resolve(rowToPrompt(row));
@@ -1053,224 +875,6 @@ function buildTitle(body: string): string {
   const m = segment.match(/[。！？!?；;…]/);
   const cut = m ? m.index! + 1 : TITLE_MAX_LEN;
   return clampTitle(cleaned.slice(0, Math.max(1, cut)) + "…");
-}
-
-/** 字符二元组 Jaccard 相似度（0~1），忽略空格与大小写，用于近似去重。 */
-function bigramSimilarity(a: string, b: string): number {
-  const grams = (s: string): Set<string> => {
-    const set = new Set<string>();
-    const t = s.toLowerCase().replace(/\s+/g, "");
-    for (let i = 0; i < t.length; i++) set.add(t.slice(i, i + 2));
-    if (!t) set.add("");
-    return set;
-  };
-  const A = grams(a);
-  const B = grams(b);
-  const union = A.size + B.size;
-  if (union === 0) return 1;
-  let inter = 0;
-  for (const g of A) if (B.has(g)) inter++;
-  return inter / (union - inter);
-}
-
-/**
- * 近似去重：返回与正文高度相似（长度相近且 bigram 相似度 ≥ 阈值）的已有提示词。
- * 长度差异过大的两条直接跳过，避免长文误伤短文。命中则不再重复入库。
- */
-function findNearDuplicatePrompt(body: string, threshold = 0.8): Prompt | undefined {
-  const t = body.trim();
-  if (!t) return undefined;
-  const rows = getDb().prepare("SELECT * FROM prompts").all() as unknown as PromptRow[];
-  for (const r of rows) {
-    const b = r.body.trim();
-    if (!b) continue;
-    const ratio = Math.min(t.length, b.length) / Math.max(t.length, b.length);
-    if (ratio < 0.5) continue;
-    if (bigramSimilarity(t, b) >= threshold) return rowToPrompt(r);
-  }
-  return undefined;
-}
-
-/** 把回收站行转回提示词（丢弃 deletedAt 等回收站专属字段）。 */
-function trashRowToPrompt(r: TrashRow): Prompt {
-  return {
-    id: r.id,
-    title: r.title,
-    body: r.body,
-    tags: r.tags ? (JSON.parse(r.tags) as string[]) : undefined,
-    summary: r.summary ?? undefined,
-    sourceBody: r.sourceBody ?? undefined,
-    aiRefined: r.aiRefined === 1,
-    updatedAt: r.updatedAt,
-    createdAt: r.createdAt,
-    usageCount: r.usageCount,
-    lastUsedAt: r.lastUsedAt,
-  };
-}
-
-/** 把一条回收站内容恢复到词库（保留原始标题/标签/AI 完善结果），并从回收站移除。 */
-function restoreTrashRow(r: TrashRow): void {
-  const cur = getDb();
-  const tags = r.tags ? (JSON.parse(r.tags) as string[]) : [];
-  ensureTags(tags);
-  cur
-    .prepare(
-      `INSERT OR REPLACE INTO prompts
-         (id, title, body, tags, summary, sourceBody, aiRefined, updatedAt, usageCount, lastUsedAt, createdAt)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      r.id,
-      r.title,
-      r.body,
-      r.tags,
-      r.summary,
-      r.sourceBody,
-      r.aiRefined,
-      r.updatedAt,
-      r.usageCount,
-      r.lastUsedAt,
-      r.createdAt,
-    );
-  cur.prepare("DELETE FROM trash WHERE id = ?").run(r.id);
-}
-
-/** 自动学习命中已有条目时，把界面传入的 AI 摘要补写进词库（仅在原文无摘要时）。 */
-function applyLearnedSummary(prompt: Prompt, summary?: string): Prompt {
-  const s = summary?.trim();
-  if (!s || prompt.summary) return prompt;
-  try {
-    getDb()
-      .prepare("UPDATE prompts SET summary = ?, updatedAt = ? WHERE id = ?")
-      .run(s, Date.now(), prompt.id);
-    return { ...prompt, summary: s };
-  } catch {
-    return prompt;
-  }
-}
-
-export function autoLearn(
-  body: string,
-  tag?: string,
-  skipEnrich?: boolean,
-  summary?: string,
-): Promise<Prompt> {
-  try {
-    const normalized = body.trim().toLowerCase();
-    const collisions = getDb()
-      .prepare("SELECT id FROM prompts WHERE lower(body) = ?")
-      .all(normalized) as unknown as Array<{ id: string }>;
-    if (collisions.length > 0) {
-      const row = getDb()
-        .prepare("SELECT * FROM prompts WHERE id = ?")
-        .get(collisions[0]!.id) as unknown as PromptRow;
-      const existing = rowToPrompt(row);
-      return Promise.resolve(existing).then(async (prompt) => {
-        void continueEnrich(prompt, !!skipEnrich);
-        return applyLearnedSummary(prompt, summary);
-      });
-    }
-
-    // 回收站已有完全相同的内容：恢复该条而非重复入库（保留用户原先的标题/标签/AI 完善结果）
-    const trashHit = getDb()
-      .prepare("SELECT * FROM trash WHERE lower(body) = ?")
-      .get(normalized) as unknown as TrashRow | undefined;
-    if (trashHit) {
-      restoreTrashRow(trashHit);
-      const prompt = trashRowToPrompt(trashHit);
-      void continueEnrich(prompt, !!skipEnrich);
-      emitDataChanged();
-      return Promise.resolve(prompt).then((p) => applyLearnedSummary(p, summary));
-    }
-
-    // 近似去重：与词库中已有内容高度相似时视为已有条目，不重复入库（返回原条目）
-    const near = findNearDuplicatePrompt(body);
-    if (near) {
-      return Promise.resolve(near).then(async (prompt) => {
-        void continueEnrich(prompt, !!skipEnrich);
-        return applyLearnedSummary(prompt, summary);
-      });
-    }
-
-    // 自动生成标题：无 AI 时也用 buildTitle 做基础梳理（去标记、句末断句、限 25 字）。
-    const title = buildTitle(body);
-
-    const now = Date.now();
-    const prompt: Prompt = {
-      id: randomUUID(),
-      title,
-      body: body.trim(),
-      tags: ensureTags(tag ? [tag] : ["auto-learned"]).slice(0, 1),
-      summary: summary?.trim() || undefined,
-      updatedAt: now,
-      createdAt: now,
-      usageCount: 0,
-      lastUsedAt: 0,
-      // 已在界面完成 AI 润色的正文视为已完善，跳过后台 AI 完善
-      aiRefined: !!skipEnrich,
-    };
-    getDb()
-      .prepare(
-        `INSERT INTO prompts
-           (id, title, body, tags, summary, aiRefined, updatedAt, usageCount, lastUsedAt, createdAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        prompt.id,
-        prompt.title,
-        prompt.body,
-        tagsToJson(prompt.tags),
-        prompt.summary ?? null,
-        prompt.aiRefined ? 1 : 0,
-        now,
-        0,
-        0,
-        now,
-      );
-    // 用用户配置的真实上限做后台淘汰（getSettingsSync 只回默认值）
-    void getSettings().then((s) => enforceMaxCount(s.maxPromptCount, s.autoLearnTag));
-    void continueEnrich(prompt, !!skipEnrich);
-    emitDataChanged();
-    return Promise.resolve(prompt);
-  } catch (e) {
-    return Promise.reject(e);
-  }
-}
-
-/**
- * 后台 AI 完善：不阻塞响应，任何失败静默降级。
- * 若是手动确认里已点过「AI 润色」的正文（skipEnrich），不再重复调用 AI 完善。
- */
-async function continueEnrich(prompt: Prompt, skipEnrich: boolean): Promise<void> {
-  if (skipEnrich) return;
-  const settings = await getSettings();
-  if (settings.aiEnrichEnabled && isAiAvailable()) {
-    enrichLearnedPrompt(prompt, settings)
-      .then(() => emitDataChanged())
-      .catch(() => {
-        /* 静默：AI 完善失败不影响已保存的提示词 */
-      });
-  }
-}
-
-/**
- * 重新触发某条提示词的 AI 完善（查看详情里「重新完善」入口用）。
- * 失败时保留 aiRefined=false 标记，供再次重试；未启用 AI 完善或无 LLM 时返回 false。
- */
-export async function refinePrompt(id: string): Promise<boolean> {
-  try {
-    const row = getDb().prepare("SELECT * FROM prompts WHERE id = ?").get(id) as unknown as PromptRow | undefined;
-    if (!row) return false;
-    const prompt = rowToPrompt(row);
-    if (prompt.aiRefined) return true; // 已完成过完善，无需重复触发
-    const settings = await getSettings();
-    if (!settings.aiEnrichEnabled || !isAiAvailable()) return false;
-    await enrichLearnedPrompt(prompt, settings);
-    emitDataChanged();
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -1561,35 +1165,6 @@ export function importPrompts(
   }
 }
 
-/**
- * 从 JSON 备份整体恢复词库：先清空现有数据（提示词/回收站/标签/使用记录/技能关联），
- * 再按备份内容重建（合并导入逻辑见 importPrompts）。
- * 返回重建的提示词条数；任一环节失败都会整体回滚。
- */
-export function restoreFromJson(
-  raw: unknown,
-): Promise<{ imported: number }> {
-  try {
-    const cur = getDb();
-    cur.exec("BEGIN");
-    try {
-      cur.exec("DELETE FROM prompts");
-      cur.exec("DELETE FROM trash");
-      cur.exec("DELETE FROM tags");
-      cur.exec("DELETE FROM usage_log");
-      cur.exec("DELETE FROM prompt_skill_links");
-      cur.exec("COMMIT");
-    } catch (e) {
-      cur.exec("ROLLBACK");
-      throw e;
-    }
-    // 备份恢复：保留原库的使用次数等统计（keepUsage）
-    return importPrompts(raw, { keepUsage: true }).then((r) => ({ imported: r.imported }));
-  } catch (e) {
-    return Promise.reject(e);
-  }
-}
-
 // ── 标签集中管理（独立标签表）───────────────────────────────────────────────
 
 /** 新建一个标签（已存在则忽略，返回规范化后的标签名）。 */
@@ -1631,616 +1206,6 @@ export function listTags(): Promise<Array<{ name: string; count: number }>> {
   }
 }
 
-/** 词库的使用统计（供 /prompts -data 输出 + AI 点评）。 */
-export interface LibraryStats {
-  /** 提示词总数。 */
-  total: number;
-  /** 累计使用次数。 */
-  totalUsage: number;
-  /** 曾使用过的提示词数量。 */
-  usedCount: number;
-  /** 从未使用过的提示词数量。 */
-  unusedCount: number;
-  /** 最常用的前 5 条（按使用次数降序）。 */
-  topUsed: Array<{ title: string; usageCount: number; lastUsedAt: number }>;
-  /** 最近使用的前 5 条（按最后使用时间降序）。 */
-  recentUsed: Array<{ title: string; lastUsedAt: number }>;
-  /** 标签及其被引用次数（复用 listTags）。 */
-  tagStats: Array<{ name: string; count: number }>;
-  /** 回收站条数。 */
-  trashCount: number;
-  /** 复用活力：近 7 天曾被使用的提示词数量。 */
-  usedIn7Days: number;
-  /** 复用活力：近 30 天曾被使用的提示词数量。 */
-  usedIn30Days: number;
-  /** 沉睡提示词：创建超过 30 天且从未被使用的最久前 3 条（含闲置天数）。 */
-  longestUnused: Array<{ title: string; days: number }>;
-  /** 正文体量：全部提示词正文总字数。 */
-  totalBodyLength: number;
-  /** 正文体量：平均每条正文字数。 */
-  avgBodyLength: number;
-  /** AI 完善占比：已由 AI 完善（aiRefined）的提示词数量。 */
-  aiRefinedCount: number;
-  /** AI 完善占比（百分比：0-100）。 */
-  aiRefinedPct: number;
-  /** 新增趋势：近 7 天新增提示词数量。 */
-  addedIn7Days: number;
-  /** 新增趋势：近 30 天新增提示词数量。 */
-  addedIn30Days: number;
-  /** 近 7 天最常用的前 5 条（按近 7 天使用次数降序，来自 usage_log）。 */
-  topUsed7: Array<{ title: string; count: number }>;
-  /** 近 7 天经 AI 完善的提示词数量。 */
-  aiRefinedIn7: number;
-  /** 自动学习条目数量（标签为配置的自动学习标签或默认 auto-learned）。 */
-  autoLearnedCount: number;
-}
-
-/** 一周的毫秒数。 */
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-
-/** 汇总词库的使用统计（SQLite live 数据）。 */
-export async function computeLibraryStats(): Promise<LibraryStats> {
-  try {
-    const cur = getDb();
-    const all = findAll();
-    const total = all.length;
-    const totalUsage = all.reduce((s, p) => s + p.usageCount, 0);
-    const used = all.filter((p) => p.usageCount > 0);
-    const topUsed = [...used]
-      .sort((a, b) => b.usageCount - a.usageCount || b.lastUsedAt - a.lastUsedAt)
-      .slice(0, 5)
-      .map((p) => ({ title: p.title, usageCount: p.usageCount, lastUsedAt: p.lastUsedAt }));
-    const recentUsed = used
-      .filter((p) => p.lastUsedAt > 0)
-      .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
-      .slice(0, 5)
-      .map((p) => ({ title: p.title, lastUsedAt: p.lastUsedAt }));
-    const trashRow = cur.prepare("SELECT COUNT(*) AS c FROM trash").get() as { c: number };
-    const tagStats = await listTags();
-
-    // —— 精细化统计维度 ——
-    const now = Date.now();
-    const weekAgo = now - WEEK_MS;
-    const monthAgo = now - 30 * 24 * 60 * 60 * 1000;
-
-    // 复用活力：近 7 / 30 天曾被使用；沉睡提示词：创建超 30 天且从未使用（取最久前 3 条）
-    const usedIn7Days = all.filter((p) => p.lastUsedAt > weekAgo).length;
-    const usedIn30Days = all.filter((p) => p.lastUsedAt > monthAgo).length;
-    const longestUnused = [...all]
-      .filter((p) => p.lastUsedAt === 0 && p.createdAt < monthAgo)
-      .sort((a, b) => a.createdAt - b.createdAt)
-      .slice(0, 3)
-      .map((p) => ({
-        title: p.title,
-        days: Math.floor((now - p.createdAt) / (24 * 60 * 60 * 1000)),
-      }));
-
-    // 正文体量
-    const totalBodyLength = all.reduce((sum, p) => sum + p.body.length, 0);
-    const avgBodyLength = total > 0 ? Math.round(totalBodyLength / total) : 0;
-
-    // AI 完善占比
-    const aiRefinedCount = all.filter((p) => p.aiRefined).length;
-    const aiRefinedPct = total > 0 ? Math.round((aiRefinedCount / total) * 100) : 0;
-
-    // 新增趋势
-    const addedIn7Days = all.filter((p) => p.createdAt > weekAgo).length;
-    const addedIn30Days = all.filter((p) => p.createdAt > monthAgo).length;
-
-    // 近 7 天最常使用（基于 usage_log 聚合，关联标题）与近 7 天 AI 完善
-    const usageRows7 = cur
-      .prepare("SELECT promptId FROM usage_log WHERE usedAt > ?")
-      .all(weekAgo) as Array<{ promptId: string }>;
-    const countByPrompt = new Map<string, number>();
-    for (const r of usageRows7) countByPrompt.set(r.promptId, (countByPrompt.get(r.promptId) ?? 0) + 1);
-    const topUsed7: Array<{ title: string; count: number }> = [];
-    if (countByPrompt.size > 0) {
-      const byId = new Map(all.map((p) => [p.id, p.title]));
-      const sorted = [...countByPrompt.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
-      for (const [id, count] of sorted) topUsed7.push({ title: byId.get(id) ?? "（已删除）", count });
-    }
-    const aiRefinedIn7 = (
-      cur
-        .prepare("SELECT COUNT(*) AS c FROM prompts WHERE aiRefined = 1 AND aiRefinedAt > ?")
-        .get(weekAgo) as { c: number }
-    ).c;
-
-    // 自动学习条目数量（标签为配置的自动学习标签或默认 auto-learned）
-    const settings = await getSettings();
-    const autoLearnTags = new Set(["auto-learned", settings.autoLearnTag?.trim()].filter(Boolean));
-    const autoLearnedCount = all.filter((p) => (p.tags ?? []).some((t) => autoLearnTags.has(t))).length;
-
-    return Promise.resolve({
-      total,
-      totalUsage,
-      usedCount: used.length,
-      unusedCount: total - used.length,
-      topUsed,
-      recentUsed,
-      tagStats,
-      trashCount: trashRow?.c ?? 0,
-      usedIn7Days,
-      usedIn30Days,
-      longestUnused,
-      totalBodyLength,
-      avgBodyLength,
-      aiRefinedCount,
-      aiRefinedPct,
-      addedIn7Days,
-      addedIn30Days,
-      topUsed7,
-      aiRefinedIn7,
-      autoLearnedCount,
-    });
-  } catch (e) {
-    return Promise.reject(e);
-  }
-}
-
-// ── 使用热力图（usage_log 按本地时区聚合）────────────────────────────────
-
-/** 热力图一个单元格：本地时区星期（0=周日）+ 小时（0-23）+ 次数。 */
-export interface HeatmapCell {
-  weekday: number;
-  hour: number;
-  count: number;
-}
-
-/**
- * 计算使用热力图：把近期 usage_log 的每次使用按「本地时区 星期 × 小时」折叠计数。
- * 返回稀疏单元（只含有过使用的格子），由前端补齐 7×24 网格。
- *
- * @param days 统计窗口（毫秒时间戳差），默认近 90 天。
- */
-export async function computeHeatmap(days = 90): Promise<HeatmapCell[]> {
-  try {
-    const cur = getDb();
-    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-    const rows = (cur
-      .prepare("SELECT usedAt FROM usage_log WHERE usedAt > ?")
-      .all(cutoff) as unknown) as Array<{ usedAt: number }>;
-    const counts = new Map<string, number>();
-    for (const r of rows) {
-      if (!r.usedAt || r.usedAt <= 0) continue;
-      const d = new Date(r.usedAt);
-      const key = `${d.getDay()}:${d.getHours()}`;
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-    const cells: HeatmapCell[] = [];
-    for (const [key, count] of counts) {
-      const [weekday, hour] = key.split(":").map((n) => Number(n));
-      cells.push({ weekday, hour, count });
-    }
-    cells.sort((a, b) => a.weekday - b.weekday || a.hour - b.hour);
-    return Promise.resolve(cells);
-  } catch (e) {
-    return Promise.reject(e);
-  }
-}
-
-// ── 每周统计快照（stats_history 表）───────────────────────────────────────
-
-/**
- * 每周统计：只统计「近 7 天」的增量数据（新增/使用/AI 完善），
- * 避免像全量累计那样把历史数据反复重复统计。
- */
-export interface WeeklyStats {
-  /** 统计周期的起始时间（毫秒时间戳，近 7 天前）。 */
-  rangeStart: number;
-  /** 统计周期的结束时间（毫秒时间戳，快照生成时刻）。 */
-  rangeEnd: number;
-  /** 近 7 天新增的提示词数量。 */
-  addedCount: number;
-  /** 近 7 天新增的提示词标题（最多 5 条，用于展示）。 */
-  addedTitles: string[];
-  /** 近 7 天被使用过的提示词数量（活跃复用）。 */
-  usedPromptCount: number;
-  /** 近 7 天总使用次数。 */
-  usageCount: number;
-  /** 近 7 天最常用的前 5 条（按使用次数降序）。 */
-  topUsed: Array<{ title: string; count: number }>;
-  /** 近 7 天经 AI 完善的提示词数量。 */
-  aiRefinedCount: number;
-}
-
-/** 计算近 7 天的每周统计（基于 usage_log 使用历史 + prompts 的新增/完善时间）。 */
-export async function computeWeeklyStats(): Promise<WeeklyStats> {
-  try {
-    const cur = getDb();
-    const rangeEnd = Date.now();
-    const rangeStart = rangeEnd - WEEK_MS;
-    // 近 7 天新增（按创建时间）
-    const addedRows = cur
-      .prepare("SELECT title, createdAt FROM prompts WHERE createdAt > ? ORDER BY createdAt DESC")
-      .all(rangeStart) as Array<{ title: string; createdAt: number }>;
-    // 近 7 天使用（按 usage_log）
-    const usageRows = cur
-      .prepare("SELECT promptId FROM usage_log WHERE usedAt > ?")
-      .all(rangeStart) as Array<{ promptId: string }>;
-    const usageCount = usageRows.length;
-    const usedPromptCount = new Set(usageRows.map((r) => r.promptId)).size;
-    // 近 7 天最常使用：按 promptId 聚合计数，关联标题
-    const countByPrompt = new Map<string, number>();
-    for (const r of usageRows) countByPrompt.set(r.promptId, (countByPrompt.get(r.promptId) ?? 0) + 1);
-    const topUsed: Array<{ title: string; count: number }> = [];
-    if (countByPrompt.size > 0) {
-      const byId = new Map(
-        (cur.prepare("SELECT id, title FROM prompts").all() as Array<{ id: string; title: string }>).map((r) => [
-          r.id,
-          r.title,
-        ]),
-      );
-      const sorted = [...countByPrompt.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
-      for (const [id, count] of sorted) topUsed.push({ title: byId.get(id) ?? "（已删除）", count });
-    }
-    // 近 7 天 AI 完善（按 aiRefinedAt）
-    const aiRefinedCount = (
-      cur
-        .prepare("SELECT COUNT(*) AS c FROM prompts WHERE aiRefined = 1 AND aiRefinedAt > ?")
-        .get(rangeStart) as { c: number }
-    ).c;
-    return Promise.resolve({
-      rangeStart,
-      rangeEnd,
-      addedCount: addedRows.length,
-      addedTitles: addedRows.slice(0, 5).map((r) => r.title),
-      usedPromptCount,
-      usageCount,
-      topUsed,
-      aiRefinedCount,
-    });
-  } catch (e) {
-    return Promise.reject(e);
-  }
-}
-
-// ── 连续活跃天数（成就系统数据源）───────────────────────────────────────
-
-/** 把时间戳格式化为本地时区的日期键（YYYY-MM-DD）。 */
-function localDayKey(ts: number): string {
-  const d = new Date(ts);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-/**
- * 计算连续活跃天数（streak）：基于 usage_log 按「本地时区天」去重，
- * 从今天向前数连续有使用的天数。今天还没使用不算断签（从昨天起算，
- * 给今天一个「仍在进行中」的宽限），一旦中间断一天即停止。
- */
-export async function computeStreak(): Promise<number> {
-  try {
-    const cur = getDb();
-    const rows = cur
-      .prepare("SELECT DISTINCT usedAt FROM usage_log")
-      .all() as Array<{ usedAt: number }>;
-    if (rows.length === 0) return 0;
-    const days = new Set(rows.map((r) => localDayKey(r.usedAt)));
-    const now = new Date();
-    const todayKey = localDayKey(now.getTime());
-    const cursor = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    if (!days.has(todayKey)) cursor.setDate(cursor.getDate() - 1);
-    let streak = 0;
-    while (days.has(localDayKey(cursor.getTime()))) {
-      streak += 1;
-      cursor.setDate(cursor.getDate() - 1);
-    }
-    return streak;
-  } catch (e) {
-    return Promise.reject(e);
-  }
-}
-
-/**
- * 计算距上次使用的时间（按本地时区「天」计）。
- * 今天使用过或从未使用过都返回 0（等级不回落）。
- */
-export async function computeInactiveDays(): Promise<number> {
-  try {
-    const cur = getDb();
-    const row = cur
-      .prepare("SELECT MAX(usedAt) AS lastUsed FROM usage_log")
-      .get() as { lastUsed: number | null };
-    const lastUsed = row?.lastUsed;
-    if (!lastUsed || lastUsed <= 0) return 0;
-    const last = new Date(lastUsed);
-    const todayUTC = Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
-    const lastUTC = Date.UTC(last.getFullYear(), last.getMonth(), last.getDate());
-    const diff = Math.floor((todayUTC - lastUTC) / (24 * 60 * 60 * 1000));
-    return diff < 0 ? 0 : diff;
-  } catch (e) {
-    return Promise.reject(e);
-  }
-}
-
-// ── 等级积分账本（词库助手等级积分制）───────────────────────────────────
-
-/**
- * 一次性回填等级积分账本：从历史记录折算历史积分。
- * - 使用：每 fs.count 次计 1 分（避免历史海量使用把等级拉爆，按比例折算）
- * - AI 完善：每条 +3
- * - 新增收藏：每条 +1（按总词条数，过长库按比例折算）
- * 已回填过则跳过（幂等）。
- */
-function seedPointsLedger(cur: DatabaseSync): void {
-  try {
-    // 自学习改为不再计积分：清理历史账本中残留的 learn 记录（幂等，每次启动兜底执行）
-    cur.prepare("DELETE FROM pl_points_log WHERE kind = 'learn'").run();
-    if (getMetaValue("pl:points-seeded") === "1") return;
-    const now = Date.now();
-    const day = localDayKey(now);
-    const all = (cur.prepare("SELECT * FROM prompts").all() as unknown as PromptRow[]).map(rowToPrompt) ?? [];
-    const useCount = cur
-      .prepare("SELECT COALESCE(SUM(usageCount), 0) AS c FROM prompts")
-      .get() as { c: number };
-    // 历史使用次数按每 3 次折算 1 分，兼顾留存与避免刷量放大；其余维度按条计
-    const usePoints = Math.min(2000, Math.round((useCount?.c ?? 0) / 3));
-    const aiPoints = all.filter((p) => p.aiRefined).length * POINTS_WEIGHT.ai;
-    const collectPoints = Math.min(500, all.length * POINTS_WEIGHT.collect);
-    const insert = cur.prepare(
-      "INSERT INTO pl_points_log (kind, points, createdAt, dayKey) VALUES (?, ?, ?, ?)",
-    );
-    const cap = (kind: PointsKind, c: number) => {
-      for (let i = 0; i < c; i++) insert.run(kind, POINTS_WEIGHT[kind], now - i, day);
-    };
-    cap("ai", aiPoints > 0 ? Math.ceil(aiPoints / POINTS_WEIGHT.ai) : 0);
-    cap("collect", collectPoints > 0 ? Math.ceil(collectPoints / POINTS_WEIGHT.collect) : 0);
-    cap("use", usePoints > 0 ? usePoints : 0);
-    setMetaValue("pl:points-seeded", "1");
-  } catch {
-    /* 回填失败不影响使用，下次重启重试 */
-  }
-}
-
-/** 积分事件类型。 */
-export type PointsKind = "use" | "ai" | "collect" | "active";
-
-/** 各维度单次基础权重：使用 +1 · AI完善 +3 · 新增收藏 +1 · 每日活跃 +3（自学习已不再计积分）。 */
-export const POINTS_WEIGHT: Record<PointsKind, number> = {
-  use: 1,
-  ai: 3,
-  collect: 1,
-  active: 3,
-};
-
-/** 记入一笔积分事件（自动处理「每日活跃」加成：当天首笔任意活动额外加活跃分）。 */
-export function addPoints(kind: PointsKind): Promise<void> {
-  try {
-    const cur = getDb();
-    const now = Date.now();
-    const day = localDayKey(now);
-    const base = POINTS_WEIGHT[kind];
-    cur
-      .prepare("INSERT INTO pl_points_log (kind, points, createdAt, dayKey) VALUES (?, ?, ?, ?)")
-      .run(kind, base, now, day);
-    // 当天首次活动：额外计入「每日活跃」+3，驱动持续使用而非一次高强度刷量
-    const todayActive = cur
-      .prepare("SELECT COUNT(*) AS c FROM pl_points_log WHERE kind = 'active' AND dayKey = ?")
-      .get(day) as { c: number };
-    if (todayActive.c === 0) {
-      cur
-        .prepare("INSERT INTO pl_points_log (kind, points, createdAt, dayKey) VALUES ('active', ?, ?, ?)")
-        .run(POINTS_WEIGHT.active, now, day);
-    }
-    return Promise.resolve();
-  } catch (e) {
-    return Promise.reject(e);
-  }
-}
-
-/** 读取全部成就的历史最大进度（id → 进度，进度只增不减的底账）。 */
-export function loadAchievementProgress(): Record<string, number> {
-  try {
-    const cur = getDb();
-    const rows = cur
-      .prepare("SELECT id, progress FROM pl_achievement_progress")
-      .all() as Array<{ id: string; progress: number }>;
-    const map: Record<string, number> = {};
-    for (const r of rows) map[r.id] = r.progress;
-    return map;
-  } catch {
-    /* 表不存在或读取失败时视为无历史进度 */
-    return {};
-  }
-}
-
-/**
- * 合并并写回成就最大进度（幂等）：progress = max(实时, 历史最大)。
- * 即使词库数据随后回退（删除提示词 / 清空回收站 / 连续活跃断档等），
- * 已达成或已推进的进度也不会倒退。返回合并后的进度表供上层生成成就快照。
- */
-export function syncAchievementProgress(raw: Record<string, number>): Record<string, number> {
-  const cur = getDb();
-  const now = Date.now();
-  const stored = loadAchievementProgress();
-  const merged: Record<string, number> = {};
-  const upsert = cur.prepare(
-    "INSERT INTO pl_achievement_progress (id, progress, updatedAt) VALUES (?, ?, ?) " +
-      "ON CONFLICT(id) DO UPDATE SET progress = MAX(progress, excluded.progress), updatedAt = excluded.updatedAt",
-  );
-  for (const [id, v] of Object.entries(raw)) {
-    const max = Math.max(v, stored[id] ?? 0);
-    merged[id] = max;
-    // 仅持久化有进度的成就，避免写入一堆全零行
-    if (max > 0) upsert.run(id, max, now);
-  }
-  return merged;
-}
-
-/** 等级积分账本快照：累计积分、按「连续未活跃周期」的衰减量、净积分与未活跃天数。 */
-export interface PointsSnapshot {
-  /** 原始累计积分（不衰减）。 */
-  gross: number;
-  /** 因长期未活跃而产生的衰减扣分。 */
-  decay: number;
-  /** 净积分 = gross - decay（等级按此分档），不低于 0。 */
-  net: number;
-  /** 距最近一次积分事件的天数（本地时区），用于解释衰减。 */
-  inactiveDays: number;
-  /** 最近一次积分事件时间戳，无记录时为 0。 */
-  lastActiveAt: number;
-}
-
-/** 每连续未活跃周期（10 天）衰减的固定分值。 */
-const POINT_DECAY_CYCLE_DAYS = 10;
-const POINT_DECAY_PER_CYCLE = 3;
-
-/**
- * 计算等级积分账本快照。
- * 衰减规则：自最近一笔积分事件起，每连续 10 天未产生任何活动，扣 3 分；净积分低于 0 归 0。
- */
-export async function computePoints(): Promise<PointsSnapshot> {
-  try {
-    const cur = getDb();
-    const sumRow = cur.prepare("SELECT COALESCE(SUM(points), 0) AS s FROM pl_points_log").get() as { s: number };
-    const lastRow = cur
-      .prepare("SELECT MAX(createdAt) AS last FROM pl_points_log")
-      .get() as { last: number | null };
-    const gross = sumRow?.s ?? 0;
-    const lastActiveAt = lastRow?.last ?? 0;
-    const inactiveDays =
-      lastActiveAt > 0 ? Math.max(0, Math.floor((Date.now() - lastActiveAt) / (24 * 60 * 60 * 1000))) : 0;
-    const decay = Math.floor(inactiveDays / POINT_DECAY_CYCLE_DAYS) * POINT_DECAY_PER_CYCLE;
-    const net = Math.max(0, gross - decay);
-    return Promise.resolve({ gross, decay, net, inactiveDays, lastActiveAt });
-  } catch (e) {
-    return Promise.reject(e);
-  }
-}
-
-/** 一次统计历史快照。 */
-export interface StatsSnapshot {
-  id: number;
-  stats: WeeklyStats;
-  comment: string;
-  createdAt: number;
-}
-
-/** 写入一条统计历史快照（comment 保留以兼容旧数据，新写入时为空串）。 */
-export async function saveStatsSnapshot(stats: WeeklyStats, comment?: string): Promise<void> {
-  try {
-    const cur = getDb();
-    cur
-      .prepare("INSERT INTO stats_history (stats, comment, createdAt) VALUES (?, ?, ?)")
-      .run(JSON.stringify(stats), comment ?? "", Date.now());
-  } catch (e) {
-    return Promise.reject(e);
-  }
-}
-
-/** 读取最近一条统计历史快照（不存在返回 undefined，解析失败按缺失处理）。 */
-export async function getLastStatsSnapshot(): Promise<StatsSnapshot | undefined> {
-  try {
-    const cur = getDb();
-    const row = cur
-      .prepare("SELECT * FROM stats_history ORDER BY createdAt DESC LIMIT 1")
-      .get() as unknown as
-      | { id: number; stats: string; comment: string | null; createdAt: number }
-      | undefined;
-    if (!row) return Promise.resolve(undefined);
-    let raw: Partial<WeeklyStats>;
-    try {
-      raw = JSON.parse(row.stats) as Partial<WeeklyStats>;
-    } catch {
-      return Promise.resolve(undefined);
-    }
-    // 兼容旧版本快照：旧快照缺少新字段（rangeStart/addedTitles 等），
-    // 直接按「无快照」处理，避免残缺数据引发读取 undefined 报错，也让定时门控能重新生成新快照。
-    if (
-      typeof raw.rangeStart !== "number" ||
-      typeof raw.rangeEnd !== "number" ||
-      !Array.isArray(raw.addedTitles) ||
-      !Array.isArray(raw.topUsed)
-    ) {
-      return Promise.resolve(undefined);
-    }
-    return Promise.resolve({
-      id: row.id,
-      stats: {
-        rangeStart: raw.rangeStart,
-        rangeEnd: raw.rangeEnd,
-        addedCount: raw.addedCount ?? 0,
-        addedTitles: raw.addedTitles,
-        usedPromptCount: raw.usedPromptCount ?? 0,
-        usageCount: raw.usageCount ?? 0,
-        topUsed: raw.topUsed,
-        aiRefinedCount: raw.aiRefinedCount ?? 0,
-      },
-      comment: row.comment ?? "",
-      createdAt: row.createdAt,
-    });
-  } catch (e) {
-    return Promise.reject(e);
-  }
-}
-
-/** 最近一次「有效」统计快照的写入时间（毫秒时间戳；无记录或均为旧格式返回 0）。 */
-export async function getLastSnapshotAt(): Promise<number> {
-  try {
-    const snap = await getLastStatsSnapshot();
-    return Promise.resolve(snap?.createdAt ?? 0);
-  } catch (e) {
-    return Promise.reject(e);
-  }
-}
-
-/**
- * 读取最近 N 条统计历史快照（按时间正序返回，供统计可视化趋势图使用）。
- * 解析失败或旧格式的快照直接跳过，保证返回的数据结构完整可用。
- */
-export async function listStatsSnapshots(limit = 12): Promise<StatsSnapshot[]> {
-  try {
-    const cur = getDb();
-    const rows = cur
-      .prepare("SELECT * FROM stats_history ORDER BY createdAt DESC LIMIT ?")
-      .all(limit) as unknown as Array<{
-      id: number;
-      stats: string;
-      comment: string | null;
-      createdAt: number;
-    }>;
-    const snaps: StatsSnapshot[] = [];
-    for (const row of rows) {
-      let raw: Partial<WeeklyStats>;
-      try {
-        raw = JSON.parse(row.stats) as Partial<WeeklyStats>;
-      } catch {
-        continue;
-      }
-      // 兼容旧版本快照：缺少核心字段视为无效，直接跳过。
-      if (
-        typeof raw.rangeStart !== "number" ||
-        typeof raw.rangeEnd !== "number" ||
-        !Array.isArray(raw.addedTitles) ||
-        !Array.isArray(raw.topUsed)
-      ) {
-        continue;
-      }
-      snaps.push({
-        id: row.id,
-        stats: {
-          rangeStart: raw.rangeStart,
-          rangeEnd: raw.rangeEnd,
-          addedCount: raw.addedCount ?? 0,
-          addedTitles: raw.addedTitles,
-          usedPromptCount: raw.usedPromptCount ?? 0,
-          usageCount: raw.usageCount ?? 0,
-          topUsed: raw.topUsed,
-          aiRefinedCount: raw.aiRefinedCount ?? 0,
-        },
-        comment: row.comment ?? "",
-        createdAt: row.createdAt,
-      });
-    }
-    // 倒序读取后反转，得到时间正序（旧→新），便于图表直接按序绘制。
-    snaps.reverse();
-    return Promise.resolve(snaps);
-  } catch (e) {
-    return Promise.reject(e);
-  }
-}
 /** 重命名标签：更新标签表并把所有提示词中的旧标签替换为新标签（合并去重、去空）。返回受影响条数。 */
 export function renameTag(from: string, to: string): Promise<number> {
   try {
@@ -2346,25 +1311,11 @@ async function readSystemSettingsNamespace(): Promise<Partial<PluginSettings> | 
 }
 
 /**
- * 不落盘设置项：这些开关已从设置界面移除（词库助手下的显隐控制），
+ * 不落盘设置项：该开关已从设置界面移除（词库助手下的显隐控制），
  * 不写入配置文件，读取时一律回退默认值，保持默认态以便后续复用。
- * 注：`rightPanelEnabled` 已在「设置 › 显示与交互」重新提供开关，故**不再**排除，需正常落盘读取。
  */
 const PERSIST_EXCLUDED_KEYS = new Set<keyof PluginSettings>([
   "dataManagementEnabled",
-  "personaEnabled",
-  "injectEnabled",
-  "dashboardEnabled",
-  "levelEnabled",
-  "levelAnnouncementEnabled",
-  "announcementEnabled",
-  // 自动学习设置已从设置界面移除（仅保留 DeepSeek 余额查询），不再写配置文件，读取时回退默认态
-  "autoLearnManualConfirm",
-  "autoLearnTag",
-  "autoLearnMinLength",
-  // AI 智能完善的开关不再在界面上暴露，不写配置文件，读取时回退默认态；
-  // 默认 AI 模型选择（aiProvider/aiModel）已在设置界面提供并持久化
-  "aiEnrichEnabled",
 ]);
 
 /** 剔除不落盘设置项（返回新对象，不修改入参）。 */
@@ -2423,7 +1374,7 @@ export function getSettings(): Promise<PluginSettings> {
 
 /**
  * 读取宿主界面语言偏好（`~/.dsh/settings.yaml` 的 `locale.preference`）。
- * 供 `/prompts` 命令描述等宿主侧文案在启动时按语言选择；读取失败返回空字符串。
+ * 供宿主侧文案（AI 提示词语言等）在启动时按语言选择；读取失败返回空字符串。
  */
 export async function readGlobalLocale(): Promise<string> {
   try {
@@ -2444,127 +1395,8 @@ export function updateSettings(patch: Partial<PluginSettings>): Promise<PluginSe
   });
 }
 
-// ── 数据库开发者模式密码（明文不入库，仅存 SHA-256 摘要） ────────────────
-
-/** 默认开发者模式密码（未设置时回退该密码的摘要进行校验）。 */
-const DEFAULT_DEV_PASSWORD = "prompt";
-
-/** 计算密码的 SHA-256 摘要（hex）。 */
-export function hashDevPassword(plain: string): string {
-  return createHash("sha256").update(String(plain ?? "")).digest("hex");
-}
-
-/** 校验开发者模式密码：与已存摘要比对；未设置时比对默认密码摘要。 */
-export async function verifyDbDevPassword(plain: string): Promise<boolean> {
-  const s = await getSettings();
-  const stored = s.dbDevPasswordHash ?? hashDevPassword(DEFAULT_DEV_PASSWORD);
-  return hashDevPassword(plain) === stored;
-}
-
-// ── 多人格（自定义 SOUL）数据访问 ─────────────────────────────────────────
-
-/** 自定义人格记录（含 SOUL 正文，正文直接存库）。 */
-export interface PersonaRecord {
-  id: string;
-  name: string;
-  enabled: boolean;
-  createdAt: number;
-  updatedAt: number;
-  /** SOUL 正文（自定义人格直接存于本表 body 列）。 */
-  body: string;
-}
-
-/** 读取一行人格记录的辅助函数（codec 内联，避免重复写列映射）。 */
-function personaFromRow(row: {
-  id: string;
-  name: string;
-  enabled: number;
-  createdAt: number;
-  updatedAt: number;
-  body: string;
-}): PersonaRecord {
-  return {
-    id: row.id,
-    name: row.name,
-    enabled: row.enabled === 1,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    body: row.body ?? "",
-  };
-}
-
-/** 列出全部自定义人格（按创建时间升序）。 */
-export function listPersonas(): PersonaRecord[] {
-  try {
-    const rows = getDb()
-      .prepare("SELECT id, name, enabled, createdAt, updatedAt, body FROM personas ORDER BY createdAt ASC")
-      .all() as Array<{ id: string; name: string; enabled: number; createdAt: number; updatedAt: number; body: string }>;
-    return rows.map(personaFromRow);
-  } catch {
-    return [];
-  }
-}
-
-/** 按 id 读取单个人格；不存在返回 undefined。 */
-export function getPersona(id: string): PersonaRecord | undefined {
-  try {
-    const row = getDb()
-      .prepare("SELECT id, name, enabled, createdAt, updatedAt, body FROM personas WHERE id = ?")
-      .get(id) as
-      | { id: string; name: string; enabled: number; createdAt: number; updatedAt: number; body: string }
-      | undefined;
-    return row ? personaFromRow(row) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** 创建人格记录（元信息 + SOUL 正文，一并存库）。 */
-export function createPersona(id: string, name: string, body: string = ""): PersonaRecord {
-  const now = Date.now();
-  const db_ = getDb();
-  db_
-    .prepare("INSERT INTO personas (id, name, enabled, createdAt, updatedAt, body) VALUES (?, ?, 1, ?, ?, ?)")
-    .run(id, name, now, now, body);
-  return { id, name, enabled: true, createdAt: now, updatedAt: now, body };
-}
-
-/** 更新人格（name / enabled / body）；记录不存在返回 false。 */
-export function updatePersonaMeta(
-  id: string,
-  patch: { name?: string; enabled?: boolean; body?: string },
-): boolean {
-  const existing = getPersona(id);
-  if (!existing) return false;
-  const next: PersonaRecord = {
-    ...existing,
-    name: patch.name ?? existing.name,
-    enabled: patch.enabled ?? existing.enabled,
-    body: patch.body ?? existing.body,
-    updatedAt: Date.now(),
-  };
-  getDb()
-    .prepare("UPDATE personas SET name = ?, enabled = ?, body = ?, updatedAt = ? WHERE id = ?")
-    .run(next.name, next.enabled ? 1 : 0, next.body, next.updatedAt, id);
-  return true;
-}
-
-/** 删除人格记录及其（工作区/项目）绑定（SOUL 文件删除由 persona 服务负责）。 */
-export function deletePersona(id: string): boolean {
-  const db_ = getDb();
-  db_.prepare("DELETE FROM personas WHERE id = ?").run(id);
-  db_.prepare("DELETE FROM persona_scope_bindings WHERE personaId = ?").run(id);
-  // 清理所有会话绑定中引用该人格的维度（回到默认人格）。
-  for (const b of listSessionScopeBindings()) {
-    if (b.personaId === id) {
-      setSessionScopeBinding(b.sessionId, null, b.promptIds);
-    }
-  }
-  return true;
-}
-
 // ── 会话级技能（元信息 + 正文）数据访问 ────────────────────────────────────
-// 与多人格一致：元信息（标题/标签/启用等）+ 正文（body）都直接存 SQLite。
+// 元信息（标题/标签/启用等）+ 正文（body）都直接存 SQLite。
 
 /** 会话级技能记录（含正文，正文直接存于本表 body 列）。 */
 export interface SessionPromptRecord {
@@ -2743,79 +1575,6 @@ export function deleteSessionPromptRecord(id: string): boolean {
   return true;
 }
 
-// ── 公告报纸（newspapers 表）数据访问 ──────────────────────────────────────
-
-/** 单期报纸记录（report / news 为 JSON 数组或 null）。 */
-export interface NewspaperRecord {
-  date: string;
-  lang: "zh" | "en";
-  /** 每日日报条目（{headline, body}）。 */
-  report: Array<{ headline: string; body: string }> | null;
-  /** 成就速报条目（{title, summary, url}）。 */
-  news: Array<{ title: string; summary: string; url: string }> | null;
-  /** 速报来源标记（如 achievement）。 */
-  newsSource: string | null;
-}
-
-/** 把某列 JSON 文本解析成数组；空/非法返回 undefined。 */
-function parseJsonArray(text: string | null): unknown[] | undefined {
-  if (!text) return undefined;
-  try {
-    const v = JSON.parse(text) as unknown;
-    return Array.isArray(v) ? v : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** 读取某一期报纸；不存在返回 undefined。 */
-export function getNewspaperRecord(date: string, lang: string): NewspaperRecord | undefined {
-  try {
-    const row = getDb()
-      .prepare("SELECT date, lang, report, news, newsSource FROM newspapers WHERE date = ? AND lang = ?")
-      .get(date, lang) as
-      | { date: string; lang: string; report: string | null; news: string | null; newsSource: string | null }
-      | undefined;
-    if (!row) return undefined;
-    return {
-      date: row.date,
-      lang: row.lang === "en" ? "en" : "zh",
-      report: (parseJsonArray(row.report) as Array<{ headline: string; body: string }> | null) ?? null,
-      news: (parseJsonArray(row.news) as Array<{ title: string; summary: string; url: string }> | null) ?? null,
-      newsSource: row.newsSource,
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-/** 写入某一期报纸（按 date + lang 覆盖）。 */
-export function setNewspaperRecord(issue: NewspaperRecord): void {
-  const db_ = getDb();
-  db_
-    .prepare(
-      "INSERT INTO newspapers (date, lang, report, news, newsSource, createdAt) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(date, lang) DO UPDATE SET report = excluded.report, news = excluded.news, newsSource = excluded.newsSource",
-    )
-    .run(
-      issue.date,
-      issue.lang,
-      issue.report && issue.report.length > 0 ? JSON.stringify(issue.report) : null,
-      issue.news && issue.news.length > 0 ? JSON.stringify(issue.news) : null,
-      issue.newsSource ?? null,
-      Date.now(),
-    );
-}
-
-/** 列出全部已生成过报纸的日期（去重后按时间倒序，最新在前）。 */
-export function listNewspaperDates(): string[] {
-  try {
-    const rows = getDb().prepare("SELECT DISTINCT date FROM newspapers").all() as Array<{ date: string }>;
-    return rows.map((r) => r.date).sort((a, b) => (a < b ? 1 : -1));
-  } catch {
-    return [];
-  }
-}
-
 // ── 全局默认人格 SOUL（meta 表存储）───────────────────────────────────────
 
 /** 默认人格 SOUL 在 meta 表中的键（正文直接存库，不再落盘 character/SOUL.md）。 */
@@ -2831,6 +1590,177 @@ export function setDefaultPersonaSoul(content: string): void {
   setMetaValue(DEFAULT_SOUL_META_KEY, content);
 }
 
+// ── 工作区/项目路径 → 会话级技能 绑定（存库）──────────────────────────────
+
+/** 记录某路径（工作区或其下项目）绑定的会话级技能 id 列表（空数组 → 解除绑定）。 */
+export function setScopePromptBinding(path: string, promptIds: string[]): void {
+  const ids = [...new Set(promptIds.filter(Boolean))];
+  const db_ = getDb();
+  db_
+    .prepare(
+      "INSERT INTO prompt_scope_bindings (path, promptIds, updatedAt) VALUES (?, ?, ?) ON CONFLICT(path) DO UPDATE SET promptIds = excluded.promptIds, updatedAt = excluded.updatedAt",
+    )
+    .run(path, JSON.stringify(ids), Date.now());
+}
+
+/** 解析 prompt_scope_bindings 表里的 promptIds 列（JSON 数组 → 字符串数组）。 */
+function parsePromptIds(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 读取某路径精确绑定的会话级技能 id 列表；无精确记录返回空数组。 */
+export function getScopeBoundPromptIds(path: string): string[] {
+  try {
+    const row = getDb()
+      .prepare("SELECT promptIds FROM prompt_scope_bindings WHERE path = ?")
+      .get(path) as { promptIds: string } | undefined;
+    return row ? parsePromptIds(row.promptIds) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 列出全部路径 → 会话级技能 绑定（仅含非空列表的记录）。 */
+export function listScopePromptBindings(): Array<{ path: string; promptIds: string[] }> {
+  try {
+    const rows = getDb()
+      .prepare("SELECT path, promptIds FROM prompt_scope_bindings")
+      .all() as Array<{ path: string; promptIds: string }>;
+    return rows
+      .map((r) => ({ path: r.path, promptIds: parsePromptIds(r.promptIds) }))
+      .filter((b) => b.promptIds.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+/** 清空某路径的会话级技能绑定。 */
+export function clearScopePromptBinding(path: string): void {
+  try {
+    getDb().prepare("DELETE FROM prompt_scope_bindings WHERE path = ?").run(path);
+  } catch {
+    /* 删除失败静默 */
+  }
+}
+
+/** 清空全部路径（工作区/项目）的会话级技能绑定。 */
+export function clearAllScopePromptBindings(): void {
+  try {
+    getDb().prepare("DELETE FROM prompt_scope_bindings").run();
+  } catch {
+    /* 删除失败静默 */
+  }
+}
+
+// ── 人格读取（仅展示用：技能管理界面显示已绑定人格名称；人格 CRUD 已移除）──
+
+/** 人格记录（元信息 + SOUL 正文）。 */
+export interface PersonaRecord {
+  id: string;
+  name: string;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+  /** SOUL 正文（自定义人格直接存于本表 body 列）。 */
+  body: string;
+}
+
+/** 读取一行人格记录的辅助函数（codec 内联，避免重复写列映射）。 */
+function personaFromRow(row: {
+  id: string;
+  name: string;
+  enabled: number;
+  createdAt: number;
+  updatedAt: number;
+  body: string;
+}): PersonaRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    enabled: row.enabled === 1,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    body: row.body ?? "",
+  };
+}
+
+/** 列出全部自定义人格（按创建时间升序）。 */
+export function listPersonas(): PersonaRecord[] {
+  try {
+    const rows = getDb()
+      .prepare("SELECT id, name, enabled, createdAt, updatedAt, body FROM personas ORDER BY createdAt ASC")
+      .all() as Array<{ id: string; name: string; enabled: number; createdAt: number; updatedAt: number; body: string }>;
+    return rows.map(personaFromRow);
+  } catch {
+    return [];
+  }
+}
+
+/** 按 id 读取单个人格；不存在返回 undefined。 */
+export function getPersona(id: string): PersonaRecord | undefined {
+  try {
+    const row = getDb()
+      .prepare("SELECT id, name, enabled, createdAt, updatedAt, body FROM personas WHERE id = ?")
+      .get(id) as
+      | { id: string; name: string; enabled: number; createdAt: number; updatedAt: number; body: string }
+      | undefined;
+    return row ? personaFromRow(row) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 创建人格记录（元信息 + SOUL 正文，一并存库）。 */
+export function createPersona(id: string, name: string, body: string = ""): PersonaRecord {
+  const now = Date.now();
+  const db_ = getDb();
+  db_
+    .prepare("INSERT INTO personas (id, name, enabled, createdAt, updatedAt, body) VALUES (?, ?, 1, ?, ?, ?)")
+    .run(id, name, now, now, body);
+  return { id, name, enabled: true, createdAt: now, updatedAt: now, body };
+}
+
+/** 更新人格（name / enabled / body）；记录不存在返回 false。 */
+export function updatePersonaMeta(
+  id: string,
+  patch: { name?: string; enabled?: boolean; body?: string },
+): boolean {
+  const existing = getPersona(id);
+  if (!existing) return false;
+  const next: PersonaRecord = {
+    ...existing,
+    name: patch.name ?? existing.name,
+    enabled: patch.enabled ?? existing.enabled,
+    body: patch.body ?? existing.body,
+    updatedAt: Date.now(),
+  };
+  getDb()
+    .prepare("UPDATE personas SET name = ?, enabled = ?, body = ?, updatedAt = ? WHERE id = ?")
+    .run(next.name, next.enabled ? 1 : 0, next.body, next.updatedAt, id);
+  return true;
+}
+
+/** 删除人格记录及其（工作区/项目）绑定（SOUL 文件删除由 persona 服务负责）。 */
+export function deletePersona(id: string): boolean {
+  const db_ = getDb();
+  db_.prepare("DELETE FROM personas WHERE id = ?").run(id);
+  db_.prepare("DELETE FROM persona_scope_bindings WHERE personaId = ?").run(id);
+  // 清理所有会话绑定中引用该人格的维度（回到默认人格）。
+  for (const b of listSessionScopeBindings()) {
+    if (b.personaId === id) {
+      setSessionScopeBinding(b.sessionId, null, b.promptIds);
+    }
+  }
+  return true;
+}
+
+// ── 工作区/项目路径 → 人格 绑定（存库，最深的祖先/相等匹配解析）──────────
+
 /** 记录某路径（工作区或其下项目）当前绑定的人格（personaId 为 'default' 或空表示使用全局默认人格）。 */
 export function setScopePersonaBinding(path: string, personaId: string): void {
   const db_ = getDb();
@@ -2841,7 +1771,7 @@ export function setScopePersonaBinding(path: string, personaId: string): void {
     .run(path, personaId, Date.now());
 }
 
-/** 读取某路径精确绑定的人格 id；无精确记录返回空串（视为默认人格）。 */
+/** 读取某路径精确绑定的人格 id；无绑定返回空串。 */
 export function getScopeBoundPersonaId(path: string): string {
   try {
     const row = getDb()
@@ -2942,73 +1872,6 @@ export function clearSessionScopeBinding(sessionId: string): void {
   }
 }
 
-// ── 工作区/项目路径 → 会话级技能 绑定（与人格绑定同表结构语义，存库）────────
-
-/** 记录某路径（工作区或其下项目）绑定的会话级技能 id 列表（空数组 → 解除绑定）。 */
-export function setScopePromptBinding(path: string, promptIds: string[]): void {
-  const ids = [...new Set(promptIds.filter(Boolean))];
-  const db_ = getDb();
-  db_
-    .prepare(
-      "INSERT INTO prompt_scope_bindings (path, promptIds, updatedAt) VALUES (?, ?, ?) ON CONFLICT(path) DO UPDATE SET promptIds = excluded.promptIds, updatedAt = excluded.updatedAt",
-    )
-    .run(path, JSON.stringify(ids), Date.now());
-}
-
-/** 解析 prompt_scope_bindings 表里的 promptIds 列（JSON 数组 → 字符串数组）。 */
-function parsePromptIds(raw: string): string[] {
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
-/** 读取某路径精确绑定的会话级技能 id 列表；无精确记录返回空数组。 */
-export function getScopeBoundPromptIds(path: string): string[] {
-  try {
-    const row = getDb()
-      .prepare("SELECT promptIds FROM prompt_scope_bindings WHERE path = ?")
-      .get(path) as { promptIds: string } | undefined;
-    return row ? parsePromptIds(row.promptIds) : [];
-  } catch {
-    return [];
-  }
-}
-
-/** 列出全部路径 → 会话级技能 绑定（仅含非空列表的记录）。 */
-export function listScopePromptBindings(): Array<{ path: string; promptIds: string[] }> {
-  try {
-    const rows = getDb()
-      .prepare("SELECT path, promptIds FROM prompt_scope_bindings")
-      .all() as Array<{ path: string; promptIds: string }>;
-    return rows
-      .map((r) => ({ path: r.path, promptIds: parsePromptIds(r.promptIds) }))
-      .filter((b) => b.promptIds.length > 0);
-  } catch {
-    return [];
-  }
-}
-
-/** 清空某路径的会话级技能绑定。 */
-export function clearScopePromptBinding(path: string): void {
-  try {
-    getDb().prepare("DELETE FROM prompt_scope_bindings WHERE path = ?").run(path);
-  } catch {
-    /* 删除失败静默 */
-  }
-}
-
-/** 清空全部路径（工作区/项目）的会话级技能绑定。 */
-export function clearAllScopePromptBindings(): void {
-  try {
-    getDb().prepare("DELETE FROM prompt_scope_bindings").run();
-  } catch {
-    /* 删除失败静默 */
-  }
-}
-
 /** 清空全部会话技能绑定（仅置空各会话的技能维度，保留人格绑定 —— 人格与技能是两个独立模块）。 */
 export function clearAllSessionPromptBindings(): void {
   try {
@@ -3025,273 +1888,6 @@ export function clearAllSessionPersonaBindings(): void {
   } catch {
     /* 更新失败静默 */
   }
-}
-
-// ── 数据库可视化（浏览 + 常规增删改查 prompt.db）────────────────────────
-
-/** 单张表的列定义（来自 PRAGMA table_info）。 */
-export interface DbColumnInfo {
-  name: string;
-  type: string;
-  /** 主键序号；0 表示非主键，>0 为复合主键中的顺序。 */
-  pk: number;
-  /** 是否 NOT NULL（1/0）。 */
-  notnull: number;
-  /** 列默认值原文（可能为 null）。 */
-  dflt: string | null;
-}
-
-/** 单张表的预览信息：表名 + 行数 + 列定义 + 可编辑标识。 */
-export interface DbTableInfo {
-  name: string;
-  /** 表内行数。 */
-  rows: number;
-  /** 列定义（按序号排列）。 */
-  columns: DbColumnInfo[];
-  /** 用于定位行的主键列名（复合主键按次序）；无显式主键且为 rowid 表时回退为 ["rowid"]。 */
-  key: string[];
-  /** 是否可从可视化面板做增删改。false 表示无主键且无 rowid，无法安全定位单行。 */
-  editable: boolean;
-}
-
-/** 列出词库数据库中的全部业务表（跳过 sqlite_* 内部表）。 */
-export function listDbTables(): DbTableInfo[] {
-  const cur = getDb();
-  const names = (
-    cur
-      .prepare(
-        "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-      )
-      .all() as Array<{ name: string; sql: string | null }>
-  ).map((r) => r);
-  const result: DbTableInfo[] = [];
-  for (const { name, sql } of names) {
-    const columns = (
-      cur.prepare(`PRAGMA table_info(${quoteIdent(name)})`).all() as Array<{
-        name: string;
-        type: string;
-        pk: number;
-        notnull: number;
-        dflt_value: string | null;
-      }>
-    ).map((c) => ({
-      name: c.name,
-      type: c.type,
-      pk: c.pk,
-      notnull: c.notnull,
-      dflt: c.dflt_value,
-    }));
-    const { rows } = cur
-      .prepare(`SELECT COUNT(*) AS rows FROM ${quoteIdent(name)}`)
-      .get() as { rows: number };
-    // 主键：显式 pk>0 的列，其次 rowid（非 WITHOUT ROWID 表）
-    const pkCols = columns.filter((c) => c.pk > 0).sort((a, b) => a.pk - b.pk);
-    const withoutRowid = /without\s+rowid/i.test(sql ?? "");
-    const key =
-      pkCols.length > 0
-        ? pkCols.map((c) => c.name)
-        : withoutRowid
-          ? []
-          : ["rowid"];
-    result.push({
-      name,
-      rows,
-      columns,
-      key,
-      editable: key.length > 0,
-    });
-  }
-  return result;
-}
-
-/** 查询某张表的列定义（内部使用）。 */
-function tableColumns(cur: unknown, table: string): DbColumnInfo[] {
-  return (cur as ReturnType<typeof getDb>)
-    .prepare(`PRAGMA table_info(${quoteIdent(table)})`)
-    .all() as unknown as DbColumnInfo[];
-}
-
-/** 引用标识符（列 / 表名），用双引号包裹并转义内部引号。 */
-function quoteIdent(id: string): string {
-  return `"${String(id).replace(/"/g, '""')}"`;
-}
-
-/** 校验表名是否为纯标识符，防止 SQL 注入。 */
-function assertPlainTable(table: string): void {
-  if (typeof table !== "string" || !/^[A-Za-z0-9_]+$/.test(table)) {
-    throw new Error("非法的表名");
-  }
-}
-
-/** 把未知类型的写入值规整为 node:sqlite 接受的输入类型（对象/数组转为 JSON 字符串）。 */
-function toSqlValue(v: unknown): SQLInputValue {
-  if (v === undefined || v === null) return null;
-  if (typeof v === "number" || typeof v === "bigint" || typeof v === "string") return v;
-  if (typeof v === "boolean") return v ? 1 : 0;
-  return JSON.stringify(v);
-}
-
-/** 常规单行写入的通用入参。 */
-export interface DbRowPayload {
-  table: string;
-  /** 主键定位（列名 → 值），用于 update/delete。 */
-  pk?: Array<{ name: string; value: unknown }>;
-  /** 待写入的列值（列名 → 值）。 */
-  record?: Record<string, unknown>;
-}
-
-/** 新增一行；返回受影响行数。 */
-export function insertDbRow(payload: DbRowPayload): number {
-  assertPlainTable(payload.table);
-  const cur = getDb();
-  const valid = new Set(tableColumns(cur, payload.table).map((c) => c.name));
-  const entries = Object.entries(payload.record ?? {}).filter(([k]) =>
-    valid.has(k),
-  );
-  if (entries.length === 0) throw new Error("没有可写入的字段");
-  const cols = entries.map(([k]) => quoteIdent(k)).join(", ");
-  const placeholders = entries.map(() => "?").join(", ");
-  const values = entries.map(([, v]) => toSqlValue(v));
-  cur
-    .prepare(`INSERT INTO ${quoteIdent(payload.table)} (${cols}) VALUES (${placeholders})`)
-    .run(...values);
-  return 1;
-}
-
-/** 更新一行（由主键定位）；返回受影响行数。 */
-export function updateDbRow(payload: DbRowPayload): number {
-  assertPlainTable(payload.table);
-  const pk = payload.pk ?? [];
-  if (pk.length === 0) throw new Error("缺少主键定位，无法更新");
-  const cur = getDb();
-  const valid = new Set(tableColumns(cur, payload.table).map((c) => c.name));
-  const pkNames = new Set(pk.map((k) => k.name));
-  // 仅更新不属于主键的字段
-  const setEntries = Object.entries(payload.record ?? {}).filter(
-    ([k]) => valid.has(k) && !pkNames.has(k),
-  );
-  if (setEntries.length === 0) throw new Error("没有可更新的字段");
-  const setClauses: string[] = [];
-  for (const [k] of setEntries) {
-    setClauses.push(`${quoteIdent(k)} = ?`);
-  }
-  const whereClauses = pk.map(() => "?");
-  const values = [
-    ...setEntries.map(([, v]) => toSqlValue(v)),
-    ...pk.map((k) => toSqlValue(k.value)),
-  ];
-  const res = cur
-    .prepare(
-      `UPDATE ${quoteIdent(payload.table)} SET ${setClauses.join(", ")} WHERE ${whereClauses.join(" AND ")}`,
-    )
-    .run(...values);
-  return Number(res.changes);
-}
-
-/** 删除一行（由主键定位）；返回受影响行数。 */
-export function deleteDbRow(payload: DbRowPayload): number {
-  assertPlainTable(payload.table);
-  const pk = payload.pk ?? [];
-  if (pk.length === 0) throw new Error("缺少主键定位，无法删除");
-  const cur = getDb();
-  let i = 1;
-  const whereClauses = pk.map((k) => `${quoteIdent(k.name)} = ?${i++}`);
-  const values = pk.map((k) => toSqlValue(k.value));
-  const res = cur
-    .prepare(`DELETE FROM ${quoteIdent(payload.table)} WHERE ${whereClauses.join(" AND ")}`)
-    .run(...values);
-  return Number(res.changes);
-}
-
-/** 安全的只读查询结果。 */
-export interface DbQueryResult {
-  /** 返回的行。 */
-  rows: Record<string, unknown>[];
-  /** 列名（按查询结果的列顺序）。 */
-  columns: string[];
-  /** 是否因行数上限被截断。 */
-  truncated: boolean;
-}
-
-/** 单次查询最大返回行数，避免一次性拉取超大表拖垮前端。 */
-const DB_QUERY_ROW_LIMIT = 500;
-
-/**
- * 执行一条 SQL 并返回结果（开发者模式下不限制语句类型，支持读与写）。
- * - 按分号切割逐条执行；
- * - 对未显式加 LIMIT 的 SELECT / WITH 自动追加 `LIMIT ${DB_QUERY_ROW_LIMIT}` 防爆界面；
- * - PRAGMA / EXPLAIN 等无结果集的语句以空数组呈现。
- */
-export function queryDb(rawSql: string): DbQueryResult {
-  const sql = String(rawSql ?? "").trim();
-  if (!sql) throw new Error("SQL 为空");
-  // 按分号切割语句
-  const statements = sql
-    .split(";")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  if (statements.length === 0) throw new Error("SQL 为空");
-  // 对于未带上限的 SELECT / WITH，追加 LIMIT 兜底防爆
-  let bounded = sql;
-  const top = statements[0];
-  if (/^\s*(select|with)\b/i.test(top) && !/\blimit\b/i.test(top.replace(/["'`].*?["'`]/g, ""))) {
-    bounded += ` LIMIT ${DB_QUERY_ROW_LIMIT}`;
-  }
-  const cur = getDb();
-  let rows: Record<string, unknown>[] = [];
-  let truncated = false;
-  for (const stmt of statements) {
-    if (/^\s*(pragma|explain)\b/i.test(stmt)) continue;
-    let data = cur.prepare(stmt).all() as Record<string, unknown>[];
-    if (data.length > DB_QUERY_ROW_LIMIT) {
-      data = data.slice(0, DB_QUERY_ROW_LIMIT);
-      truncated = true;
-    }
-    rows = data;
-  }
-  // PRAGMA 等没有结果集的语句以空数组呈现
-  const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
-  return { rows, columns, truncated };
-}
-
-// ── 每日心情 ────────────────────────────────────────────────────────────────
-
-/** 当日心情键（本地时区 YYYY-MM-DD，跨天自动归零）。 */
-function dailyMoodKey(d = new Date()): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-/** 读取指定日期（缺省今天）的心情记录；无记录返回全 0。 */
-export function getDailyMood(dayKey?: string): { dayKey: string; happy: number; sad: number } {
-  try {
-    const key = dayKey ?? dailyMoodKey();
-    const row = getDb()
-      .prepare("SELECT happy, sad FROM pl_daily_mood WHERE dayKey = ?")
-      .get(key) as { happy: number; sad: number } | undefined;
-    return { dayKey: key, happy: row?.happy ?? 0, sad: row?.sad ?? 0 };
-  } catch {
-    return { dayKey: dayKey ?? dailyMoodKey(), happy: 0, sad: 0 };
-  }
-}
-
-/**
- * 整体覆写某日（缺省今天）的心情计数（幂等，便于前端增量回写）。
- * 成功/失败次数均取非负，避免异常输入拉垮表情判定。
- */
-export function setDailyMood(
-  counts: { happy: number; sad: number },
-  dayKey?: string,
-): { dayKey: string; happy: number; sad: number } {
-  const key = dayKey ?? dailyMoodKey();
-  const happy = Math.max(0, counts.happy);
-  const sad = Math.max(0, counts.sad);
-  getDb()
-    .prepare(
-      `INSERT INTO pl_daily_mood (dayKey, happy, sad, updatedAt) VALUES (?, ?, ?, ?)
-       ON CONFLICT(dayKey) DO UPDATE SET happy = excluded.happy, sad = excluded.sad, updatedAt = excluded.updatedAt`,
-    )
-    .run(key, happy, sad, Date.now());
-  return { dayKey: key, happy, sad };
 }
 
 // ── 提示词版本历史 ──────────────────────────────────────────────────────────
@@ -3328,46 +1924,5 @@ export function snapshotPromptVersion(
       );
   } catch {
     /* 快照失败静默，不影响提示词主流程 */
-  }
-}
-
-/** 列出某提示词的版本历史（旧 → 新）；无记录返回空数组。 */
-export function listPromptVersions(promptId: string): Array<{
-  version: number;
-  title: string;
-  body: string;
-  tags: string[];
-  summary?: string;
-  sourceBody?: string;
-  reason: string;
-  snapshotAt: number;
-}> {
-  try {
-    const rows = getDb()
-      .prepare(
-        "SELECT version, title, body, tags, summary, sourceBody, reason, snapshotAt FROM pl_prompt_versions WHERE promptId = ? ORDER BY version ASC",
-      )
-      .all(promptId) as unknown as Array<{
-      version: number;
-      title: string;
-      body: string;
-      tags: string | null;
-      summary: string | null;
-      sourceBody: string | null;
-      reason: string;
-      snapshotAt: number;
-    }>;
-    return rows.map((r) => ({
-      version: r.version,
-      title: r.title,
-      body: r.body,
-      tags: r.tags ? (JSON.parse(r.tags) as string[]) : [],
-      summary: r.summary ?? undefined,
-      sourceBody: r.sourceBody ?? undefined,
-      reason: r.reason,
-      snapshotAt: r.snapshotAt,
-    }));
-  } catch {
-    return [];
   }
 }

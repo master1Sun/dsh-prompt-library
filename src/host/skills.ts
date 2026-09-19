@@ -23,11 +23,6 @@ import {
   setSkillNameForPrompt,
   updatePrompt,
 } from "./store.js";
-import {
-  createSessionPrompt,
-  getSessionBoundPromptIds,
-  setSessionPromptBindingForSession,
-} from "./session-prompts.js";
 import { dshHome } from "./paths.js";
 import { mdToPlainText } from "../md-text.js";
 
@@ -367,43 +362,6 @@ export async function exportPromptsAsSkills(entries: SkillEntry[], root?: string
   }
 
   return { exported: items.length, items, errors, root: dirRoot };
-}
-
-/**
- * 私有导出：把条目创建为「会话级技能」（元信息 + 正文均入库，自动绑定到指定会话 id），
- * 并自动绑定到指定会话 id（若提供），实现仅该会话注入的私有效果。
- * 不写盘任何文件，返回结构中的 root 为空串（前端据此不展示导出位置）。
- * 返回结构与写盘导出一致（name 存会话级技能的 id，供前端展示定位）。
- */
-export async function exportAsSessionPrompts(
-  entries: SkillEntry[],
-  sessionId: string | null | undefined,
-): Promise<SkillExportResult> {
-  const items: { title: string; name: string }[] = [];
-  const errors: { title: string; reason: string }[] = [];
-
-  for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i]!;
-    const title = entry.title.trim() || "(未命名)";
-    const body = entry.body.trim();
-    if (!body) {
-      errors.push({ title, reason: "正文为空，无法导出技能" });
-      continue;
-    }
-    try {
-      const prompt = createSessionPrompt({ title, body });
-      // 绑定到当前会话：追加 id 并去重（保留既有绑定）
-      if (typeof sessionId === "string" && sessionId) {
-        const next = [...new Set([...getSessionBoundPromptIds(sessionId), prompt.id])];
-        setSessionPromptBindingForSession(sessionId, next);
-      }
-      items.push({ title, name: prompt.id });
-    } catch (e) {
-      errors.push({ title, reason: e instanceof Error ? e.message : String(e) });
-    }
-  }
-
-  return { exported: items.length, items, errors, root: "" };
 }
 
 // ── Harness 技能软控制（~/.dsh/skills 系统技能 + 项目 .dsh/skills 技能）──────

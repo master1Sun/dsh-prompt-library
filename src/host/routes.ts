@@ -4,7 +4,6 @@
  * 一个 `/api/prompt-library` 的 `prefix` 路由分发所有子路径：
  *   GET    /prompts         列表
  *   POST   /prompts         创建
- *   POST   /learn           自动学习
  *   PUT    /prompts/:id     更新
  *   DELETE /prompts/:id     删除
  *
@@ -12,16 +11,14 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { existsSync, statSync } from "node:fs";
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
-import { fileURLToPath } from "node:url";
 import type { WebRoute } from "@deepseek-ai/dsh-host-webserver";
 import type { ApiResponse, PluginSettings, Prompt, PromptInput, PromptPatch } from "../types.js";
-import { clearDeepSeekBalanceCache, commentOnStats, generateDraft, generateIntro, generateSkillDescriptor, isDeepSeekProviderInUse, listAiSelectables, polishPromptBody, polishPromptBodyWithSummary, queryDeepSeekBalance, todayLocalDate } from "./ai.js";
+import { generateDraft, generateIntro, generateSkillDescriptor, listAiSelectables, polishPromptBody, polishPromptBodyWithSummary } from "./ai.js";
 import {
-  exportAsSessionPrompts,
   exportPromptsAsSkills,
   importSkillEntries,
   importSkillsFromDisk,
@@ -33,11 +30,6 @@ import {
   deleteHarnessSkill,
 } from "./skills.js";
 import {
-  autoLearn,
-  computeHeatmap,
-  computeLibraryStats,
-  computePoints,
-  computeStreak,
   createPrompt,
   createTag,
   deletePrompt,
@@ -45,36 +37,24 @@ import {
   deleteTrash,
   emptyTrash,
   exportPrompts,
-  getDailyMood,
   getMetaValue,
   getPersona,
   getSettings,
   importPrompts,
-  insertDbRow,
-  listDbTables,
-  listPromptVersions,
   listPrompts,
-  listStatsSnapshots,
   listTags,
-  queryDb,
-  setDailyMood,
   setMetaValue,
-  updateDbRow,
-  deleteDbRow,
-  verifyDbDevPassword,
   listTrash,
   recordUsage,
-  refinePrompt,
   renameTag,
   restorePrompts,
-  syncAchievementProgress,
   updatePrompt,
   updateSettings,
 } from "./store.js";
 import {
-  clearAllPersonaBindings,
   clearAllSkillBindings,
   clearScopePromptBinding,
+  clearSessionBinding,
   createSessionPrompt,
   deleteSessionPrompt,
   getCurrentSessionScope,
@@ -86,20 +66,10 @@ import {
   resolveSessionPromptBindingIds,
   setScopePromptBinding,
   setSessionActivePrompts,
-  updateSessionPrompt,
-} from "./session-prompts.js";
-import {
-  clearSessionBinding,
   setSessionPersonaBindingForSession,
   setSessionPromptBindingForSession,
+  updateSessionPrompt,
 } from "./session-prompts.js";
-import { checkUpdate, getUpgradeState, getVersionInfo, restartService, startUpgrade } from "./update.js";
-import { fetchPluginMarket } from "./plugin-market.js";
-import { getActivity } from "./activity.js";
-import { buildAssistantStatus, computeAchievementProgress, emitStatusChange } from "./gamification.js";
-import { getAnnouncement } from "./announcement.js";
-import { getIssue, listIssueDates } from "./daily.js";
-import { deleteBackup, listBackups, restoreBackup, runBackup, type BackupFormat } from "./backup.js";
 import {
   bindPersonaToScope,
   createPersonaWithSoul,
@@ -112,8 +82,9 @@ import {
   resolvePersonaForSession,
   updatePersonaWithContent,
 } from "./persona-service.js";
-import { listSessionScopeTree } from "./session-scope.js";
-import { listSessionRecords, getActiveSessionCwd } from "./session-scope.js";
+import { clearAllPersonaBindings } from "./session-prompts.js";
+import { getActiveSessionCwd, listSessionRecords, listSessionScopeTree } from "./session-scope.js";
+import { getVersionInfo } from "./update.js";
 import { downloadDir } from "./paths.js";
 
 const PREFIX = "/api/prompt-library";
@@ -263,8 +234,8 @@ function extractIds(body: unknown): string[] {
 }
 
 /**
- * 解析最近活跃会话的项目路径（agent.session.header.cwd）。
- * 项目级技能导出据此写盘到 <cwd>/.dsh/skills；无活跃会话或会话查询不可用时返回 null。
+ * 解析当前工作目录（会话列表提供器 + 最近活跃会话 scope）。
+ * 项目级技能导出据此写盘到 <cwd>/.dsh/skills；尚未有任何会话时为 null。
  */
 async function resolveCurrentProjectCwd(): Promise<string | null> {
   let records: Array<{ id: string; cwd: string | null }> = [];
@@ -410,24 +381,7 @@ export function makePromptRoutes(): WebRoute[] {
         const body = await readJsonBody(req);
         if (!isInput(body)) return json(res, 400, { ok: false, error: "invalid body: {title, body}" });
         const prompt: Prompt = await createPrompt(body);
-        emitStatusChange(); // 新增提示词会改变积分/成就
         return json(res, 201, { ok: true, data: prompt });
-      }
-
-      // POST /learn — 从草稿正文自动学习（AI 自学习持久化）
-      if (method === "POST" && tail === "/learn") {
-        const raw = await readJsonBody(req);
-        if (typeof raw !== "object" || raw === null || typeof (raw as { body: string }).body !== "string") {
-          return json(res, 400, { ok: false, error: "invalid body: {body: string}" });
-        }
-        const body = raw as { body: string; tag?: string; skipEnrich?: boolean; summary?: string };
-        const text = body.body.trim();
-        if (text.length < 20) {
-          return json(res, 400, { ok: false, error: "body too short" });
-        }
-        const summary = typeof body.summary === "string" ? body.summary.trim() || undefined : undefined;
-        const prompt = await autoLearn(text, body.tag, body.skipEnrich, summary);
-        return json(res, 200, { ok: true, data: prompt });
       }
 
       // PUT /prompts/:id — 更新
@@ -446,45 +400,11 @@ export function makePromptRoutes(): WebRoute[] {
         return json(res, 200, { ok: true, data: { id: promptId } });
       }
 
-      // POST /prompts/:id/refine — 重新触发某条提示词的 AI 完善（查看详情「重新完善」入口）
-      if (method === "POST" && segments[0] === "prompts" && segments[2] === "refine" && segments.length === 3) {
-        const ok = await refinePrompt(segments[1] ?? "");
-        if (ok) emitStatusChange(); // AI 完善会改变积分/成就
-        return json(res, ok ? 200 : 404, { ok, data: { ok } });
-      }
-
       // POST /prompts/:id — 记录使用次数
       if (method === "POST" && promptId) {
         const updated = await recordUsage(promptId);
         if (!updated) return json(res, 404, { ok: false, error: "not found" });
-        emitStatusChange(); // 使用提示词会改变积分/成就
         return json(res, 200, { ok: true, data: updated });
-      }
-
-      // GET /prompts/:id/versions — 查询提示词版本历史（创建/更新/精炼快照）
-      if (method === "GET" && segments[0] === "prompts" && segments[2] === "versions" && segments.length === 3) {
-        const list = listPromptVersions(segments[1] ?? "");
-        return json(res, 200, { ok: true, data: list });
-      }
-
-      // GET /mood — 读取今日心情记录
-      if (method === "GET" && segments[0] === "mood" && segments.length === 1) {
-        return json(res, 200, { ok: true, data: getDailyMood() });
-      }
-
-      // POST /mood — 覆写某日（缺省今天）的心情计数（body: { dayKey?, happy?, sad? }）
-      if (method === "POST" && segments[0] === "mood" && segments.length === 1) {
-        const body = await readJsonBody(req);
-        const obj = (typeof body === "object" && body !== null ? body : {}) as {
-          dayKey?: unknown;
-          happy?: unknown;
-          sad?: unknown;
-        };
-        const happy = typeof obj.happy === "number" ? Math.max(0, obj.happy) : 0;
-        const sad = typeof obj.sad === "number" ? Math.max(0, obj.sad) : 0;
-        const dayKey = typeof obj.dayKey === "string" ? obj.dayKey : undefined;
-        const data = setDailyMood({ happy, sad }, dayKey);
-        return json(res, 200, { ok: true, data });
       }
 
       // GET /meta/:key — 读取插件级元数据
@@ -570,7 +490,6 @@ export function makePromptRoutes(): WebRoute[] {
       if (method === "POST" && segments[0] === "import" && segments.length === 1) {
         const body = await readJsonBody(req);
         const result = await importPrompts(body);
-        emitStatusChange(); // 导入提示词会改变积分/成就
         return json(res, 200, { ok: true, data: result });
       }
 
@@ -722,8 +641,7 @@ export function makePromptRoutes(): WebRoute[] {
       // body.scope 控制导出范围：
       //   global（缺省）→ 写盘到 ~/.dsh/skills/<name>/SKILL.md（通用技能）；
       //   project → 写盘到 <项目路径>/.dsh/skills/<name>/SKILL.md（项目技能）；
-      //     body.rootPath 为用户手动填写的项目路径（未自动解析到当前项目时由前端传入）；
-      //   private → 创建为会话级技能并绑定当前会话（私有技能，仅本会话注入）。
+      //     body.rootPath 为用户手动填写的项目路径（未自动解析到当前项目时由前端传入）。
       if (method === "POST" && tail === "/skills/export/entries") {
         const raw = await readJsonBody(req);
         const list =
@@ -739,33 +657,25 @@ export function makePromptRoutes(): WebRoute[] {
         const scope =
           typeof raw === "object" && raw !== null && (raw as { scope?: unknown }).scope === "project"
             ? "project"
-            : typeof raw === "object" && raw !== null && (raw as { scope?: unknown }).scope === "private"
-              ? "private"
-              : "global";
-        let result;
-        if (scope === "private") {
-          // 私有：转会话级技能入库并绑定最近活跃会话
-          result = await exportAsSessionPrompts(entries, getCurrentSessionScope());
-        } else {
-          // project 作用域：优先用用户手动填写的导出路径 rootPath（项目路径），
-          // 否则自动解析当前项目路径；技能写盘为 <项目路径>/<name>/SKILL.md
-          const manualRoot =
-            typeof raw === "object" &&
-            raw !== null &&
-            typeof (raw as { rootPath?: unknown }).rootPath === "string"
-              ? (raw as { rootPath: string }).rootPath.trim()
-              : "";
-          const projectRoot = scope === "project" ? manualRoot || (await resolveCurrentProjectCwd()) : null;
-          if (scope === "project" && !projectRoot) {
-            return json(res, 400, {
-              ok: false,
-              error: "未指定导出路径，且无法确定当前项目路径，请填写项目路径后重试",
-            });
-          }
-          // project 作用域：写盘到 <项目>/.dsh/skills/<name>/SKILL.md（项目级技能根目录）
-          const exportRoot = scope === "project" ? join(projectRoot!, ".dsh", "skills") : undefined;
-          result = await exportPromptsAsSkills(entries, exportRoot);
+            : "global";
+        // project 作用域：优先用用户手动填写的导出路径 rootPath（项目路径），
+        // 否则自动解析当前项目路径；技能写盘为 <项目路径>/<name>/SKILL.md
+        const manualRoot =
+          typeof raw === "object" &&
+          raw !== null &&
+          typeof (raw as { rootPath?: unknown }).rootPath === "string"
+            ? (raw as { rootPath: string }).rootPath.trim()
+            : "";
+        const projectRoot = scope === "project" ? manualRoot || (await resolveCurrentProjectCwd()) : null;
+        if (scope === "project" && !projectRoot) {
+          return json(res, 400, {
+            ok: false,
+            error: "未指定导出路径，且无法确定当前项目路径，请填写项目路径后重试",
+          });
         }
+        // project 作用域：写盘到 <项目>/.dsh/skills/<name>/SKILL.md（项目级技能根目录）
+        const exportRoot = scope === "project" ? join(projectRoot!, ".dsh", "skills") : undefined;
+        const result = await exportPromptsAsSkills(entries, exportRoot);
         return json(res, 200, { ok: true, data: result });
       }
 
@@ -906,29 +816,6 @@ export function makePromptRoutes(): WebRoute[] {
         return json(res, 200, { ok: true, data: { lines } });
       }
 
-      // POST /ai/suggest — 依据词库当前统计生成「AI 建议」点评（公告看板 AI 建议卡片；
-      // 失败时返回空串，前端显示 AI 不可用提示）
-      if (method === "POST" && tail === "/ai/suggest") {
-        const raw = await readJsonBody(req);
-        const lang = (raw as { lang?: string })?.lang === "en" ? "en" : "zh";
-        const settings = await getSettings();
-        const stats = await computeLibraryStats().catch(() => undefined);
-        if (!stats) return json(res, 503, { ok: false, error: "统计不可用" });
-        const lines: string[] = [
-          `词库共 ${stats.total} 条提示词，累计使用 ${stats.totalUsage} 次，使用率 ${stats.total ? Math.round((stats.usedCount / stats.total) * 100) : 0}%；`,
-          `近 7 天使用 ${stats.usedIn7Days} 条、新增 ${stats.addedIn7Days} 条、AI 完善 ${stats.aiRefinedIn7} 条；近 30 天使用 ${stats.usedIn30Days} 条、新增 ${stats.addedIn30Days} 条。`,
-        ];
-        if (stats.topUsed.length) {
-          lines.push(`最常用：${stats.topUsed.slice(0, 3).map((p) => `${p.title}（${p.usageCount}次）`).join("、")}。`);
-        }
-        if (stats.tagStats.length) {
-          lines.push(`标签分布：${stats.tagStats.slice(0, 5).map((t) => `${t.name}(${t.count})`).join("、")}。`);
-        }
-        if (stats.trashCount) lines.push(`回收站有 ${stats.trashCount} 条待清理。`);
-        const suggestion = await commentOnStats(lines.join("\n"), settings, lang).catch(() => "");
-        return json(res, 200, { ok: true, data: { suggestion } });
-      }
-
       // POST /ai/draft — 依据「标题 + 已有内容」用 AI 生成技能 / 人格正文草稿
       // （人格管理 / 技能管理编辑区「AI 生成」按钮：只返回文本，不落盘、不写回）
       if (method === "POST" && tail === "/ai/draft") {
@@ -942,7 +829,7 @@ export function makePromptRoutes(): WebRoute[] {
           input?: unknown;
           lang?: unknown;
         };
-        if ((kind !== "soul" && kind !== "skill") || typeof title !== "string" || !title.trim()) {
+        if ((kind !== "skill" && kind !== "soul") || typeof title !== "string" || !title.trim()) {
           return json(res, 400, { ok: false, error: "invalid body: {kind: 'soul'|'skill', title: string}" });
         }
         const settings = await getSettings();
@@ -965,32 +852,9 @@ export function makePromptRoutes(): WebRoute[] {
         return json(res, 200, { ok: true, data: settings });
       }
 
-      // GET /update — 检查插件是否有新版本（前端手动检查：强制刷新，绕过 24h 缓存并落日志）
-      if (method === "GET" && tail === "/update") {
-        const info = await checkUpdate(true);
-        return json(res, 200, { ok: true, data: info });
-      }
-
-      // POST /update/apply — 点击气泡「更新」按钮后启动后台升级插件到最新版（实时进度见 /update/progress）
-      if (method === "POST" && tail === "/update/apply") {
-        const result = startUpgrade();
-        return json(res, 200, { ok: result.ok, data: result });
-      }
-
-      // GET /update/progress — 手动升级实时进度（客户端轮询以驱动进度条）
-      if (method === "GET" && tail === "/update/progress") {
-        return json(res, 200, { ok: true, data: getUpgradeState() });
-      }
-
       // GET /version — 服务端/客户端版本比对信息（运行版本 + 磁盘已安装版本）
       if (method === "GET" && tail === "/version") {
         return json(res, 200, { ok: true, data: getVersionInfo() });
-      }
-
-      // POST /restart — 重启本地 dsh web 服务（重启后当前连接会短暂断开）
-      if (method === "POST" && tail === "/restart") {
-        const result = await restartService();
-        return json(res, 200, { ok: result.ok, data: result });
       }
 
       // PUT /settings — 更新设置
@@ -999,271 +863,11 @@ export function makePromptRoutes(): WebRoute[] {
         if (typeof raw !== "object" || raw === null) {
           return json(res, 400, { ok: false, error: "invalid body" });
         }
-        // 修改 DeepSeek API Key 时清空 host 侧余额缓存，让小助手下一次查询立即返回真实余额
-        const prev = await getSettings();
         const settings = await updateSettings(raw as Partial<PluginSettings>);
-        const patch = raw as Partial<PluginSettings>;
-        if (typeof patch.deepseekApiKey === "string" && patch.deepseekApiKey !== prev.deepseekApiKey) {
-          clearDeepSeekBalanceCache();
-        }
         return json(res, 200, { ok: true, data: settings });
       }
 
-      // GET /activity — 词库助手活动状态机快照（idle/waiting/thinking/tool/review/done/failed），
-      // 驱动助手动画；支持 lang 查询参数，host 按语言返回匹配主题+阶段的文案
-      if (method === "GET" && tail === "/activity") {
-        let lang = "zh";
-        try {
-          const raw = req.url ?? "";
-          const q = raw.includes("?") ? raw.slice(raw.indexOf("?") + 1) : "";
-          const lv = new URLSearchParams(q).get("lang");
-          if (lv) lang = lv;
-        } catch {
-          /* 解析失败用默认 zh */
-        }
-        const langNorm = lang.toLowerCase().startsWith("en") ? "en" : "zh";
-        const data = getActivity(langNorm);
-        return json(res, 200, { ok: true, data });
-      }
-
-      // 注：原 `/assistant/stream` 的长连接已并入插件唯一的那条 WS
-      //（/api/prompt-library/events，见 host/events.ts + host/assistant-stream.ts），
-      // 这里不再处理该子路径。
-
-      // GET /assistant/status — 词库助手游戏化快照：等级 + 成就 + 时间/节日彩蛋，
-      // 驱动助手等级徽章、成就解锁气泡与应景彩蛋；支持 lang 查询参数
-      if (method === "GET" && tail === "/assistant/status") {
-        let lang = "zh";
-        try {
-          const raw = req.url ?? "";
-          const q = raw.includes("?") ? raw.slice(raw.indexOf("?") + 1) : "";
-          const lv = new URLSearchParams(q).get("lang");
-          if (lv) lang = lv;
-        } catch {
-          /* 解析失败用默认 zh */
-        }
-        const [stats, streak, points] = await Promise.all([
-          computeLibraryStats().catch(() => undefined),
-          computeStreak().catch(() => 0),
-          computePoints().catch(() => ({
-            gross: 0,
-            decay: 0,
-            net: 0,
-            inactiveDays: 0,
-            lastActiveAt: 0,
-          })),
-        ]);
-        // 成就进度只增不减：实时进度与持久化最大进度合并后回写，词库数据回退也不影响已达成进度
-        const progress = syncAchievementProgress(computeAchievementProgress(stats, streak));
-        const data = buildAssistantStatus(stats, streak, lang.toLowerCase().startsWith("en") ? "en" : "zh", points, progress);
-        return json(res, 200, { ok: true, data });
-      }
-
-      // GET /deepseek/balance — 判断当前是否在使用 DeepSeek API，并在配置了 DeepSeek API Key 时
-      // 实时查询官方账户余额。未配置 Key 或查询失败时 balance 为 null（角标显示占位）。
-      if (method === "GET" && tail === "/deepseek/balance") {
-        const settings = await getSettings();
-        const isDeepSeek = isDeepSeekProviderInUse(settings);
-        let balance = null;
-        if (settings.deepseekApiKey) {
-          balance = await queryDeepSeekBalance(settings.deepseekApiKey);
-        }
-        return json(res, 200, { ok: true, data: { isDeepSeek, balance } });
-      }
-
-      // GET /announcement — 公告通告（词库助手右键菜单「公告」弹窗读取；本地多语言，支持 lang 查询参数）
-      if (method === "GET" && tail === "/announcement") {
-        let lang = "zh";
-        try {
-          const raw = req.url ?? "";
-          const q = raw.includes("?") ? raw.slice(raw.indexOf("?") + 1) : "";
-          const params = new URLSearchParams(q);
-          const lv = params.get("lang");
-          if (lv) lang = lv;
-        } catch {
-          /* 解析失败忽略，默认 zh */
-        }
-        const data = getAnnouncement(lang);
-        return json(res, 200, { ok: true, data });
-      }
-
-      // GET /announcement/daily — 公告报纸「今日/历史」动态。
-      // 每日日报由 AI 依据当日词库统计生成（中英各一版）；成就速报为本地成就进度。
-      // ?date=YYYY-MM-DD 指定某一期；缺省取今天。每期（中英双语）存入数据库 newspapers 表，支持历史翻页。
-      if (method === "GET" && tail === "/announcement/daily") {
-        let lang = "zh";
-        let date: string | undefined;
-        try {
-          const raw = req.url ?? "";
-          const q = raw.includes("?") ? raw.slice(raw.indexOf("?") + 1) : "";
-          const params = new URLSearchParams(q);
-          const lv = params.get("lang");
-          if (lv) lang = lv;
-          const dv = params.get("date");
-          if (dv && /^\d{4}-\d{2}-\d{2}$/.test(dv)) date = dv;
-        } catch {
-          /* 解析失败忽略，默认 zh / 今天 */
-        }
-        const settings = await getSettings();
-        const issue = await getIssue(date ?? todayLocalDate(), lang, settings);
-        const availableDates = listIssueDates();
-        return json(res, 200, {
-          ok: true,
-          data: {
-            ...issue,
-            availableDates,
-            isToday: issue.date === todayLocalDate(),
-          },
-        });
-      }
-
-      // GET /stats — 词库统计（供统计可视化面板展示）
-      if (method === "GET" && tail === "/stats") {
-        const [stats, snapshots, heatmap] = await Promise.all([
-          computeLibraryStats(),
-          listStatsSnapshots(12),
-          computeHeatmap(),
-        ]);
-        return json(res, 200, { ok: true, data: { stats, snapshots, heatmap } });
-      }
-
-      // GET /backups — 列出自动备份目录中的备份文件（按时间倒序）
-      if (method === "GET" && tail === "/backups") {
-        const data = await listBackups();
-        return json(res, 200, { ok: true, data });
-      }
-
-      // POST /backups/run — 立即执行一次备份（body.format 可选 db/json，按当前保留份数清理最旧的）
-      if (method === "POST" && tail === "/backups/run") {
-        const settings = await getSettings();
-        const raw = await readJsonBody(req);
-        const f =
-          typeof raw === "object" &&
-          raw !== null &&
-          ((raw as { format?: unknown }).format === "db" ||
-            (raw as { format?: unknown }).format === "json")
-            ? (raw as { format: BackupFormat }).format
-            : "db";
-        const data = await runBackup(settings.backupRetention, f);
-        return json(res, 200, { ok: true, data });
-      }
-
-      // POST /backups/restore — 从指定备份文件恢复词库（db 覆盖主库重开连接；json 清空后重建）
-      if (method === "POST" && tail === "/backups/restore") {
-        const raw = await readJsonBody(req);
-        const name =
-          typeof raw === "object" &&
-          raw !== null &&
-          typeof (raw as { name?: unknown }).name === "string"
-            ? (raw as { name: string }).name
-            : "";
-        if (!name) return json(res, 400, { ok: false, error: "invalid body: {name}" });
-        try {
-          const data = await restoreBackup(name);
-          return json(res, 200, { ok: true, data });
-        } catch (err) {
-          // 文件名非法 / 备份文件不存在 / json 解析失败等，返回具体原因供界面提示
-          return json(res, 400, {
-            ok: false,
-            error: err instanceof Error ? err.message : "restore failed",
-          });
-        }
-      }
-
-      // POST /backups/delete — 删除指定的备份文件（删除后不可恢复）
-      if (method === "POST" && tail === "/backups/delete") {
-        const raw = await readJsonBody(req);
-        const name =
-          typeof raw === "object" &&
-          raw !== null &&
-          typeof (raw as { name?: unknown }).name === "string"
-            ? (raw as { name: string }).name
-            : "";
-        if (!name) return json(res, 400, { ok: false, error: "invalid body: {name}" });
-        try {
-          await deleteBackup(name);
-          return json(res, 200, { ok: true, data: { deleted: true } });
-        } catch (err) {
-          // 文件名非法 / 删除失败等，返回具体原因供界面提示
-          return json(res, 400, {
-            ok: false,
-            error: err instanceof Error ? err.message : "delete failed",
-          });
-        }
-      }
-
-      // ── 数据库预览（只读浏览 prompt.db）──────────────────────────────────
-
-      // GET /db/tables — 列出词库数据库全部业务表（含列定义与行数）
-      if (method === "GET" && tail === "/db/tables") {
-        const data = listDbTables();
-        return json(res, 200, { ok: true, data });
-      }
-
-      // POST /db/query — 执行一条只读查询（仅允许 SELECT / WITH / PRAGMA / EXPLAIN）
-      if (method === "POST" && tail === "/db/query") {
-        const raw = await readJsonBody(req);
-        const sql =
-          typeof raw === "object" && raw !== null && typeof (raw as { sql?: unknown }).sql === "string"
-            ? (raw as { sql: string }).sql
-            : "";
-        if (!sql) return json(res, 400, { ok: false, error: "invalid body: {sql}" });
-        try {
-          const data = queryDb(sql);
-          return json(res, 200, { ok: true, data });
-        } catch (err) {
-          // SQL 非法 / 非只读语句被拒绝等，返回具体原因供界面提示
-          return json(res, 400, {
-            ok: false,
-            error: err instanceof Error ? err.message : "query failed",
-          });
-        }
-      }
-
-      // POST /db/verify-password — 校验数据库中开发者模式密码（明文不入库，按摘要比对）
-      if (method === "POST" && tail === "/db/verify-password") {
-        const raw = await readJsonBody(req);
-        const pw =
-          typeof raw === "object" && raw !== null && typeof (raw as { password?: unknown }).password === "string"
-            ? (raw as { password: string }).password
-            : "";
-        if (!pw) return json(res, 400, { ok: false, error: "invalid body: {password}" });
-        const ok = await verifyDbDevPassword(pw);
-        return json(res, 200, { ok: true, data: { ok } });
-      }
-
-      // POST /db/insert — 向指定表新增一行（可视化「增」）
-      // POST /db/update — 按主键更新一行（可视化「改」）
-      // POST /db/delete — 按主键删除一行（可视化「删」）
-      if (method === "POST" && ["/db/insert", "/db/update", "/db/delete"].includes(tail)) {
-        const raw = await readJsonBody(req);
-        const body =
-          typeof raw === "object" && raw !== null
-            ? (raw as { table?: string; pk?: Array<{ name: string; value: unknown }>; record?: Record<string, unknown> })
-            : {};
-        if (typeof body.table !== "string") {
-          return json(res, 400, { ok: false, error: "invalid body: need {table}" });
-        }
-        // 仅允许新增/编辑/删除自身列的数据（由 store 端校验表名与列名的合法性）
-        try {
-          let changes = 0;
-          if (tail === "/db/insert") {
-            changes = insertDbRow({ table: body.table, record: body.record ?? {} });
-          } else if (tail === "/db/update") {
-            changes = updateDbRow({ table: body.table, pk: body.pk ?? [], record: body.record ?? {} });
-          } else {
-            changes = deleteDbRow({ table: body.table, pk: body.pk ?? [] });
-          }
-          return json(res, 200, { ok: true, data: { changes } });
-        } catch (err) {
-          return json(res, 400, {
-            ok: false,
-            error: err instanceof Error ? err.message : "write failed",
-          });
-        }
-      }
-
-      // ── 多人格（自定义 SOUL，按工作区/项目切换） ─────────────────────────
+      // ── 多人格（自定义 SOUL，按工作区/项目/会话切换）──────────────────────
 
       // GET /personas — 列出全部人格（含内置默认人格，排最前）
       if (method === "GET" && segments[0] === "personas" && segments.length === 1) {
@@ -1436,7 +1040,7 @@ export function makePromptRoutes(): WebRoute[] {
         return json(res, 200, { ok: true, data: { scope: getCurrentSessionScope() } });
       }
 
-      // GET /session-prompts/diag?sessid= — 会话解析诊断（排查「设了人格/技能却没按设置生效」用）。
+      // GET /session-prompts/diag?sessid= — 会话解析诊断（排查「设了技能却没按设置生效」用）。
       // 复现组装端同一套解析逻辑，展示该会话当前会命中哪一层（会话绑定/工作区/项目/默认）：
       // 后端可从 registerSessionListProvider 缓存拿到每个会话的 header.cwd，无需注入宿主的 sessionQuery。
       if (method === "GET" && segments[0] === "session-prompts" && segments[1] === "diag" && segments.length === 2) {
@@ -1446,16 +1050,11 @@ export function makePromptRoutes(): WebRoute[] {
         const rec = records.find((r) => r.id === sessid);
         // 优先用组装端记录的运行时 cwd（与解析同一来源），避免依赖 sessionQuery 未注入导致误判「无 cwd」
         const cwd = getActiveSessionCwd(sessid) || rec?.cwd || "";
-        // 人格：会话绑定 → 工作区/项目路径（最深祖先）→ 默认
+        // 人格（只读展示）：会话绑定 → 工作区/项目路径（最深祖先）→ 默认
         const sessionPersona = sessid ? getPersonaForSession(sessid) : "";
         const pathPersona = resolvePersonaForPath(cwd || null);
         const personaId = resolvePersonaForSession(sessid || null, cwd || null);
-        const personaSource =
-          sessionPersona && getPersona(personaId ?? "")?.name
-            ? "session"
-            : pathPersona
-              ? "path"
-              : "default";
+        const personaSource = sessionPersona ? "session" : pathPersona ? "path" : "default";
         const personaName =
           (personaId && getPersona(personaId)?.name) ||
           (personaSource === "default" ? "默认人格（default）" : "");
@@ -1521,7 +1120,7 @@ export function makePromptRoutes(): WebRoute[] {
         return json(res, 200, { ok: true, data: { promptIds } });
       }
 
-      // PUT /session-prompts/session/persona {sessionId, personaId} — 设置某会话绑定的人格（默认/空 → 回落）
+      // PUT /session-prompts/session/persona {sessionId, personaId} — 设置某会话持久绑定的人格
       if (method === "PUT" && segments[0] === "session-prompts" && segments[1] === "session" && segments[2] === "persona") {
         const raw = await readJsonBody(req);
         const sessionId =
@@ -1559,62 +1158,6 @@ export function makePromptRoutes(): WebRoute[] {
         if (!sessionId) return json(res, 400, { ok: false, error: "invalid query: sessionId" });
         clearSessionBinding(sessionId);
         return json(res, 200, { ok: true, data: { cleared: true } });
-      }
-
-      // GET /assets/whale — 返回词库助手「鲸鱼款」助手的雪碧图（image/webp 字节），
-      // 素材随插件构建产物随包分发（lib/assets/whale-spritesheet.webp）。
-      if (method === "GET" && segments[0] === "assets" && segments[1] === "whale" && segments.length === 2) {
-        try {
-          const fileUrl = new URL("./assets/whale-spritesheet.webp", import.meta.url);
-          const buf = await readFile(fileURLToPath(fileUrl));
-          res.writeHead(200, {
-            "content-type": "image/webp",
-            "content-length": String(buf.byteLength),
-            "cache-control": "public, max-age=604800",
-          });
-          res.end(buf);
-          return;
-        } catch (err) {
-          return json(res, 404, {
-            ok: false,
-            error: err instanceof Error ? err.message : "asset not found",
-          });
-        }
-      }
-
-      // GET /assets/whale-webm/:name.webm — 词库助手「鲸鱼款·动效」的 webm 动画（随插件自带，不依赖 dsh-pet）。
-      // 素材随插件构建产物随包分发（lib/assets/whale-webm/*.webm），WhaleStage 用 base 路由 + 编码名 + ".webm" 拼接。
-      if (method === "GET" && segments[0] === "assets" && segments[1] === "whale-webm" && segments.length === 3 && (segments[2] ?? "").endsWith(".webm")) {
-        try {
-          const name = decodeURIComponent(segments[2] ?? "");
-          const fileUrl = new URL("./assets/whale-webm/" + name, import.meta.url);
-          const buf = await readFile(fileURLToPath(fileUrl));
-          res.writeHead(200, {
-            "content-type": "video/webm",
-            "content-length": String(buf.byteLength),
-            "cache-control": "public, max-age=604800",
-          });
-          res.end(buf);
-          return;
-        } catch (err) {
-          return json(res, 404, {
-            ok: false,
-            error: err instanceof Error ? err.message : "asset not found",
-          });
-        }
-      }
-
-      // GET /plugins/prompt-library — 检测 dsh-prompt-library 是否已安装（当前宿主即该插件，恒为已安装）。
-      if (method === "GET" && segments[0] === "plugins" && segments[1] === "prompt-library" && segments.length === 2) {
-        return json(res, 200, { ok: true, data: { installed: true } });
-      }
-
-      // GET /plugin-market — 插件市场热门榜单（dsh-plugin.org，TTL 缓存；
-      // ?force=1 跳过 TTL 强制实时抓取）
-      if (method === "GET" && tail === "/plugin-market") {
-        const q = new URLSearchParams((req.url ?? "").split("?", 2)[1] ?? "");
-        const market = await fetchPluginMarket(q.has("force"));
-        return json(res, 200, { ok: true, data: market });
       }
 
       return json(res, 404, { ok: false, error: `no route ${method} ${tail}` });

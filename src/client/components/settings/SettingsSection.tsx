@@ -2,13 +2,13 @@
  * 词库设置面板 — 注册到 harness 的 settings.section 插槽。
  *
  * 在 DSH 设置界面中显示插件的所有配置项：
- * - 自动学习开关 + 标签/最小长度 + AI 智能完善（含 Provider/模型）
+ * - AI 默认模型（Provider / 模型选择）
  * - 面板宽度/高度自定义
- * - 右侧侧边栏模式开关
+ * - 词库菜单按钮、聊天框词库/AI 优化按钮显隐与仅图标
  * - # 键触发词库选择开关
- * - 鼠标移入显示详情开关
+ * - 上下文推荐、选中添加提示词开关
  * - 提示词最大存储数量
- * - 底部署名
+ * - 版本信息与更新入口
  *
  * 修改后立即生效，无需保存按钮。
  */
@@ -23,21 +23,13 @@ import {
 import type { PluginSettings } from "../../../types.js";
 import { DEFAULT_SETTINGS } from "../../../types.js";
 import {
-  applyUpdate,
   getAiSelectables,
   getSettings,
-  getUpdate,
-  getUpdateProgress,
   getVersion,
   updateSettings as apiUpdateSettings,
   type ClientAiSelectable,
-  type UpdateInfo,
-  type UpdateProgress,
 } from "../../utils/api.js";
-import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
-import { plBtn } from "../../utils/button-style.js";
 import { type PLTranslate, usePLT } from "../../utils/i18n.js";
-import { BackupModule } from "./BackupModule.js";
 
 const MONO =
   '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "SimHei", "黑体", sans-serif';
@@ -287,76 +279,6 @@ function NumberRow({
   );
 }
 
-/** 文本输入行组件。 */
-function TextRow({
-  label,
-  value,
-  placeholder,
-  desc,
-  onChange,
-  disabled,
-  type = "text",
-}: {
-  label: string;
-  value: string;
-  placeholder?: string;
-  desc?: string;
-  onChange: (v: string) => void;
-  disabled?: boolean;
-  /** 输入框类型：敏感字段（如 API Key）用 password。 */
-  type?: "text" | "password";
-}): ReactNode {
-  const dim = disabled ? 0.45 : 1;
-  return (
-    <div style={{ padding: "8px 0", opacity: dim }}>
-      <label
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          gap: 12,
-          cursor: disabled ? "not-allowed" : "default",
-        }}
-      >
-        <span style={{ fontSize: 13 }}>{label}</span>
-        <input
-          type={type}
-          value={value}
-          placeholder={placeholder}
-          disabled={disabled}
-          onChange={(e) => {
-            if (!disabled) onChange(e.target.value);
-          }}
-          style={{
-            width: 120,
-            padding: "4px 6px",
-            color: TONE.text,
-            background: TONE.row,
-            border: `1px solid ${TONE.border}`,
-            borderRadius: 5,
-            fontFamily: MONO,
-            fontSize: 12,
-            outline: "none",
-            cursor: disabled ? "not-allowed" : "text",
-          }}
-        />
-      </label>
-      {desc && (
-        <div
-          style={{
-            fontSize: 11,
-            color: TONE.quiet,
-            marginTop: 4,
-            lineHeight: 1.5,
-          }}
-        >
-          {desc}
-        </div>
-      )}
-    </div>
-  );
-}
-
 /** 下拉选择行组件（选项 value 与显示名可为不同值）。 */
 function SelectRow({
   label,
@@ -436,31 +358,15 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState<PluginSettings>(DEFAULT_SETTINGS);
   // 分类模块手风琴折叠状态（默认折叠，与「词库管理」保持一致）
-  const [openDeepseek, setOpenDeepseek] = useState(false);
   const [openAiModel, setOpenAiModel] = useState(false);
   const [openPanel, setOpenPanel] = useState(false);
   const [openDisplay, setOpenDisplay] = useState(false);
-  const [openUpdate, setOpenUpdate] = useState(false);
+  const [openAbout, setOpenAbout] = useState(false);
   // 系统中可用的 AI provider 及模型列表（来自 harness LLM 服务，设置界面下拉选择用）
   const [aiSelectables, setAiSelectables] = useState<ClientAiSelectable[]>([]);
-  // 更新提醒状态：updateInfo 为 null 表示尚未检查/检查失败
-  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
-  // 当前已安装版本号（从 /version 轻量读取，用于「更新提醒」标题后展示，如 v0.9.5）
+  // 当前已安装版本号（从 /version 轻量读取，用于「关于」信息行展示，如 v0.9.5）
   const [installedVer, setInstalledVer] = useState("");
-  const [checking, setChecking] = useState(false);
-  const [updating, setUpdating] = useState(false);
-  const [updateMsg, setUpdateMsg] = useState<{
-    ok: boolean;
-    text: string;
-  } | null>(null);
-  // 手动升级实时进度（驱动进度条）与升级完成后的「需重启服务」标记
-  const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(
-    null,
-  );
-  const [needsRestart, setNeedsRestart] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // 记录已保存的 DeepSeek API Key：保存成功后若发生变化，再通知小助手刷新余额
-  const lastDeepseekKeyRef = useRef<string>("");
 
   useEffect(() => {
     getSettings()
@@ -480,7 +386,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
       });
   }, []);
 
-  // 拉取当前已安装版本号，供「更新提醒」标题后展示（轻量本地接口，不触发网络检查）
+  // 拉取当前已安装版本号，供「关于」信息行展示（轻量本地接口）
   useEffect(() => {
     getVersion()
       .then((v) => setInstalledVer(v.installed || ""))
@@ -499,16 +405,6 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           window.dispatchEvent(
             new CustomEvent("pl:settings-changed", { detail: next }),
           );
-          // 保存成功后若 DeepSeek API Key 发生变化（含清空），通知小助手立即刷新余额，
-          // 避免残留旧 Key 查询到的余额角标
-          if (next.deepseekApiKey !== lastDeepseekKeyRef.current) {
-            lastDeepseekKeyRef.current = next.deepseekApiKey;
-            window.dispatchEvent(
-              new CustomEvent("pl:deepseek-balance-refresh", {
-                detail: next.deepseekApiKey,
-              }),
-            );
-          }
         })
         .catch(() => {});
     }, 300);
@@ -525,96 +421,6 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
     },
     [saveSettings],
   );
-
-  // 手动检查更新（强制刷新 host 缓存）
-  const handleCheckUpdate = useCallback(async () => {
-    setChecking(true);
-    setUpdateMsg(null);
-    try {
-      const info = await getUpdate();
-      setUpdateInfo(info);
-      // 已是最新时不再额外弹「已是最新版本」——版本信息行已固定展示该状态，避免重复/误导提示
-    } catch {
-      setUpdateMsg({ ok: false, text: T("pl.set.updateFail") });
-    } finally {
-      setChecking(false);
-    }
-  }, [T]);
-
-  // 立即更新：启动后台升级，并轮询实时进度驱动进度条；完成后提示重启服务才生效
-  const handleApplyUpdate = useCallback(async () => {
-    setUpdating(true);
-    setUpdateMsg(null);
-    setUpdateProgress(null);
-    setNeedsRestart(false);
-    try {
-      const res = await applyUpdate();
-      if (!res.ok || !res.started) {
-        setUpdateMsg({ ok: false, text: T("pl.set.updateFail") });
-        setUpdating(false);
-        return;
-      }
-      // 后台升级已启动：每 500ms 轮询一次进度，直到结束（done/failed）或超时
-      const deadline = Date.now() + 120_000;
-      let finalProg: UpdateProgress | null = null;
-      while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 500));
-        let prog: UpdateProgress | null = null;
-        try {
-          prog = await getUpdateProgress();
-        } catch {
-          /* 单次轮询失败可忽略，下一轮重试 */
-        }
-        if (prog) {
-          setUpdateProgress(prog);
-          if (!prog.active) {
-            finalProg = prog;
-            break;
-          }
-        }
-      }
-      if (finalProg) {
-        if (finalProg.stage === "done") {
-          setNeedsRestart(true);
-        } else if (finalProg.stage === "failed") {
-          setUpdateMsg({ ok: false, text: T("pl.set.updateFail") });
-        }
-      } else {
-        // 轮询未在超时内观测到结束，视为失败
-        setUpdateMsg({ ok: false, text: T("pl.set.updateFail") });
-      }
-      // 更新成功后刷新版本信息
-      try {
-        const info = await getUpdate();
-        setUpdateInfo(info);
-      } catch {
-        /* 忽略 */
-      }
-    } catch {
-      setUpdateMsg({ ok: false, text: T("pl.set.updateFail") });
-    } finally {
-      setUpdating(false);
-    }
-  }, [T]);
-
-  // 更新进度条阶段文案：按 stage 返回对应国际化描述
-  const stageLabel = (p: UpdateProgress | null): string => {
-    if (!p || p.stage === "idle") return T("pl.set.updating");
-    switch (p.stage) {
-      case "checking":
-        return T("pl.set.updateStageChecking");
-      case "downloading":
-        return T("pl.set.updateStageDownloading");
-      case "installing":
-        return T("pl.set.updateStageInstalling");
-      case "done":
-        return T("pl.set.updateStageDone");
-      case "failed":
-        return T("pl.set.updateStageFailed");
-      default:
-        return T("pl.set.updating");
-    }
-  };
 
   if (loading) {
     return (
@@ -663,27 +469,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           {T("pl.set.setSectionDesc")}
         </span>
       </div>
-      {/* 分类模块一：DeepSeek 余额 */}
-      <ModuleCard
-        title={T("pl.setModuleDeepseek")}
-        desc={T("pl.setModuleDeepseekDesc")}
-        open={openDeepseek}
-        onToggle={() => setOpenDeepseek((v) => !v)}
-      >
-        {/* DeepSeek API Key：为 DeepSeek 余额实时推送提供鉴权（可选，密码输入框） */}
-        <TextRow
-          label={T("pl.set.deepseekApiKey")}
-          value={draft.deepseekApiKey ?? ""}
-          type="password"
-          placeholder="sk-..."
-          desc={T("pl.set.deepseekApiKeyDesc")}
-          onChange={(v) => {
-            updateAndSave({ deepseekApiKey: v });
-          }}
-        />
-      </ModuleCard>
-
-      {/* 分类模块二：AI 模型（词库 AI 润色/完善的默认模型选择） */}
+      {/* 分类模块一：AI 模型（词库 AI 润色/完善的默认模型选择） */}
       <ModuleCard
         title={T("pl.setModuleAiModel")}
         desc={T("pl.setModuleAiModelDesc")}
@@ -745,7 +531,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
         })()}
       </ModuleCard>
 
-      {/* 分类模块三：面板显示 */}
+      {/* 分类模块二：面板显示 */}
       <ModuleCard
         title={T("pl.setModulePanel")}
         desc={T("pl.setModulePanelDesc")}
@@ -779,53 +565,13 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
         />
       </ModuleCard>
 
-      {/* 分类模块三：显示与交互 */}
+      {/* 分类模块四：显示与交互 */}
       <ModuleCard
         title={T("pl.setModuleDisplay")}
         desc={T("pl.setModuleDisplayDesc")}
         open={openDisplay}
         onToggle={() => setOpenDisplay((v) => !v)}
       >
-        {/* 词库助手显隐（主开关）：关闭后不再显示词库助手与其气泡；主开关关闭时子项一并置灰（仅灰显，不改动保存值），词库助手显示时始终可配置 */}
-        <ToggleRow
-          label={T("pl.set.assistant")}
-          desc={T("pl.set.assistantDesc")}
-          checked={draft.assistantEnabled}
-          onChange={(v) => updateAndSave({ assistantEnabled: v })}
-        />
-        {/* 词库助手子项：主开关关闭时置灰，词库助手显示时始终可配置；通过缩进呈现父子层级 */}
-        <div
-          style={{
-            marginLeft: 22,
-            display: "flex",
-            flexDirection: "column",
-          }}
-        >
-          {/* 助手形象：鲸鱼款（静态）/ 鲸鱼款（dsh-pet 动效）；仅当词库助手显示时可配置 */}
-          <SelectRow
-            label={T("pl.set.character")}
-            desc={T("pl.set.characterDesc")}
-            value={draft.assistantCharacter}
-            disabled={!draft.assistantEnabled}
-            onChange={(v) =>
-              updateAndSave({
-                assistantCharacter: v === "dshpet" ? "dshpet" : "whale",
-              })
-            }
-            options={[
-              { value: "whale", label: T("pl.set.characterWhale") },
-              { value: "dshpet", label: T("pl.set.characterDshpet") },
-            ]}
-          />
-        </div>
-        {/* 右侧面板显隐：控制官方右侧栏中「词库」面板 tab 的注册与显示；
-            关闭后右侧栏不再出现词库入口（含数据管理/数据库/插件推荐等卡片），设置变更即时生效。 */}
-        <ToggleRow
-          label={T("pl.set.rightPanel")}
-          desc={T("pl.set.rightPanelDesc")}
-          checked={draft.rightPanelEnabled}
-          onChange={(v) => updateAndSave({ rightPanelEnabled: v })}
-        />
         <ToggleRow
           label={T("pl.set.settingsAboveMenu")}
           desc={T("pl.set.settingsAboveMenuDesc")}
@@ -896,269 +642,13 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
         />
       </ModuleCard>
 
-      {/* 备份管理（独立卡片）：从「词库管理」面板迁移至此，集中管理自动备份设置/手动备份/备份文件恢复 */}
-      <BackupModule t={t} />
-
-      {/* 分类模块四：关于与更新 */}
+      {/* 分类模块五：关于（版本信息 + 开源地址 + 版权） */}
       <ModuleCard
-        title={T("pl.setModuleAboutUpdate")}
-        desc={T("pl.setModuleAboutUpdateDesc")}
-        open={openUpdate}
-        onToggle={() => setOpenUpdate((v) => !v)}
+        title={T("pl.setModuleAbout")}
+        desc={T("pl.setModuleAboutDesc")}
+        open={openAbout}
+        onToggle={() => setOpenAbout((v) => !v)}
       >
-        <ToggleRow
-          label={T("pl.set.autoUpdate")}
-          desc={T("pl.set.autoUpdateDesc")}
-          checked={draft.autoUpdateEnabled}
-          onChange={(v) => updateAndSave({ autoUpdateEnabled: v })}
-        />
-
-        {/* 更新提醒：显示当前/最新版本，提供检查更新与立即更新 */}
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: 8,
-            padding: "8px 0",
-          }}
-        >
-          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 12,
-              }}
-            >
-              <span style={{ fontSize: 13 }}>
-                {T("pl.set.currentVersion")}
-                {installedVer ? `（v${installedVer}）` : ""}
-              </span>
-              <button
-                type="button"
-                onClick={handleCheckUpdate}
-                disabled={checking || updating}
-                style={{
-                  padding: "5px 12px",
-                  fontSize: 12,
-                  color: checking || updating ? TONE.quiet : TONE.text,
-                  background: TONE.row,
-                  border: `1px solid ${TONE.border}`,
-                  borderRadius: 5,
-                  cursor: checking || updating ? "default" : "pointer",
-                }}
-              >
-                {checking
-                  ? T("pl.set.updateChecking")
-                  : T("pl.set.checkUpdate")}
-              </button>
-            </div>
-          </div>
-
-          {/* 版本信息状态行 */}
-          {checking ? (
-            <div style={{ fontSize: 11, color: TONE.quiet }}>
-              {T("pl.set.updateChecking")}
-            </div>
-          ) : updating ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 12,
-                }}
-              >
-                <span style={{ fontSize: 11, color: TONE.accent }}>
-                  {stageLabel(updateProgress)}
-                </span>
-                <span style={{ fontSize: 11, color: TONE.quiet }}>
-                  {updateProgress ? `${updateProgress.percent}%` : ""}
-                </span>
-              </div>
-              <div
-                style={{
-                  height: 6,
-                  borderRadius: 3,
-                  background: TONE.row,
-                  border: `1px solid ${TONE.border}`,
-                  overflow: "hidden",
-                }}
-              >
-                <div
-                  style={{
-                    height: "100%",
-                    width: `${updateProgress?.percent ?? 0}%`,
-                    background: TONE.accent,
-                    borderRadius: 3,
-                    transition: "width .24s cubic-bezier(.22,1,.36,1)",
-                  }}
-                />
-              </div>
-            </div>
-          ) : updateInfo ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <div style={{ fontSize: 11, color: TONE.quiet }}>
-                {updateInfo.hasUpdate ? (
-                  <span style={{ color: TONE.accent }}>
-                    {T("pl.set.updateAvailable", {
-                      version: updateInfo.latest,
-                    })}
-                  </span>
-                ) : (
-                  T("pl.set.updateLatest")
-                )}
-              </div>
-              {updateInfo.hasUpdate && (
-                <div
-                  style={{ display: "flex", flexDirection: "column", gap: 8 }}
-                >
-                  <div>
-                    <Button
-                      type="button"
-                      variant="primary"
-                      size="sm"
-                      className={plBtn("primary", "sm")}
-                      onClick={handleApplyUpdate}
-                      disabled={updating}
-                    >
-                      {updating ? T("pl.set.updating") : T("pl.set.updateNow")}
-                    </Button>
-                  </div>
-                  {/* 更新前置提醒：更新安装后必须重启 dsh web 才会加载新版本 */}
-                  <div
-                    role="note"
-                    style={{
-                      display: "flex",
-                      alignItems: "flex-start",
-                      gap: 6,
-                      padding: "6px 9px",
-                      borderRadius: 5,
-                      background: "rgba(245, 158, 11, 0.1)",
-                      border: `1px solid ${TONE.border}`,
-                      color: TONE.muted,
-                      fontSize: 11,
-                      lineHeight: 1.55,
-                    }}
-                  >
-                    <svg
-                      width="14"
-                      height="14"
-                      viewBox="0 0 16 16"
-                      style={{
-                        flexShrink: 0,
-                        marginTop: 1,
-                        color:
-                          "var(--dsw-alias-state-warning-primary, #f59e0b)",
-                      }}
-                      aria-hidden="true"
-                    >
-                      <path
-                        d="M8 2L1.5 13h13L8 2zM8 7v3M8 12.5v.5"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.6"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                    <span>{T("pl.set.updateRequireRestartHint")}</span>
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : null}
-
-          {/* 操作结果提示：持久显示，直到下次点击检查/更新 */}
-          {updateMsg && (
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 8,
-                alignItems: "flex-start",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  fontSize: 12,
-                  fontWeight: 500,
-                  color: updateMsg.ok ? TONE.success : TONE.red,
-                  lineHeight: 1.5,
-                }}
-              >
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 16 16"
-                  style={{ flexShrink: 0 }}
-                  aria-hidden="true"
-                >
-                  {updateMsg.ok ? (
-                    <path
-                      d="M3 8.5l3.2 3.2L13 4.8"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  ) : (
-                    <path
-                      d="M8 4v5M8 11.5v.5"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinecap="round"
-                    />
-                  )}
-                </svg>
-                <span>{updateMsg.text}</span>
-              </div>
-            </div>
-          )}
-
-          {/* 升级完成后提示：新代码已装，需重启服务才能生效（仅手动升级成功且尚未重启时显示） */}
-          {needsRestart && (
-            <div
-              role="alert"
-              style={{
-                width: "100%",
-                boxSizing: "border-box",
-                display: "flex",
-                alignItems: "flex-start",
-                gap: 10,
-                padding: "10px 12px",
-                borderRadius: 7,
-                background:
-                  "linear-gradient(180deg, rgba(59, 130, 246, 0.08) 0%, rgba(59, 130, 246, 0.03) 100%)",
-                border:
-                  "1px solid var(--dsw-alias-state-info-primary, rgba(59, 130, 246, 0.35))",
-                color: TONE.text,
-                fontSize: 12,
-                lineHeight: 1.6,
-              }}
-            >
-              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                <strong style={{ fontSize: 12, fontWeight: 600 }}>
-                  {T("pl.set.updateSuccessRestartTitle")}
-                </strong>
-                <span style={{ color: TONE.muted, fontSize: 11.5 }}>
-                  {T("pl.set.updateSuccessRestartHint")}
-                </span>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* 分隔线 */}
-        <div style={{ height: 1, background: TONE.border }} />
-
         {/* 关于信息：信息行、开源地址、版权注释 */}
         <div
           style={{
@@ -1171,6 +661,10 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           {/* 信息行（标签: 值，分隔布局） */}
           {(
             [
+              [
+                T("pl.set.currentVersion"),
+                installedVer ? `v${installedVer}` : "-",
+              ],
               [T("pl.about.author"), "master1Sun"],
               [T("pl.about.license"), "MIT"],
             ] as [string, string][]

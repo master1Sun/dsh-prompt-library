@@ -29,14 +29,14 @@ function handleMessage(message: { type?: string; [key: string]: unknown }): void
       return;
     }
     case "fill-draft": {
-      // host 侧 `/prompts -AI` 推送的润色正文：转发给填充监听的组件。
+      // host 侧推送的润色正文：转发给填充监听的组件。
       const body = typeof message.body === "string" ? message.body : "";
       if (!body) return;
       window.dispatchEvent(new CustomEvent(FILL_DRAFT_EVENT, { detail: { body } }));
       return;
     }
     case "export-download": {
-      // host 侧 `/prompts -e` 推送的 JSON 备份：直接在浏览器本地触发下载。
+      // host 侧推送的 JSON 备份：直接在浏览器本地触发下载。
       let count = 0;
       const json = typeof message.json === "string" ? message.json : "";
       const name = typeof message.name === "string" ? message.name : "";
@@ -74,7 +74,7 @@ function handleMessage(message: { type?: string; [key: string]: unknown }): void
 
 /**
  * 在共享的那条 WS 连接上挂一个监听，把 `data-changed` 等消息翻译成已有的
- * `pl:data-changed` window 事件。host 侧改动（如 `/prompts` 保存）也能让
+ * `pl:data-changed` window 事件。host 侧改动（如 AI 自学习保存）也能让
  * 所有打开的面板即时刷新。只允许在浏览器端调用一次；连接断开由共享连接
  * 自动重连，页面卸载时由浏览器关闭连接。
  */
@@ -109,7 +109,7 @@ export function useDataChanged(reload: () => void): void {
   }, []);
 }
 
-/** 订阅 host 推送的「填充草稿」事件（/prompts -AI 润色结果），回调填到聊天框。 */
+/** 订阅 host 推送的「填充草稿」事件（AI 润色结果），回调填到聊天框。 */
 export function useFillDraft(fill: (body: string) => void): void {
   const fillRef = useRef(fill);
   fillRef.current = fill;
@@ -124,7 +124,7 @@ export function useFillDraft(fill: (body: string) => void): void {
   }, []);
 }
 
-/** 订阅「JSON 备份已下载」事件（/prompts -e），返回导出的提示词条数。 */
+/** 订阅「JSON 备份已下载」事件（host 侧导出推送），返回导出的提示词条数。 */
 export function useExportDownloaded(onDownloaded: (count: number) => void): void {
   const onRef = useRef(onDownloaded);
   onRef.current = onDownloaded;

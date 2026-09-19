@@ -15,7 +15,6 @@ import type {
   SessionPrompt,
   TrashItem,
 } from "../../types.js";
-import { setPushLang, subscribePush } from "./ws.js";
 
 const BASE = "/api/prompt-library/prompts";
 const PERSONAS_BASE = "/api/prompt-library/personas";
@@ -68,21 +67,9 @@ export function deletePrompt(id: string): Promise<{ id: string }> {
   return send<{ id: string }>("DELETE", `${BASE}/${encodeURIComponent(id)}`);
 }
 
-/** 从原始草稿正文自动学习提示词（去重在 host 侧完成）。
- * skipEnrich：true 表示正文已在界面完成 AI 润色，不再触发后台 AI 完善。
- * summary：可选，已润色时把 AI 生成的用途摘要一并入库。 */
-export function learnPrompt(body: string, tag?: string, skipEnrich?: boolean, summary?: string): Promise<Prompt> {
-  return send<Prompt>("POST", "/api/prompt-library/learn", { body, tag, skipEnrich, summary });
-}
-
 /** 记录提示词的使用（点击插入时调用）。 */
 export function usePrompt(id: string): Promise<Prompt> {
   return send<Prompt>("POST", `${BASE}/${encodeURIComponent(id)}`);
-}
-
-/** 重新触发某条提示词的 AI 完善（查看详情「重新完善」入口）。返回是否成功触发。 */
-export function refinePrompt(id: string): Promise<{ ok: boolean }> {
-  return send<{ ok: boolean }>("POST", `${BASE}/${encodeURIComponent(id)}/refine`);
 }
 
 /** 导出全部提示词（备份内容，含 schema 版本与导出时间）。 */
@@ -388,32 +375,6 @@ export function getAiSelectables(): Promise<ClientAiSelectable[]> {
   return send<ClientAiSelectable[]>("GET", "/api/prompt-library/ai/providers");
 }
 
-/** 请求 AI 生成词库功能简介（5 句，供浮动助手气泡轮询）；失败时调用方回退到内置简介。 */
-export function genIntro(lang: "zh" | "en"): Promise<{ lines: string[] }> {
-  return send<{ lines: string[] }>("POST", "/api/prompt-library/ai/intro", { lang });
-}
-
-/** 请求 AI 依据词库当前统计生成建议点评（公告看板「AI 建议」卡片；AI 不可用时返回空串）。 */
-export function getAiSuggest(lang: "zh" | "en"): Promise<{ suggestion: string }> {
-  return send<{ suggestion: string }>("POST", "/api/prompt-library/ai/suggest", { lang });
-}
-
-/** 版本检查结果：当前版本、最新可更新版本、是否有更新及来源。 */
-export interface UpdateInfo {
-  current: string;
-  latest: string;
-  hasUpdate: boolean;
-  /** 该更新来源：npm（优先，默认）或 github（npm 不可达时的兜底）。 */
-  source: "npm" | "github";
-  /** github 来源对应的 release tag（如 v0.9.0）；npm 来源为空串。 */
-  gitTag: string;
-}
-
-/** 检查插件是否有新版本（host 侧含缓存；双源都失败时 hasUpdate 为 false）。 */
-export function getUpdate(): Promise<UpdateInfo> {
-  return send<UpdateInfo>("GET", "/api/prompt-library/update");
-}
-
 /** 服务端运行版本与磁盘已安装版本（本地读取，不触发网络检查）。 */
 export interface VersionInfo {
   /** 服务端编译版本号。 */
@@ -425,32 +386,6 @@ export interface VersionInfo {
 /** 读取版本比对信息（轻量本地接口，用于展示当前版本号）。 */
 export function getVersion(): Promise<VersionInfo> {
   return send<VersionInfo>("GET", "/api/prompt-library/version");
-}
-
-/** 手动升级的实时进度（客户端轮询以驱动更新进度条）。 */
-export interface UpdateProgress {
-  /** 是否有升级正在后台执行。 */
-  active: boolean;
-  stage: "idle" | "checking" | "downloading" | "installing" | "done" | "failed";
-  /** 进度百分比（0-100）。 */
-  percent: number;
-  /** 可选附加说明（如安装命令输出摘要）。 */
-  detail?: string;
-}
-
-/** 启动后台升级插件到最新版：立即返回是否已成功发起；升级在后台执行，实时进度由 getUpdateProgress 轮询获取。 */
-export function applyUpdate(): Promise<{ ok: boolean; started: boolean; error?: string }> {
-  return send<{ ok: boolean; started: boolean; error?: string }>("POST", "/api/prompt-library/update/apply");
-}
-
-/** 读取后台升级的实时进度（升级期间的进度条/阶段变化）。 */
-export function getUpdateProgress(): Promise<UpdateProgress> {
-  return send<UpdateProgress>("GET", "/api/prompt-library/update/progress");
-}
-
-/** 通知 host 重启本地 dsh web 服务（重启后当前连接会短暂断开）。 */
-export function restartService(): Promise<{ ok: boolean; error?: string }> {
-  return send<{ ok: boolean; error?: string }>("POST", "/api/prompt-library/restart");
 }
 
 const SETTINGS_BASE = "/api/prompt-library/settings";
@@ -465,7 +400,7 @@ export function updateSettings(patch: Partial<PluginSettings>): Promise<PluginSe
   return send<PluginSettings>("PUT", SETTINGS_BASE, patch);
 }
 
-// ── 多人格管理 ──────────────────────────────────────────────────────────
+// ── 人格管理（CRUD + 工作区/项目/会话绑定）───────────────────────────────
 
 /** 列出全部人格（含内置默认人格，排最前）。 */
 export function listPersonas(): Promise<PersonaView[]> {
@@ -584,7 +519,7 @@ export function setSessionActivePrompts(scope: string, promptIds: string[]): Pro
   return send<{ promptIds: string[] }>("PUT", `${SESSION_PROMPTS_BASE}/active`, { scope, promptIds });
 }
 
-// ── 会话解析诊断（排查「设了人格/技能却没生效」用）──────────────────────
+// ── 会话解析诊断（排查「设了技能却没生效」用）────────────────────────────
 
 /** 会话解析诊断结果（与组装端同一套逻辑）。 */
 export interface ScopeDiag {
@@ -603,6 +538,27 @@ export interface ScopeDiag {
 export function diagSession(sessid?: string): Promise<ScopeDiag> {
   const q = sessid ? `?sessid=${encodeURIComponent(sessid)}` : "";
   return send<ScopeDiag>("GET", `${SESSION_PROMPTS_BASE}/diag${q}`);
+}
+
+/** 设置某会话绑定的自定义人格（传 'default'/空串 → 回落默认/上层），返回实际生效的人格 id。 */
+export function setSessionPersonaBinding(sessionId: string, personaId: string): Promise<{ personaId: string }> {
+  return send<{ personaId: string }>("PUT", `${SESSION_PROMPTS_BASE}/session/persona`, { sessionId, personaId });
+}
+
+/** 设置某会话持久绑定的会话级技能 id 列表（空数组 → 解除该会话的技能绑定）。 */
+export function setSessionPromptBindingForSession(
+  sessionId: string,
+  promptIds: string[],
+): Promise<{ promptIds: string[] }> {
+  return send<{ promptIds: string[] }>("PUT", `${SESSION_PROMPTS_BASE}/session/prompts`, { sessionId, promptIds });
+}
+
+/** 清除某会话的全部持久绑定（人格回落默认、技能不再注入）。 */
+export function clearSessionBinding(sessionId: string): Promise<{ cleared: boolean }> {
+  return send<{ cleared: boolean }>(
+    "DELETE",
+    `${SESSION_PROMPTS_BASE}/session?sessionId=${encodeURIComponent(sessionId)}`,
+  );
 }
 
 // ── Harness 技能软控制（~/.dsh/skills 系统技能 + 项目技能）─────────────────
@@ -640,501 +596,6 @@ export function deleteHarnessSkill(id: string): Promise<{ id: string }> {
   return send<{ id: string }>("POST", "/api/prompt-library/skills/harness/delete", { id });
 }
 
-/** 设置某会话绑定的自定义人格（传 'default'/空串 → 回落默认/上层），返回实际生效的人格 id。 */
-export function setSessionPersonaBinding(sessionId: string, personaId: string): Promise<{ personaId: string }> {
-  return send<{ personaId: string }>("PUT", `${SESSION_PROMPTS_BASE}/session/persona`, { sessionId, personaId });
-}
-
-/** 设置某会话持久绑定的会话级技能 id 列表（空数组 → 解除该会话的技能绑定）。 */
-export function setSessionPromptBindingForSession(
-  sessionId: string,
-  promptIds: string[],
-): Promise<{ promptIds: string[] }> {
-  return send<{ promptIds: string[] }>("PUT", `${SESSION_PROMPTS_BASE}/session/prompts`, { sessionId, promptIds });
-}
-
-/** 清除某会话的全部持久绑定（人格回落默认、技能不再注入）。 */
-export function clearSessionBinding(sessionId: string): Promise<{ cleared: boolean }> {
-  return send<{ cleared: boolean }>(
-    "DELETE",
-    `${SESSION_PROMPTS_BASE}/session?sessionId=${encodeURIComponent(sessionId)}`,
-  );
-}
-
-// ── 词库助手活动状态 ────────────────────────────────────────────────────
-
-/** 词库助手活动阶段（与 host activity.ts 保持一致）。 */
-export type ActivityPhase =
-  | "idle"
-  | "waiting"
-  | "thinking"
-  | "tool"
-  | "review"
-  | "done"
-  | "failed";
-
-/** 词库助手活动快照。 */
-export interface ActivitySnapshot {
-  phase: ActivityPhase;
-  /** 是否有正在进行的会话；无会话时助手应回到 idle。 */
-  sessionActive: boolean;
-  /** 当前聊天主题风格（code/writing/translate/qa/general），由 host 分类。 */
-  topic?: string;
-  /** 匹配当前主题 + 阶段 + 语言的一条文案（同阶段多套轮换），由 host 推送。 */
-  text?: string;
-}
-
-/** 读取词库助手当前活动阶段与阶段文案（host 状态机投影官方会话事件，驱动助手动画）。 */
-export function getActivity(lang?: string): Promise<ActivitySnapshot> {
-  const q = lang ? `?lang=${encodeURIComponent(lang)}` : "";
-  return send<ActivitySnapshot>("GET", `/api/prompt-library/activity${q}`);
-}
-
-/**
- * 在共享的那条 WS 连接上订阅「词库助手」状态流：同时接收活动阶段与游戏化状态。
- * 消息为 JSON 信封：`{type:"activity", data}` / `{type:"status", data}`。
- * 返回取消订阅函数（只摘监听，不关连接）。
- * @param handlers.onActivity 每次收到活动快照时回调
- * @param handlers.onStatus 每次收到游戏化状态快照时回调
- * @param lang 文案语言（zh/en），通过连接下发 set-lang 生效
- */
-export function subscribeAssistant(
-  handlers: {
-    onActivity: (snapshot: ActivitySnapshot) => void;
-    onStatus: (status: AssistantStatus) => void;
-  },
-  lang?: string,
-): () => void {
-  if (lang) setPushLang(lang);
-  return subscribePush((message) => {
-    if (message.type === "activity" && message.data) {
-      handlers.onActivity(message.data as ActivitySnapshot);
-    } else if (message.type === "status" && message.data) {
-      handlers.onStatus(message.data as AssistantStatus);
-    }
-  });
-}
-
-// ── DeepSeek 余额判断 ─────────────────────────────────────────────
-
-/** DeepSeek 余额信息（未接入真实查询前由 host 返回 null 占位）。 */
-export interface DeepSeekCredit {
-  /** 结算币种，如 CNY。 */
-  currency: string;
-  /** 账户总余额。 */
-  total: number;
-}
-
-/** DeepSeek 余额快照：isDeepSeek 表示当前是否在使用 DeepSeek API。 */
-export interface DeepSeekBalance {
-  isDeepSeek: boolean;
-  /** 余额数据，未接入真实查询前为 null；后续接入后为 DeepSeekCredit。 */
-  balance: DeepSeekCredit | null;
-}
-
-/**
- * 读取当前是否使用 DeepSeek API 及余额。
- * 本轮仅做「判断 + 常驻角标界面」，未接真实查询，balance 恒为 null；
- * 待用户配置 DeepSeek API Key 后 host 返回真实余额。
- */
-export function getDeepSeekBalance(): Promise<DeepSeekBalance> {
-  return send<DeepSeekBalance>("GET", "/api/prompt-library/deepseek/balance");
-}
-
-// ── 词库助手游戏化状态（等级 / 成就 / 彩蛋）────────────────────────────
-
-/** 词库助手等级信息。 */
-export interface AssistantLevel {
-  /** 当前等级（1 起步，已考虑回落）。 */
-  level: number;
-  /** 当前等级称号。 */
-  title: string;
-  /** 当前累计使用次数。 */
-  current: number;
-  /** 升下一级所需累计使用次数；0 表示已满级。 */
-  next: number;
-  /** 当前等级内进度百分比（0-100）。 */
-  pct: number;
-  /** 是否因长期未使用而触发等级回落。 */
-  decayed?: boolean;
-  /** 距上次使用的天数（本地时区），用于解释回落原因。 */
-  inactiveDays?: number;
-  /** 距回落到上一档的净积分差（level>1 时有效，否则 0）。 */
-  dropGap?: number;
-  /** 上一档称号（按语言；level=1 时为空串）。 */
-  prevTitle?: string;
-}
-
-/** 词库助手单条成就（含稀有度、进度与分值）。 */
-export interface AssistantAchievement {
-  id: string;
-  title: string;
-  desc: string;
-  achieved: boolean;
-  /** 稀有度：common/rare/epic/legendary/myth。 */
-  rarity: "common" | "rare" | "epic" | "legendary" | "myth";
-  /** 解锁可得分值。 */
-  points: number;
-  /** 当前进度值。 */
-  progress: number;
-  /** 达成目标值。 */
-  target: number;
-}
-
-/** 词库助手成就汇总（称号 + 达成数 + 成就点）。 */
-export interface AssistantAchievementSummary {
-  /** 成长称号。 */
-  rank: string;
-  /** 成长称号档位标识。 */
-  rankKey: "wanderer" | "explorer" | "collector" | "star" | "legend";
-  /** 已解锁成就数。 */
-  unlocked: number;
-  /** 成就总数。 */
-  total: number;
-  /** 已获得成就点。 */
-  earnedPoints: number;
-  /** 成就点上限。 */
-  maxPoints: number;
-}
-
-/** 词库助手一条彩蛋文案。 */
-export interface AssistantEasterEgg {
-  id: string;
-  text: string;
-}
-
-/** 词库助手一段等级档位门槛（等级详情用）。 */
-export interface AssistantLevelMilestone {
-  level: number;
-  /** 达到该等级所需的净积分。 */
-  threshold: number;
-  zh: string;
-  en: string;
-}
-
-/** 词库助手一种积分获取来路。 */
-export interface AssistantPointSource {
-  kind: string;
-  points: number;
-  zh: string;
-  en: string;
-}
-
-/** 词库助手游戏化快照。 */
-export interface AssistantStatus {
-  level: AssistantLevel;
-  achievements: AssistantAchievement[];
-  achievementSummary: AssistantAchievementSummary;
-  easterEgg: AssistantEasterEgg | null;
-  /** 各等级档位门槛（等级详情）。 */
-  levelRules: AssistantLevelMilestone[];
-  /** 积分获取来路。 */
-  pointSources: AssistantPointSource[];
-  /** 积分衰减规则文案。 */
-  decayRule: string;
-}
-
-/** 读取词库助手等级 / 成就 / 彩蛋快照（host 依据统计与本地时间生成）。 */
-export function getAssistantStatus(lang?: string): Promise<AssistantStatus> {
-  const q = lang ? `?lang=${encodeURIComponent(lang)}` : "";
-  return send<AssistantStatus>("GET", `/api/prompt-library/assistant/status${q}`);
-}
-
-// ── 公告通告 ────────────────────────────────────────────────────────────
-
-/** 单版本更新条目（由 host 的 VERSION_NOTES 生成，按语言填充）。 */
-export interface VersionEntry {
-  /** 版本号。 */
-  version: string;
-  /** 发布日期 YYYY-MM-DD，可选。 */
-  date?: string;
-  /** 版本标题。 */
-  title: string;
-  /** 版本更新要点列表。 */
-  items: string[];
-}
-
-/** 公告通告内容（全部为本地多语言数据，不再读取网络 JSON）。 */
-export interface AnnouncementData {
-  source: "local";
-  /** 生效语言（zh / en）。 */
-  lang: "zh" | "en";
-  /** 当前运行版本（package.json version），用于优先匹配当前版本的更新说明。 */
-  current: string;
-  /** 使用手册条目（key 对应 i18n 键，text 已按当前语言填充）。 */
-  manual: { key: string; text: string }[];
-  /** 版本更新说明（按版本倒序）。 */
-  versions: VersionEntry[];
-}
-
-/** 拉取公告通告（词库助手右键菜单「公告」弹窗时调用；lang 传入浏览器/系统语言，内部归一化）。 */
-export function getAnnouncement(lang?: string): Promise<AnnouncementData> {
-  const url = lang
-    ? `/api/prompt-library/announcement?lang=${encodeURIComponent(lang)}`
-    : "/api/prompt-library/announcement";
-  return send<AnnouncementData>("GET", url);
-}
-
-// ── 公告报纸「今日」动态（每日日报 + 科技快讯）──────────────────────────
-
-/** 报纸「今日词库日报」单条。 */
-export interface DailyReportItem {
-  /** 醒目短标题。 */
-  headline: string;
-  /** 一句话展开说明。 */
-  body: string;
-}
-
-/** 报纸「今日科技快讯」单条。 */
-export interface TechNewsItem {
-  /** 新闻标题。 */
-  title: string;
-  /** 一句话摘要。 */
-  summary: string;
-  /** 原文链接（IT之家链接；AI 回退/缺失时可能为空）。 */
-  url: string;
-}
-
-/** 报纸「今日/历史」一期动态内容。 */
-export interface DailyExtras {
-  /** 语言（zh / en）。 */
-  lang: "zh" | "en";
-  /** 内容日期 YYYY-MM-DD（本地时区）。 */
-  date: string;
-  /** 每日日报要点；不可用或失败时为 null（显示「今日暂无推荐」）。 */
-  report: DailyReportItem[] | null;
-  /** 科技快讯条目；不可用或失败时为 null（显示「今日暂无推荐」）。 */
-  news: TechNewsItem[] | null;
-  /** 科技快讯来源：本地成就速报。 */
-  newsSource?: "achievement" | null;
-  /** 所有已存档报纸日期（时间倒序，最新在前），用于历史翻页导航。 */
-  availableDates: string[];
-  /** 当期是否为今天。 */
-  isToday: boolean;
-}
-
-/** 拉取公告报纸某一期（date 省略取今天；lang 可省略默认 zh）。 */
-export function getAnnouncementDaily(lang?: string, date?: string): Promise<DailyExtras> {
-  const params: string[] = [];
-  if (lang) params.push(`lang=${encodeURIComponent(lang)}`);
-  if (date) params.push(`date=${encodeURIComponent(date)}`);
-  const qs = params.length > 0 ? `?${params.join("&")}` : "";
-  return send<DailyExtras>("GET", `/api/prompt-library/announcement/daily${qs}`);
-}
-
-// ── 词库统计（供统计可视化面板）────────────────────────────────────────
-
-/** 词库使用统计（与 host store.computeLibraryStats 对齐）。 */
-export interface LibraryStats {
-  /** 提示词总数。 */
-  total: number;
-  /** 累计使用次数。 */
-  totalUsage: number;
-  /** 曾使用过的提示词数量。 */
-  usedCount: number;
-  /** 从未使用过的提示词数量。 */
-  unusedCount: number;
-  /** 最常用的前 5 条（按使用次数降序）。 */
-  topUsed: Array<{ title: string; usageCount: number; lastUsedAt: number }>;
-  /** 最近使用的前 5 条（按最后使用时间降序）。 */
-  recentUsed: Array<{ title: string; lastUsedAt: number }>;
-  /** 标签及其被引用次数。 */
-  tagStats: Array<{ name: string; count: number }>;
-  /** 回收站条数。 */
-  trashCount: number;
-  /** 复用活力：近 7 天曾被使用的提示词数量。 */
-  usedIn7Days: number;
-  /** 复用活力：近 30 天曾被使用的提示词数量。 */
-  usedIn30Days: number;
-  /** 沉睡提示词：创建超 30 天且从未使用的最久前 3 条。 */
-  longestUnused: Array<{ title: string; days: number }>;
-  /** 正文总字数。 */
-  totalBodyLength: number;
-  /** 平均每条正文字数。 */
-  avgBodyLength: number;
-  /** 已由 AI 完善的提示词数量。 */
-  aiRefinedCount: number;
-  /** AI 完善占比（0-100）。 */
-  aiRefinedPct: number;
-  /** 近 7 天新增提示词数量。 */
-  addedIn7Days: number;
-  /** 近 30 天新增提示词数量。 */
-  addedIn30Days: number;
-  /** 近 7 天最常用的前 5 条（按近 7 天使用次数降序）。 */
-  topUsed7: Array<{ title: string; count: number }>;
-  /** 近 7 天经 AI 完善的提示词数量。 */
-  aiRefinedIn7: number;
-  /** 自动学习条目数量（标签为配置的自动学习标签或默认 auto-learned）。 */
-  autoLearnedCount: number;
-}
-
-/** 每周增量统计（近 7 天：新增/使用/AI 完善）。 */
-export interface WeeklyStats {
-  rangeStart: number;
-  rangeEnd: number;
-  addedCount: number;
-  addedTitles: string[];
-  usedPromptCount: number;
-  usageCount: number;
-  topUsed: Array<{ title: string; count: number }>;
-  aiRefinedCount: number;
-}
-
-/** 一次统计历史快照。 */
-export interface StatsSnapshot {
-  id: number;
-  stats: WeeklyStats;
-  comment: string;
-  createdAt: number;
-}
-
-/** 使用热力图一个单元：本地时区星期（0=周日）+ 小时（0-23）+ 次数。 */
-export interface HeatmapCell {
-  weekday: number;
-  hour: number;
-  count: number;
-}
-
-/** 统计接口返回：当前实时统计 + 历史快照序列（时间正序，供趋势图）+ 使用热力图。 */
-export interface PromptStatsData {
-  stats: LibraryStats;
-  snapshots: StatsSnapshot[];
-  heatmap: HeatmapCell[];
-}
-
-/** 获取词库统计（当前统计 + 近 12 周快照）。 */
-export function getStats(): Promise<PromptStatsData> {
-  return send<PromptStatsData>("GET", "/api/prompt-library/stats");
-}
-
-// ── 数据库预览（只读浏览 prompt.db）────────────────────────────────
-
-/** 单张表的预览信息：表名 + 行数 + 列定义。 */
-export interface DbTableInfo {
-  name: string;
-  /** 表内行数。 */
-  rows: number;
-  /** 列定义（按序号排列）。 */
-  columns: Array<{ name: string; type: string; pk: number; notnull: number; dflt: string | null }>;
-  /** 用于定位行的主键列名。 */
-  key: string[];
-  /** 是否可从可视化面板做增删改。 */
-  editable: boolean;
-}
-
-/** 安全的只读查询结果。 */
-export interface DbQueryResult {
-  /** 返回的行。 */
-  rows: Record<string, unknown>[];
-  /** 列名（按查询结果的列顺序）。 */
-  columns: string[];
-  /** 是否因行数上限被截断。 */
-  truncated: boolean;
-}
-
-/** 可视化增删改的通用入参。 */
-export interface DbCellPayload {
-  table: string;
-  /** 主键定位（列名 → 值），用于更新与删除。 */
-  pk?: Array<{ name: string; value: unknown }>;
-  /** 待写入的列值（列名 → 值）。 */
-  record?: Record<string, unknown>;
-}
-
-/** 列出词库数据库中的全部业务表（含列定义与行数）。 */
-export function listDbTables(): Promise<DbTableInfo[]> {
-  return send<DbTableInfo[]>("GET", "/api/prompt-library/db/tables");
-}
-
-/** 执行一条只读查询（仅允许 SELECT / WITH / PRAGMA / EXPLAIN）。 */
-export function queryDb(sql: string): Promise<DbQueryResult> {
-  return send<DbQueryResult>("POST", "/api/prompt-library/db/query", { sql });
-}
-
-/** 新增一行（可视化「增」）。 */
-export function dbInsert(payload: DbCellPayload): Promise<{ changes: number }> {
-  return send<{ changes: number }>("POST", "/api/prompt-library/db/insert", payload);
-}
-
-/** 按主键更新一行（可视化「改」）。 */
-export function dbUpdate(payload: DbCellPayload): Promise<{ changes: number }> {
-  return send<{ changes: number }>("POST", "/api/prompt-library/db/update", payload);
-}
-
-/** 按主键删除一行（可视化「删」）。 */
-export function dbDelete(payload: DbCellPayload): Promise<{ changes: number }> {
-  return send<{ changes: number }>("POST", "/api/prompt-library/db/delete", payload);
-}
-
-/** 校验数据库开发者模式密码（明文在客户端侧比对服务端摘要，不落盘）。 */
-export async function verifyDbDevPassword(password: string): Promise<boolean> {
-  const r = await send<{ ok: boolean }>("POST", "/api/prompt-library/db/verify-password", { password });
-  return r.ok;
-}
-
-// ── 自动备份 ──────────────────────────────────────────────────────────────
-
-/** 自动备份目录下的单条备份文件信息。 */
-export interface BackupEntry {
-  name: string;
-  size: number;
-  createdAt: number;
-  /** 备份文件格式：db（数据库文件）/ json（JSON 导出）。 */
-  format: "db" | "json";
-}
-
-/** 列出自动备份目录中的备份文件（按时间倒序，最新在前）。 */
-export function listBackups(): Promise<BackupEntry[]> {
-  return send<BackupEntry[]>("GET", "/api/prompt-library/backups");
-}
-
-/** 立即执行一次备份，返回生成的备份文件名与大小。format 缺省 db（复制数据库文件）；json 导出为 JSON 备份。 */
-export function runBackup(format: "db" | "json" = "db"): Promise<{ name: string; size: number }> {
-  return send<{ name: string; size: number }>("POST", "/api/prompt-library/backups/run", { format });
-}
-
-/** 从指定备份文件恢复词库（db 覆盖主库重开连接；json 清空后重建）。返回格式与恢复后条数。 */
-export function restoreBackup(
-  name: string,
-): Promise<{ format: "db" | "json"; count: number }> {
-  return send<{ format: "db" | "json"; count: number }>(
-    "POST",
-    "/api/prompt-library/backups/restore",
-    { name },
-  );
-}
-
-/** 删除指定的备份文件（删除后不可恢复）。 */
-export function deleteBackup(name: string): Promise<{ deleted: boolean }> {
-  return send<{ deleted: boolean }>("POST", "/api/prompt-library/backups/delete", { name });
-}
-
-/** 检测 dsh-prompt-library 插件是否已安装（本插件自身，恒为已安装）。 */
-export function checkPromptLibraryInstalled(): Promise<{ installed: boolean }> {
-  return send<{ installed: boolean }>("GET", "/api/prompt-library/plugins/prompt-library");
-}
-
-// ── 每日心情 ────────────────────────────────────────────────────────────────
-
-/** 每日心情记录（按本地日期计当天会话成功/失败次数）。 */
-export interface DailyMood {
-  dayKey: string;
-  happy: number;
-  sad: number;
-}
-
-/** 读取今日心情记录。 */
-export function getTodayMood(): Promise<DailyMood> {
-  return send<DailyMood>("GET", "/api/prompt-library/mood");
-}
-
-/** 覆写某日（缺省今天）的心情计数，返回最新记录。 */
-export function setMood(
-  counts: { happy?: number; sad?: number; dayKey?: string },
-): Promise<DailyMood> {
-  return send<DailyMood>("POST", "/api/prompt-library/mood", counts);
-}
-
 // ── 插件级元数据（localStorage 业务标记落库用）───────────────────────────
 
 /** 读取 meta 表值（key 不存在返回空串）。 */
@@ -1151,26 +612,4 @@ export function setMetaValue(key: string, value: string): Promise<string> {
     `/api/prompt-library/meta/${encodeURIComponent(key)}`,
     { value },
   ).then((d) => d.value);
-}
-
-// ── 提示词版本历史 ────────────────────────────────────────────────────────
-
-/** 提示词的一个版本快照。 */
-export interface PromptVersion {
-  version: number;
-  title: string;
-  body: string;
-  tags: string[];
-  summary?: string;
-  sourceBody?: string;
-  reason: string;
-  snapshotAt: number;
-}
-
-/** 查询某提示词的版本历史（旧 → 新）。 */
-export function listPromptVersions(promptId: string): Promise<PromptVersion[]> {
-  return send<PromptVersion[]>(
-    "GET",
-    `/api/prompt-library/prompts/${encodeURIComponent(promptId)}/versions`,
-  );
 }

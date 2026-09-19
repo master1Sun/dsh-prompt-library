@@ -13,7 +13,7 @@
 import { useEffect, useRef, useState, type ChangeEvent, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
-import type { PersonaView, ScopeNode, SessionNode } from "../../../types.js";
+import type { PersonaView, ScopeNode } from "../../../types.js";
 import { UNMATCHED_SCOPE_PATH } from "../../../types.js";
 import {
   clearAllPersonaBindings as apiClearAllPersonaBindings,
@@ -24,7 +24,6 @@ import {
   listPersonas,
   listSessionScopeTree,
   setPersonaBinding as apiSetPersonaBinding,
-  setSessionPersonaBinding as apiSetSessionPersonaBinding,
   updatePersona as apiUpdatePersona,
   type ScopeDiag,
 } from "../../utils/api.js";
@@ -102,8 +101,6 @@ export function PersonaManagerModal({ open, onClose, t, container }: Props): Rea
   const [scopesLoaded, setScopesLoaded] = useState(false);
   // 展开的工作区路径集合（默认全部展开，便于看到所有项目）
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  // 右栏树视图切换：all = 工作树和会话（默认） / scopes = 只显示工作区和项目 / sessions = 只显示会话
-  const [scopeView, setScopeView] = useState<"all" | "scopes" | "sessions">("all");
 
   // 工作区/项目树的展开/折叠状态持久化（人格管理右栏绑定树）：下次打开恢复到上次状态
   const SCOPE_EXPAND_KEY = "pl:persona-tree-expanded";
@@ -158,17 +155,6 @@ export function PersonaManagerModal({ open, onClose, t, container }: Props): Rea
     return undefined;
   };
 
-  // 在树中按会话 id 查找会话节点
-  const findSessionNode = (nodes: ScopeNode[], sessionId: string): SessionNode | undefined => {
-    for (const n of nodes) {
-      const hitSession = n.sessions?.find((s) => s.id === sessionId);
-      if (hitSession) return hitSession;
-      const hit = findSessionNode(n.children, sessionId);
-      if (hit) return hit;
-    }
-    return undefined;
-  };
-
   // 拉取最近活跃会话的解析诊断（未选中节点时展示）；silent=false 时显示加载态
   const loadDiag = (silent = false) => {
     // 静默刷新（silent=true）不清空旧内容，避免切换时卡片闪烁/被瞬间移除；
@@ -204,8 +190,8 @@ export function PersonaManagerModal({ open, onClose, t, container }: Props): Rea
   const [clearAllOpen, setClearAllOpen] = useState(false);
   // 详情查看的目标 id（点击内容打开详情弹窗）
   const [detailId, setDetailId] = useState<string | null>(null);
-  // 右栏树被点击选中的会话/工作区节点：非空时诊断区改为展示该节点的绑定人格
-  const [selectedNode, setSelectedNode] = useState<{ kind: "session" | "scope"; key: string; label: string } | null>(null);
+  // 右栏树被点击选中的工作区/项目节点：非空时诊断区改为展示该节点的绑定人格
+  const [selectedNode, setSelectedNode] = useState<{ kind: "scope"; key: string; label: string } | null>(null);
   // 当前会话解析诊断（未选中节点时，展示最近活跃会话命中的人格来源）
   const [diag, setDiag] = useState<ScopeDiag | null>(null);
   const [diagLoading, setDiagLoading] = useState(true);
@@ -489,41 +475,11 @@ export function PersonaManagerModal({ open, onClose, t, container }: Props): Rea
       .finally(() => setBusy(false));
   };
 
-  // 设置某会话的绑定（'default' → 回落默认/上层），随后回写该会话节点的 boundPersonaId
-  const handleSessionBind = (sessionId: string, personaId: string) => {
-    const value = personaId === "default" ? "" : personaId;
-    setBusy(true);
-    setError(null);
-    apiSetSessionPersonaBinding(sessionId, value || "default")
-      .then(({ personaId: bound }) => {
-        setScopes((prev) =>
-          prev.map((node) => rewriteSessionPersona(node, sessionId, bound)),
-        );
-        loadDiag(true);
-        notifyDataChanged();
-        setMsg({ text: t("pl.personas.bindDone"), kind: "info" });
-      })
-      .catch(() => setError(t("pl.personas.opFailed")))
-      .finally(() => setBusy(false));
-  };
-
   // 递归回写树里某工作区/项目路径节点的绑定人格
   const rewriteScopePersona = (node: ScopeNode, targetPath: string, personaId: string): ScopeNode =>
     node.path === targetPath
       ? { ...node, bound: personaId }
       : { ...node, children: node.children.map((child) => rewriteScopePersona(child, targetPath, personaId)) };
-
-  // 递归回写树里某会话节点的绑定人格
-  const rewriteSessionPersona = (node: ScopeNode, sessionId: string, personaId: string): ScopeNode => {
-    const sessions = node.sessions?.map((s) =>
-      s.id === sessionId ? { ...s, boundPersonaId: personaId } : s,
-    );
-    return {
-      ...node,
-      sessions,
-      children: node.children.map((child) => rewriteSessionPersona(child, sessionId, personaId)),
-    };
-  };
 
   // 折叠/展开工作区/项目
   const toggleExpand = (path: string) =>
@@ -570,8 +526,8 @@ export function PersonaManagerModal({ open, onClose, t, container }: Props): Rea
     );
   };
 
-  // 类型徽标（工作区/项目/会话通用）
-  const renderKindBadge = (kind: "workspace" | "project" | "session"): ReactNode => (
+  // 类型徽标（工作区/项目）
+  const renderKindBadge = (kind: "workspace" | "project"): ReactNode => (
     <span
       style={{
         flexShrink: 0,
@@ -586,63 +542,14 @@ export function PersonaManagerModal({ open, onClose, t, container }: Props): Rea
     >
       {kind === "workspace"
         ? t("pl.personas.scopes.workspace")
-        : kind === "project"
-          ? t("pl.personas.scopes.project")
-          : t("pl.personas.scopes.session")}
+        : t("pl.personas.scopes.project")}
     </span>
-  );
-
-  // 渲染单个会话节点（挂在工作区/项目下的会话行）
-  const renderSessionNode = (session: SessionNode, depth: number): ReactNode => (
-    <div key={session.id} style={{ marginLeft: depth * 18 }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          padding: "5px 0",
-          minHeight: 28,
-        }}
-      >
-        <span style={{ flexShrink: 0, width: 18 }} />
-        {renderKindBadge("session")}
-        <span
-          onClick={() =>
-            setSelectedNode((prev) =>
-              prev?.kind === "session" && prev.key === session.id
-                ? null
-                : { kind: "session", key: session.id, label: session.title },
-            )
-          }
-          style={{
-            flex: 1,
-            fontSize: 12.5,
-            color: TONE.text,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            cursor: "pointer",
-            textDecoration:
-              selectedNode?.kind === "session" && selectedNode.key === session.id
-                ? "underline"
-                : undefined,
-            textUnderlineOffset: 3,
-          }}
-          title={session.cwd || session.id}
-        >
-          {session.title}
-        </span>
-        {renderPersonaSelect(session.boundPersonaId, (v) => handleSessionBind(session.id, v))}
-      </div>
-    </div>
   );
 
   // 渲染单个绑定树节点；depth 决定缩进
   const renderScopeNode = (node: ScopeNode, depth: number): ReactNode => {
     const hasChildren = node.children.length > 0;
-    // 「只显示工作区和项目」视图下不展示挂在下方的会话
-    const hasSessions = scopeView !== "scopes" && (node.sessions?.length ?? 0) > 0;
-    const isExpandable = hasChildren || hasSessions;
+    const isExpandable = hasChildren;
     const displayTitle = node.path === UNMATCHED_SCOPE_PATH ? t("pl.personas.scopes.others") : node.title;
     return (
       <div key={node.path} style={{ marginLeft: depth * 18 }}>
@@ -716,11 +623,6 @@ export function PersonaManagerModal({ open, onClose, t, container }: Props): Rea
         {expanded.has(node.path) && hasChildren && (
           <div style={{ display: "flex", flexDirection: "column" }}>
             {node.children.map((child) => renderScopeNode(child, depth + 1))}
-          </div>
-        )}
-        {expanded.has(node.path) && hasSessions && (
-          <div style={{ display: "flex", flexDirection: "column" }}>
-            {node.sessions!.map((s) => renderSessionNode(s, depth + 1))}
           </div>
         )}
       </div>
@@ -1196,39 +1098,6 @@ export function PersonaManagerModal({ open, onClose, t, container }: Props): Rea
               <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.6, marginTop: 4 }}>
                 {t("pl.personas.scopes.hint")}
               </div>
-              {/* 视图切换：工作树和会话 / 只显示工作区和项目 / 只显示会话 */}
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
-                {(
-                  [
-                    ["all", t("pl.personas.scopes.viewAll")],
-                    ["scopes", t("pl.personas.scopes.viewScopes")],
-                    ["sessions", t("pl.personas.scopes.viewSessions")],
-                  ] as const
-                ).map(([key, label]) => {
-                  const active = scopeView === key;
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      onClick={() => setScopeView(key)}
-                      style={{
-                        flexShrink: 0,
-                        border: `1px solid ${active ? TONE.accent : TONE.border}`,
-                        background: active ? TONE.accentSoft : "transparent",
-                        color: active ? TONE.accent : TONE.quiet,
-                        borderRadius: 999,
-                        padding: "2px 10px",
-                        fontSize: 11,
-                        lineHeight: "18px",
-                        cursor: "pointer",
-                        transition: "all .24s cubic-bezier(.22,1,.36,1)",
-                      }}
-                    >
-                      {label}
-                    </button>
-                  );
-                })}
-              </div>
               {/* 绑定详情：选中节点时展示该节点的绑定人格；否则展示最近活跃会话命中的人格来源 */}
               {(() => {
                 // 选中节点的绑定人格信息（实时按当前绑定状态读取）
@@ -1241,11 +1110,6 @@ export function PersonaManagerModal({ open, onClose, t, container }: Props): Rea
                   selPersonaId = node?.bound ?? "";
                   selPath = selectedNode.key;
                   if (selPersonaId) selSource = t("pl.diag.workspace");
-                } else if (selectedNode?.kind === "session") {
-                  const session = findSessionNode(scopes, selectedNode.key);
-                  selPersonaId = session?.boundPersonaId ?? "";
-                  selPath = session?.cwd || session?.id || "";
-                  if (selPersonaId) selSource = t("pl.diag.session");
                 }
                 const boundPersona = personas.find((p) => p.id === selPersonaId);
                 selPersonaName = selPersonaId
@@ -1362,42 +1226,21 @@ export function PersonaManagerModal({ open, onClose, t, container }: Props): Rea
                 return <div style={{ minHeight: 72 }} />;
               })()}
             </div>
-            {/* 树内容：按视图模式渲染（工作树+会话 / 仅工作区项目 / 仅会话平铺） */}
+            {/* 树内容：工作区/项目绑定树 */}
             <div style={{ display: "flex", flexDirection: "column", padding: "10px 10px 10px" }}>
               {!scopesLoaded ? (
                 <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "14px 0" }}>
                   {t("pl.achievements.loading")}
                 </div>
-              ) : (scopeView === "sessions"
-                ? (() => {
-                    // 平铺收集全部会话（含未匹配分组），保持系统会话列表顺序
-                    const sess: SessionNode[] = [];
-                    const walk = (nodes: ScopeNode[]) => {
-                      for (const n of nodes) {
-                        if (n.sessions) sess.push(...n.sessions);
-                        walk(n.children);
-                      }
-                    };
-                    walk(scopes);
-                    return sess.length === 0 ? (
-                      <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "14px 0" }}>
-                        {t("pl.personas.scopes.empty")}
-                      </div>
-                    ) : (
-                      <div style={{ display: "flex", flexDirection: "column" }}>
-                        {sess.map((s) => renderSessionNode(s, 0))}
-                      </div>
-                    );
-                  })()
-                : scopes.length === 0 ? (
-                  <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "14px 0" }}>
-                    {t("pl.personas.scopes.empty")}
-                  </div>
-                ) : (
-                  <div style={{ display: "flex", flexDirection: "column" }}>
-                    {scopes.map((ws) => renderScopeNode(ws, 0))}
-                  </div>
-                ))}
+              ) : scopes.length === 0 ? (
+                <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "14px 0" }}>
+                  {t("pl.personas.scopes.empty")}
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column" }}>
+                  {scopes.map((ws) => renderScopeNode(ws, 0))}
+                </div>
+              )}
             </div>
           </div>
         </div>

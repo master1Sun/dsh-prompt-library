@@ -1,6 +1,6 @@
 {
   "name": "@sunjuntao/dsh-prompt-library",
-  "version": "0.15.0",
+  "version": "0.15.1",
   "description": "DSH 提示词库插件：集中管理提示词（增删改查、标签分类、导入导出、AI 优化），聊天快捷收录与调用。 DSH Prompt Library plugin: manage prompts (CRUD, tags, import/export, AI polish), quick capture & reuse in chat.",
   "type": "module",
   "main": "./lib/index.js",
@@ -65,8 +65,7 @@
     "git:minor": "pnpm version minor",
     "git:major": "pnpm version major",
     "git-push": "git push && git push --tags",
-    "release": "node scripts/release.mjs",
-    "test": "node scripts/run-tests.mjs"
+    "release": "node scripts/release.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1-rc.1",
@@ -100,9 +99,6 @@
     "node": ">=22.19"
   },
   "dependencies": {
-    "js-yaml": "^5.3.0",
-    "@types/prismjs": "^1.26.6",
-    "jszip": "^3.10.1",
-    "prismjs": "^1.30.0"
+    "js-yaml": "^5.3.0"
   }
 }

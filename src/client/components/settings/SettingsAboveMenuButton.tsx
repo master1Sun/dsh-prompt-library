@@ -83,46 +83,11 @@ const NAV_ITEMS: NavItem[] = [
     iconBody: '<path d="M4 5.5C4 4.7 4.7 4 5.5 4H11v15H5.5C4.7 19 4 18.3 4 17.5v-12Z"/><path d="M20 5.5C20 4.7 19.3 4 18.5 4H13v15h5.5c.8 0 1.5-.7 1.5-1.5v-12Z"/>',
   },
   {
-    id: "skill",
-    labelKey: "pl.ctx.inject",
+    id: "workspaceInstructions",
+    labelKey: "pl.ctx.workspaceInstructions",
     iconBg: "rgba(139, 92, 246, .12)",
     iconColor: "#8b5cf6",
     iconBody: '<path d="M4 5.5h9M4 8.5h5.5M4 11.5h9"/>',
-  },
-  {
-    id: "dashboard",
-    labelKey: "pl.ctx.dashboard",
-    iconBg: "rgba(37, 99, 235, .12)",
-    iconColor: "var(--dsw-alias-brand-primary,#2563eb)",
-    iconBody: '<path d="M7 13V7M11 13V9M15 13V4M4 13h15"/>',
-  },
-  {
-    id: "achievement",
-    labelKey: "pl.ctx.achievements",
-    iconBg: "rgba(217, 119, 6, .14)",
-    iconColor: "#b45309",
-    iconBody: '<path d="M5.8 2.5h4.4v3a2.2 2.2 0 0 1-4.4 0v-3Z"/><path d="M5.8 3.5H4.2A1.2 1.2 0 0 0 3 4.7v.1a2.6 2.6 0 0 0 2.8 2.6"/><path d="M10.2 3.5h1.6A1.2 1.2 0 0 1 13 4.7v.1a2.6 2.6 0 0 1-2.8 2.6"/><path d="M8 7.4v1.6M6.5 12.2h3M7.2 14h1.6"/>',
-  },
-  {
-    id: "announce",
-    labelKey: "pl.ctx.announce",
-    iconBg: "rgba(220, 38, 38, .1)",
-    iconColor: "var(--dsw-alias-state-error-primary,#dc2626)",
-    iconBody: '<path d="M3 8.5V7a1.5 1.5 0 0 1 1.5-1.5h1L10 3.5v9l-4.5-2H4.5A1.5 1.5 0 0 1 3 9v-.5Z"/><path d="M11 6.5a2.6 2.6 0 0 1 0 3"/>',
-  },
-  {
-    id: "dbPreview",
-    labelKey: "pl.ctx.dbPreview",
-    iconBg: "rgba(13, 148, 136, .12)",
-    iconColor: "#0d9488",
-    iconBody: '<ellipse cx="8" cy="4" rx="5" ry="1.8"/><path d="M3 4v5.5c0 1 2.2 1.8 5 1.8s5-.8 5-1.8V4"/><path d="M3 9.5V15c0 1 2.2 1.8 5 1.8s5-.8 5-1.8V9.5"/>',
-  },
-  {
-    id: "pluginReco",
-    labelKey: "pl.ctx.pluginReco",
-    iconBg: "rgba(13, 148, 136, .12)",
-    iconColor: "#0d9488",
-    iconBody: '<path d="M3 5.5 8 3l5 2.5v5L8 13 3 10.5Z"/><path d="M3 5.5 8 8l5-2.5M8 8v5"/>',
   },
 ];
 
@@ -131,14 +96,9 @@ const PANEL_TYPE_MAP: Record<string, string> = {
   lexicon: "lexicon",
   importExport: "importExport",
   persona: "persona",
-  skill: "skill",
-  dashboard: "dashboard",
-  achievement: "achievement",
-  announce: "announce",
+  workspaceInstructions: "workspaceInstructions",
   tags: "tags",
   trash: "trash",
-  dbPreview: "dbPreview",
-  pluginReco: "pluginReco",
 };
 
 let pendingPanelType: string | null = null;

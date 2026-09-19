@@ -144,7 +144,7 @@ export interface SessionNode {
 /** 「其他会话」分组的合成路径 key（未命中任何工作区/项目的会话归入该分组，前端据此本地化标题）。 */
 export const UNMATCHED_SCOPE_PATH = "__pl_unmatched__";
 
-/** 工作区/项目树节点：供人格管理的「树形选择工作区/项目/会话并绑定」使用。 */
+/** 「工作区 → 项目 → 会话」树节点：供技能管理右栏「项目绑定」树形选择并绑定。 */
 export interface ScopeNode {
   /** 绝对路径（绑定的 key）。 */
   path: string;
@@ -164,20 +164,10 @@ export interface ScopeNode {
 
 /** 插件设置。 */
 export interface PluginSettings {
-  /** 手动确认学习：检测到可学习内容时在聊天框弹出保存/取消，确认后才入库。 */
-  autoLearnManualConfirm: boolean;
-  /** 自动学习提示词标签。 */
-  autoLearnTag: string;
-  /** 自动学习最小长度。 */
-  autoLearnMinLength: number;
   /** 面板宽度（px）。 */
   panelWidth: number;
   /** 面板高度（px）。 */
   panelHeight: number;
-  /** 词库助手显隐（主开关）：关闭后右侧面板也无法启用。 */
-  assistantEnabled: boolean;
-  /** 是否显示官方右侧栏中的「词库」面板 tab（设置 › 显示与交互）。关闭后不注册该 tab，右侧栏不再出现词库入口；默认开启。 */
-  rightPanelEnabled: boolean;
   /** 是否显示左侧设置按钮上方的词库按钮。 */
   settingsAboveMenuEnabled: boolean;
   /** 是否在聊天框工具栏显示词库按钮。 */
@@ -196,61 +186,21 @@ export interface PluginSettings {
   selectionAddEnabled: boolean;
   /** 是否启用基于聊天上下文的提示词推荐（显示在输入框上方，输入框为空时展示）。 */
   contextRecommendEnabled: boolean;
-  /** 是否启用 AI 智能完善（调用 harness LLM 生成标题/标签/摘要并改写正文）。 */
-  aiEnrichEnabled: boolean;
   /** AI 调用使用的 provider 路由（留空则自动发现）。 */
   aiProvider: string;
   /** AI 调用使用的模型 id（留空则自动发现）。 */
   aiModel: string;
-  /** DeepSeek API Key（可选）：填写后用于向 DeepSeek 官方余额接口查询账户余额并实时推送；留空则不查询。 */
-  deepseekApiKey: string;
-  /** 是否自动更新：开启后后台发现有新版本即自动安装，无需手动干预。 */
-  autoUpdateEnabled: boolean;
-  /** 是否启用公告弹窗（词库助手右键菜单「公告」打开使用手册 + 版本通告）。仅当词库助手显示时可开关，默认开启。 */
-  announcementEnabled: boolean;
-  /** 是否启用词库助手等级显示（等级助手）：控制助手等级徽章与右键菜单「成就」入口。默认开启。 */
-  levelEnabled: boolean;
-  /** 是否启用词库助手「我的等级公告」：新成就解锁时的助手气泡播报。默认开启。 */
-  levelAnnouncementEnabled: boolean;
-  /** 是否启用「人格管理」入口（词库助手右键菜单项）。仅当词库助手显示时可开关，默认开启。 */
-  personaEnabled: boolean;
-  /** 是否启用「技能管理」入口（词库助手右键菜单项，管理会话级技能并绑定到工作区/项目）。仅当词库助手显示时可开关，默认开启。 */
-  injectEnabled: boolean;
-  /** 是否启用「看板」入口（词库助手右键菜单项，打开统计可视化面板）。仅当词库助手显示时可开关，默认开启。 */
-  dashboardEnabled: boolean;
-  /** 是否启用「数据管理」入口（词库助手右键菜单项，含导入导出/标签/回收站）。仅当词库助手显示时可开关，默认开启。 */
+  /** 是否启用「数据管理」入口（含导入导出/标签/回收站）。默认开启。 */
   dataManagementEnabled: boolean;
-  /** 是否启用自动备份（启动时及按周期把数据库备份到 backup 目录）。 */
-  backupEnabled: boolean;
-  /** 自动备份保留的备份文件份数（超出时自动清理最旧的）。 */
-  backupRetention: number;
-  /** 自动备份周期：daily（每天）/ weekly（每周）/ monthly（每月）。 */
-  backupSchedule: "daily" | "weekly" | "monthly";
-  /** 自动备份文件格式：db（复制数据库文件）/ json（导出为 JSON 备份文件）。 */
-  backupFormat: "db" | "json";
-  /** 词库助手助手形象：whale（鲸鱼款，静态雪碧图）/ dshpet（鲸鱼款，dsh-pet 动态动画）。 */
-  assistantCharacter: "whale" | "dshpet";
-  /** 数据库开发者模式密码的 SHA-256 摘要（不落盘明文，仅存摘要用于校验）。缺省表示未设置，使用默认密码。 */
-  dbDevPasswordHash?: string;
 }
 
 /** 设置的默认值。 */
 export const DEFAULT_SETTINGS: PluginSettings = {
-  autoLearnTag: "auto-learned", // 自动学习提示词使用的默认标签
-  autoLearnMinLength: 60, // 自动学习的最小字符长度（少于该长度不学习）
   panelWidth: 360, // 右侧面板宽度（px）
   panelHeight: 500, // 右侧面板高度（px）
   maxPromptCount: 100, // 提示词最大存储数量（超出时按使用次数/更新时间淘汰）
-  aiProvider: "", // AI 智能完善使用的 provider（留空自动发现）
-  aiModel: "", // AI 智能完善使用的模型 id（留空自动发现）
-  deepseekApiKey: "", // DeepSeek API Key（可选）：用于查询并实时推送账户余额
-  backupRetention: 15, // 自动备份保留的备份文件份数（超出自动清理最旧的）
-  backupSchedule: "weekly", // 自动备份周期：daily / weekly / monthly
-  backupFormat: "db", // 自动备份文件格式：db（数据库副本）/ json（JSON 导出）
-  assistantCharacter: "whale", // 词库助手助手形象：鲸鱼款·静态（默认）
-  autoLearnManualConfirm: true, // 手动确认学习（检测到可学习内容时弹保存/取消，确认后才入库）
-  assistantEnabled: true, // 词库助手显隐（主开关，关闭后右侧面板也无法启用）
-  rightPanelEnabled: true, // 是否显示官方右侧栏「词库」面板 tab（关闭后右侧栏不再出现词库入口）
+  aiProvider: "", // AI 调用使用的 provider（留空自动发现）
+  aiModel: "", // AI 调用使用的模型 id（留空自动发现）
   settingsAboveMenuEnabled: true, // 是否显示左侧设置按钮上方的词库按钮（默认开启）
   showComposerButton: true, // 是否在聊天框工具栏显示词库按钮
   composerButtonIconOnly: true, // 词库按钮用纯图标显示（隐藏文字，仅保留图标）
@@ -259,14 +209,5 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   tildaTriggerEnabled: true, // 是否启用输入 ~ 触发词库选择
   selectionAddEnabled: true, // 是否启用选中文本后浮动「添加提示词」入口
   contextRecommendEnabled: true, // 是否启用基于聊天上下文的提示词推荐
-  aiEnrichEnabled: true, // 是否启用 AI 智能完善（生成标题/标签/摘要并改写正文）
-  autoUpdateEnabled: true, // 自动更新：发现新版本后台自动安装
-  announcementEnabled: true, // 公告入口：词库助手右键菜单展示「公告」
-  levelEnabled: true, // 等级助手：助手等级徽章与右键菜单「成就」入口
-  levelAnnouncementEnabled: true, // 我的等级公告：新成就解锁时的气泡播报
-  personaEnabled: true, // 人格管理：词库助手右键菜单展示「人格管理」入口
-  injectEnabled: true, // 技能管理：词库助手右键菜单展示「技能管理」入口
-  dashboardEnabled: true, // 看板：词库助手右键菜单展示「看板」入口（统计可视化）
-  dataManagementEnabled: true, // 数据管理：词库助手右键菜单展示「数据管理」入口
-  backupEnabled: true, // 是否启用自动备份（启动时及按周期备份数据库）
+  dataManagementEnabled: true, // 数据管理：卡片菜单/词库菜单展示「数据管理」入口
 };

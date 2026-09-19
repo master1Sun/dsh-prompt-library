@@ -103,7 +103,7 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
 
   const settings = useSettings();
 
-  // 兜底监听 host 推送的 fill-draft（/prompts -AI / -enrich 结果）：
+  // 兜底监听 host 推送的 fill-draft（AI 润色/完善结果）：
   // 与 PromptLibraryButton 同slot挂载，任一方存在都能把内容填进聊天框。
   useFillDraft((body) => {
     if (body) inputActions.setDraft(body);

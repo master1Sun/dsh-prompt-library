@@ -113,15 +113,7 @@ await esbuildBuild({
   logLevel: "info",
 });
 
-// 复制随插件分发的静态素材（助手小人雪碧图等）到 lib/assets，供 host 路由按字节返回。
-const srcAssets = join(root, "assets");
-try {
-  await cp(srcAssets, join(libDir, "assets"), { recursive: true });
-} catch {
-  /* 无素材目录时忽略 */
-}
-
-// 复制外置文档资源（使用手册 / HARNESS 默认模板 / 版本说明）到 lib/doc，
+// 复制外置文档资源（HARNESS 默认模板等随包文案）到 lib/doc，
 // host 侧运行时用 import.meta.url 相对产物读取（见 src/host/bundle-doc.ts）。
 const srcDoc = join(root, "doc");
 try {

@@ -112,7 +112,7 @@ export function RecycleManagePanel(props: { t?: PLTranslate }): ReactNode {
     refreshTrash();
   }, [refreshTrash]);
 
-  // 数据变化（含 host 侧 /prompts 保存）时同步刷新回收站（面板挂载时生效）
+  // 数据变化（含 host 侧改动）时同步刷新回收站（面板挂载时生效）
   useDataChanged(() => {
     refreshTrash();
   });

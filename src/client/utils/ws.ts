@@ -2,8 +2,8 @@
  * 浏览器端 WebSocket 订阅（全插件共享一条连接）。
  *
  * 本插件的 host → client 推送原先是两条 SSE（EventSource 自带重连），换成 WS
- * 后：全插件只在 `/api/prompt-library/events` 上建**一条**连接，数据变更广播
- * 与词库助手状态流都走它，用消息信封的 `type` 区分；重连也要自己兜。
+ * 后：全插件只在 `/api/prompt-library/events` 上建**一条**连接，数据变更广播等
+ * 都走它，用消息信封的 `type` 区分；重连也要自己兜。
  *
  * 因此这里不做「每次订阅一条连接」，而是单例连接 + 监听器集合：
  * {@link subscribePush} 注册/注销监听，最后一个监听注销后连接仍保留（host 的
@@ -31,24 +31,9 @@ interface SocketState {
   listeners: Set<(message: JsonMessage) => void>;
   timer?: ReturnType<typeof setTimeout>;
   attempt: number;
-  /** 已下发到服务端的文案语言（助手状态流用）。 */
-  lang: string;
 }
 
 let state: SocketState | null = null;
-
-/** 连接就绪后补发语言（连上之前就设置过语言时不会丢）。 */
-function flushPending(current: SocketState): void {
-  if (!current.lang) return;
-  const socket = current.socket;
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    try {
-      socket.send(JSON.stringify({ type: "set-lang", lang: current.lang }));
-    } catch {
-      /* 发送失败忽略：下一次重连后还会补发 */
-    }
-  }
-}
 
 function scheduleReconnect(current: SocketState): void {
   if (current.timer !== undefined) return;
@@ -71,7 +56,6 @@ function connect(current: SocketState): void {
   current.socket = socket;
   socket.onopen = () => {
     current.attempt = 0;
-    flushPending(current);
   };
   socket.onmessage = (event: MessageEvent) => {
     if (typeof event.data !== "string") return;
@@ -103,7 +87,7 @@ function connect(current: SocketState): void {
 function ensureSocket(): SocketState | null {
   if (typeof window === "undefined" || typeof WebSocket === "undefined") return null;
   if (state === null) {
-    state = { socket: null, listeners: new Set(), attempt: 0, lang: "" };
+    state = { socket: null, listeners: new Set(), attempt: 0 };
     connect(state);
   }
   return state;
@@ -120,23 +104,4 @@ export function subscribePush(listener: (message: JsonMessage) => void): () => v
   return () => {
     current.listeners.delete(listener);
   };
-}
-
-/** 通过共享连接向 host 发一条 JSON 消息（连接未就绪时静默丢弃）。 */
-export function sendPush(message: JsonMessage): void {
-  const socket = state?.socket;
-  if (!socket || socket.readyState !== WebSocket.OPEN) return;
-  try {
-    socket.send(JSON.stringify(message));
-  } catch {
-    /* 发送失败忽略 */
-  }
-}
-
-/** 设置助手状态流的文案语言：记录在当前连接上，并立即下发（重连后自动补发）。 */
-export function setPushLang(lang: string): void {
-  const current = ensureSocket();
-  if (current === null) return;
-  current.lang = lang;
-  flushPending(current);
 }

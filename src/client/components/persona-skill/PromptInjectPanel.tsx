@@ -17,7 +17,7 @@
 import { useEffect, useRef, useState, type ChangeEvent, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
-import type { ScopeNode, SessionNode, SessionPrompt } from "../../../types.js";
+import type { ScopeNode, SessionPrompt } from "../../../types.js";
 import { clampTitle, UNMATCHED_SCOPE_PATH } from "../../../types.js";
 import {
   createSessionPrompt as apiCreateSessionPrompt,
@@ -29,8 +29,6 @@ import {
   listPersonas as apiListPersonas,
   setSessionPromptBinding,
   clearSessionPromptBinding,
-  setSessionPromptBindingForSession,
-  clearSessionBinding as apiClearSessionBinding,
   clearAllBindings as apiClearAllBindings,
   updateSessionPrompt as apiUpdateSessionPrompt,
   diagSession,
@@ -126,12 +124,8 @@ export function PromptInjectPanel({ open, onClose, t, container }: Props): React
   const [bindings, setBindings] = useState<Map<string, string[]>>(new Map());
   const [scopesLoaded, setScopesLoaded] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  // 右栏树视图切换：all = 工作树和会话（默认） / scopes = 只显示工作区和项目 / sessions = 只显示会话
-  const [scopeView, setScopeView] = useState<"all" | "scopes" | "sessions">("all");
   // 正在配置绑定的节点路径（null = 无）
   const [editingPath, setEditingPath] = useState<string | null>(null);
-  // 正在配置绑定的会话 id（null = 无；会话用独立状态，避免与节点路径冲突）
-  const [editingSession, setEditingSession] = useState<string | null>(null);
   const [draftIds, setDraftIds] = useState<Set<string>>(new Set());
   // 绑定配置面板的搜索关键词（卡片列表筛选）
   const [bindSearch, setBindSearch] = useState("");
@@ -196,24 +190,14 @@ export function PromptInjectPanel({ open, onClose, t, container }: Props): React
       .catch(() => {});
   }, [open]);
 
-  // 右栏树被点击选中的会话/工作区节点：非空时诊断区改为展示该节点的绑定技能/人格
-  const [selectedNode, setSelectedNode] = useState<{ kind: "session" | "scope"; key: string; label: string } | null>(null);
+  // 右栏树被点击选中的工作区/项目节点：非空时诊断区改为展示该节点的绑定技能/人格
+  const [selectedNode, setSelectedNode] = useState<{ kind: "scope"; key: string; label: string } | null>(null);
   // 递归在树里按路径查找工作区/项目节点
   const findScopeNode = (nodes: ScopeNode[], path: string): ScopeNode | undefined => {
     for (const n of nodes) {
       if (n.path === path) return n;
       const hit = findScopeNode(n.children, path);
       if (hit) return hit;
-    }
-    return undefined;
-  };
-  // 递归在树里按 id 查找会话节点
-  const findSessionNode = (nodes: ScopeNode[], sessionId: string): SessionNode | undefined => {
-    for (const n of nodes) {
-      const hit = n.sessions?.find((s) => s.id === sessionId);
-      if (hit) return hit;
-      const deep = findSessionNode(n.children, sessionId);
-      if (deep) return deep;
     }
     return undefined;
   };
@@ -279,7 +263,6 @@ export function PromptInjectPanel({ open, onClose, t, container }: Props): React
     setDetailId(null);
     setCreateName("");
     setEditingPath(null);
-    setEditingSession(null);
     setDraftIds(new Set());
     setBindSearch("");
     setEditTitle("");
@@ -774,17 +757,7 @@ export function PromptInjectPanel({ open, onClose, t, container }: Props): React
   // 打开某节点的配置面板（草稿 = 当前绑定）
   const openConfig = (nodePath: string) => {
     setEditingPath((prev) => (prev === nodePath ? null : nodePath));
-    setEditingSession(null);
     setDraftIds(new Set(bindings.get(nodePath) ?? []));
-    setBindSearch("");
-    setError(null);
-  };
-
-  // 打开某会话的配置面板（草稿 = 该会话当前绑定的技能）
-  const openSessionConfig = (sessionId: string, boundPromptIds: string[]) => {
-    setEditingSession((prev) => (prev === sessionId ? null : sessionId));
-    setEditingPath(null);
-    setDraftIds(new Set(boundPromptIds));
     setBindSearch("");
     setError(null);
   };
@@ -802,34 +775,6 @@ export function PromptInjectPanel({ open, onClose, t, container }: Props): React
       })
       .catch(() => setError(t("pl.inject.opFailed")))
       .finally(() => setBusy(false));
-  };
-
-  // 保存某会话的绑定
-  const saveSessionBinding = (sessionId: string) => {
-    setBusy(true);
-    setError(null);
-    setSessionPromptBindingForSession(sessionId, [...draftIds])
-      .then(() => {
-        // 回写树里该会话节点的绑定
-        setScopes((prev) => prev.map((node) => rewriteSessionPrompts(node, sessionId, [...draftIds])));
-        setEditingSession(null);
-        notifyDataChanged();
-        setMsg({ text: t("pl.inject.bindDone"), kind: "info" });
-      })
-      .catch(() => setError(t("pl.inject.opFailed")))
-      .finally(() => setBusy(false));
-  };
-
-  // 递归回写树里某会话节点的技能绑定
-  const rewriteSessionPrompts = (node: ScopeNode, sessionId: string, promptIds: string[]): ScopeNode => {
-    const sessions = node.sessions?.map((s) =>
-      s.id === sessionId ? { ...s, boundPromptIds: promptIds } : s,
-    );
-    return {
-      ...node,
-      sessions,
-      children: node.children.map((child) => rewriteSessionPrompts(child, sessionId, promptIds)),
-    };
   };
 
   // 清除某节点的绑定
@@ -851,26 +796,9 @@ export function PromptInjectPanel({ open, onClose, t, container }: Props): React
       .finally(() => setBusy(false));
   };
 
-  // 清除某会话的全部绑定
-  const clearSessionBinding = (sessionId: string) => {
-    setBusy(true);
-    setError(null);
-    apiClearSessionBinding(sessionId)
-      .then(() => {
-        setScopes((prev) => prev.map((node) => rewriteSessionPrompts(node, sessionId, [])));
-        setEditingSession(null);
-        notifyDataChanged();
-        setMsg({ text: t("pl.inject.bindDone"), kind: "info" });
-      })
-      .catch(() => setError(t("pl.inject.opFailed")))
-      .finally(() => setBusy(false));
-  };
-
-  // 配置面板：搜索 + 卡片列表，勾选即绑定的目标。
+  // 配置面板：搜索 + 卡片列表，勾选即绑定的目标（工作区/项目路径）。
   // 展示全部技能：启用技能可勾选/取消；禁用技能置灰（按钮与内容），仅保留已有绑定可见、不能新选。
-  // target 既可以是工作区/项目路径，也可以是会话 id（由 editingSession 判定走会话绑定 API）。
   const renderConfigPanel = (target: string): ReactNode => {
-    const isSession = editingSession === target;
     const kw = bindSearch.trim().toLowerCase();
     const filtered = kw
       ? prompts.filter(
@@ -1009,89 +937,16 @@ export function PromptInjectPanel({ open, onClose, t, container }: Props): React
           <span style={{ flex: 1, fontSize: 10.5, color: TONE.quiet }}>
             {t("pl.inject.selectedCount", { count: draftIds.size })}
           </span>
-          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={busy} onClick={() => (isSession ? setEditingSession(null) : setEditingPath(null))}>
+          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={busy} onClick={() => setEditingPath(null)}>
             {t("pl.personas.cancel")}
           </Button>
-          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={busy || prompts.length === 0} onClick={() => (isSession ? clearSessionBinding(target) : clearBinding(target))}>
+          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={busy || prompts.length === 0} onClick={() => clearBinding(target)}>
             {t("pl.inject.clearBinding")}
           </Button>
-          <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} disabled={busy} onClick={() => (isSession ? saveSessionBinding(target) : saveBinding(target))}>
+          <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} disabled={busy} onClick={() => saveBinding(target)}>
             {t("pl.personas.save")}
           </Button>
         </div>
-      </div>
-    );
-  };
-
-  // 渲染单个会话节点（挂在工作区/项目下的会话行）
-  const renderSessionNode = (session: SessionNode, depth: number): ReactNode => {
-    const isEditing = editingSession === session.id;
-    const boundCount = session.boundPromptIds.length;
-    const isSelected = selectedNode?.kind === "session" && selectedNode.key === session.id;
-    return (
-      <div key={session.id} style={{ marginLeft: depth * 18 }}>
-        <div
-          onClick={() => setSelectedNode(isSelected ? null : { kind: "session", key: session.id, label: session.title })}
-          title={t("pl.diag.title")}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            padding: "5px 6px",
-            minHeight: 28,
-            borderRadius: 7,
-            background: isSelected ? TONE.accentSoft : "transparent",
-            cursor: "pointer",
-          }}
-        >
-          <span style={{ flexShrink: 0, width: 18 }} />
-          <span
-            style={{
-              flexShrink: 0,
-              fontSize: 10.5,
-              color: TONE.quiet,
-              background: TONE.accentSoft,
-              border: `1px solid ${TONE.border}`,
-              borderRadius: 999,
-              padding: "0 6px",
-              lineHeight: "15px",
-            }}
-          >
-            {t("pl.personas.scopes.session")}
-          </span>
-          <span
-            style={{
-              flex: 1,
-              fontSize: 12.5,
-              color: TONE.text,
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-            }}
-            title={session.cwd || session.id}
-          >
-            {session.title}
-          </span>
-          {boundCount > 0 && (
-            <span
-              style={{
-                flexShrink: 0,
-                fontSize: 10,
-                color: TONE.accent,
-                background: TONE.accentSoft,
-                borderRadius: 999,
-                padding: "0 7px",
-                lineHeight: "16px",
-              }}
-            >
-              {t("pl.inject.boundCount", { count: boundCount })}
-            </span>
-          )}
-          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={busy} onClick={(e: ReactMouseEvent) => { e.stopPropagation(); openSessionConfig(session.id, session.boundPromptIds); }}>
-            {isEditing ? t("pl.inject.cancelConfig") : t("pl.inject.config")}
-          </Button>
-        </div>
-        {isEditing && renderConfigPanel(session.id)}
       </div>
     );
   };
@@ -1101,9 +956,7 @@ export function PromptInjectPanel({ open, onClose, t, container }: Props): React
     const boundCount = (bindings.get(node.path) ?? []).length;
     const isEditing = editingPath === node.path;
     const hasChildren = node.children.length > 0;
-    // 「只显示工作区和项目」视图下不展示挂在下方的会话
-    const hasSessions = scopeView !== "scopes" && (node.sessions?.length ?? 0) > 0;
-    const isExpandable = hasChildren || hasSessions;
+    const isExpandable = hasChildren;
     const displayTitle = node.path === UNMATCHED_SCOPE_PATH ? t("pl.personas.scopes.others") : node.title;
     const isSelected = selectedNode?.kind === "scope" && selectedNode.key === node.path;
     return (
@@ -1202,35 +1055,21 @@ export function PromptInjectPanel({ open, onClose, t, container }: Props): React
             {node.children.map((child) => renderScopeNode(child, depth + 1))}
           </div>
         )}
-        {expanded.has(node.path) && hasSessions && (
-          <div style={{ display: "flex", flexDirection: "column" }}>
-            {node.sessions!.map((s) => renderSessionNode(s, depth + 1))}
-          </div>
-        )}
       </div>
     );
   };
 
   // 选中节点的技能/人格信息（实时从当前绑定状态读取，绑定变更后自动刷新）
   const selectedInfo = selectedNode
-    ? selectedNode.kind === "scope"
-      ? (() => {
-          const node = findScopeNode(scopes, selectedNode.key);
-          const promptIds = bindings.get(selectedNode.key) ?? [];
-          return {
-            personaId: node?.bound ?? "",
-            promptIds,
-            path: selectedNode.key,
-          };
-        })()
-      : (() => {
-          const session = findSessionNode(scopes, selectedNode.key);
-          return {
-            personaId: session?.boundPersonaId ?? "",
-            promptIds: session?.boundPromptIds ?? [],
-            path: session?.cwd || session?.id || "",
-          };
-        })()
+    ? (() => {
+        const node = findScopeNode(scopes, selectedNode.key);
+        const promptIds = bindings.get(selectedNode.key) ?? [];
+        return {
+          personaId: node?.bound ?? "",
+          promptIds,
+          path: selectedNode.key,
+        };
+      })()
     : null;
 
   return (
@@ -1482,39 +1321,6 @@ export function PromptInjectPanel({ open, onClose, t, container }: Props): React
                     <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.6, marginTop: 4 }}>
                       {t("pl.inject.projectNote")}
                     </div>
-                    {/* 视图切换：工作树和会话 / 只显示工作区和项目 / 只显示会话 */}
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
-                      {(
-                        [
-                          ["all", t("pl.personas.scopes.viewAll")],
-                          ["scopes", t("pl.personas.scopes.viewScopes")],
-                          ["sessions", t("pl.personas.scopes.viewSessions")],
-                        ] as const
-                      ).map(([key, label]) => {
-                        const active = scopeView === key;
-                        return (
-                          <button
-                            key={key}
-                            type="button"
-                            onClick={() => setScopeView(key)}
-                            style={{
-                              flexShrink: 0,
-                              border: `1px solid ${active ? TONE.accent : TONE.border}`,
-                              background: active ? TONE.accentSoft : "transparent",
-                              color: active ? TONE.accent : TONE.quiet,
-                              borderRadius: 999,
-                              padding: "2px 10px",
-                              fontSize: 11,
-                              lineHeight: "18px",
-                              cursor: "pointer",
-                              transition: "all .24s cubic-bezier(.22,1,.36,1)",
-                            }}
-                          >
-                            {label}
-                          </button>
-                        );
-                      })}
-                    </div>
                     {/* 会话解析诊断：展示当前会话最终命中哪一层（单会话 / 工作区路径 / 默认），固定随顶部标题悬浮、不随列表滚动 */}
                     {diagLoading && !selectedNode ? (
                       <div style={{ fontSize: 11, color: TONE.quiet, padding: "8px 0" }}>{t("pl.achievements.loading")}…</div>
@@ -1621,27 +1427,6 @@ export function PromptInjectPanel({ open, onClose, t, container }: Props): React
                   <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "14px 0" }}>
                     {t("pl.achievements.loading")}
                   </div>
-                ) : scopeView === "sessions" ? (
-                  (() => {
-                    // 平铺收集全部会话（含未匹配分组），保持系统会话列表顺序
-                    const sess: SessionNode[] = [];
-                    const walk = (nodes: ScopeNode[]) => {
-                      for (const n of nodes) {
-                        if (n.sessions) sess.push(...n.sessions);
-                        walk(n.children);
-                      }
-                    };
-                    walk(scopes);
-                    return sess.length === 0 ? (
-                      <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "14px 0" }}>
-                        {t("pl.personas.scopes.empty")}
-                      </div>
-                    ) : (
-                      <div style={{ display: "flex", flexDirection: "column" }}>
-                        {sess.map((s) => renderSessionNode(s, 0))}
-                      </div>
-                    );
-                  })()
                 ) : scopes.length === 0 ? (
                   <div style={{ fontSize: 12.5, color: TONE.quiet, textAlign: "center", padding: "14px 0" }}>
                     {t("pl.personas.scopes.empty")}

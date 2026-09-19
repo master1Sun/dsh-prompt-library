@@ -1,5 +1,25 @@
 [
   {
+    "version": "0.15.1",
+    "date": "2026-09-19",
+    "zh": {
+      "title": "精简收尾：死代码清理与设置迁移",
+      "items": [
+        "死代码清理：移除公告/使用手册等废弃 i18n 键、types 中残留的旧设置项、paths.ts 未使用函数与 host 侧遗留代码。",
+        "设置迁移：启动时自动清理 settings.yaml 中 12 个旧版本遗留键（API Key、备份调度、人格提示等），读取更干净。",
+        "README 效果图更新：词库设置、数据管理面板、# 触发浮层三张截图重新截取，替换过时配图。"
+      ]
+    },
+    "en": {
+      "title": "Slimdown follow-up: dead-code cleanup & settings migration",
+      "items": [
+        "Dead code removed: obsolete announcement/manual i18n keys, stale settings fields in types, unused paths.ts helpers and leftover host code.",
+        "Settings migration: 12 legacy keys (API key, backup schedule, persona tips, etc.) are auto-purged from settings.yaml at startup for cleaner reads.",
+        "README screenshots refreshed: library settings, data-management panel and # trigger overlay re-captured, replacing outdated images."
+      ]
+    }
+  },
+  {
     "version": "0.15.0",
     "date": "2026-09-16",
     "zh": {

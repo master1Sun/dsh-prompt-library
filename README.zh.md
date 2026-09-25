@@ -56,10 +56,10 @@ DSH（DeepSeek Harness）词库插件：在聊天栏提供**提示词管理**、
 ```
 ~/.dsh/prompt-library/
 ├── db/prompts.db      # 词库 + 人格 + 技能绑定（SQLite）/ prompt library, personas & bindings (SQLite)
+├── settings.json      # 插件设置（prompt-library 命名空间）
 ├── log/
 │   └── ai-YYYY-MM-DD.log   # AI 调用诊断日志（按日期分文件）
 └── character/         # （旧版遗留，仅迁移读取；人格现存于数据库）
-~/.dsh/settings.yaml   # 插件设置（prompt-library 命名空间）
 ```
 
 ## 安装

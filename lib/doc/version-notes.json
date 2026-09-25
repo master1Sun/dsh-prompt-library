@@ -1,5 +1,23 @@
 [
   {
+    "version": "0.16.0",
+    "date": "2026-09-19",
+    "zh": {
+      "title": "HARNESS 注入文案精简",
+      "items": [
+        "移除注入文本中的字面量占位符示例：模型会把花括号占位符回显进用户草稿，harness 会话上下文不再包含该演示文案。",
+        "外置模板 doc/harness.default.md 与内置兜底文案同步更新，构建产物已重建同步。"
+      ]
+    },
+    "en": {
+      "title": "Leaner HARNESS injection",
+      "items": [
+        "Removed the literal placeholder example from injected text: models were echoing the braces into user drafts, so the harness context no longer carries it.",
+        "Both the external template doc/harness.default.md and the built-in fallback updated; bundle rebuilt and synced."
+      ]
+    }
+  },
+  {
     "version": "0.15.1",
     "date": "2026-09-19",
     "zh": {

@@ -22,6 +22,7 @@ import type { PluginSettings, Prompt, TrashItem } from "../types.js";
 import { clampTitle, DEFAULT_SETTINGS, TITLE_MAX_LEN } from "../types.js";
 import {
   dbPath,
+  pluginSettingsPath,
   sessionPromptPath,
   SETTINGS_NAMESPACE,
   soulPath,
@@ -1284,25 +1285,25 @@ export function deleteTag(name: string): Promise<number> {
   }
 }
 
-// ── 设置存储（系统 settings.yaml）───────────────────────────────────────────
+// ── 设置存储（~/.dsh/prompt-library/settings.json）──────────────────────────────────
 
 /**
- * 读取系统 settings.yaml 中的插件设置命名空间（`prompt-library`）。
+ * 读取插件设置文件（~/.dsh/prompt-library/settings.json）中的命名空间（`prompt-library`）。
  * 文件不存在、无法解析或命名空间缺失/非对象时返回 undefined；
  * 任何读取失败都不向上抛错，避免干扰主流程。
  */
 async function readSystemSettingsNamespace(): Promise<Partial<PluginSettings> | undefined> {
   let text: string;
   try {
-    text = await readFile(systemSettingsPath(), "utf8");
+    text = await readFile(pluginSettingsPath(), "utf8");
   } catch {
     return undefined;
   }
   let root: unknown;
   try {
-    root = load(stripBom(text));
+    root = JSON.parse(stripBom(text));
   } catch {
-    return undefined; // 系统配置格式错误：不动它，视为命名空间缺失
+    return undefined; // 插件配置文件格式错误：不动它，视为命名空间缺失
   }
   if (typeof root !== "object" || root === null || Array.isArray(root)) return undefined;
   const ns = (root as Record<string, unknown>)[SETTINGS_NAMESPACE];
@@ -1328,37 +1329,110 @@ function stripPersistExcluded<T>(obj: T): T {
 }
 
 /**
- * 把插件设置写入系统 settings.yaml 的 `prompt-library` 命名空间：
- * 读取整个系统配置 → 仅追加/替换自己的命名空间 → 整体写回。
- * 系统其它命名空间原样保留（只可能被 YAML 重新排版，不会丢值）；
- * 系统配置不存在或无法解析时按空配置处理，不覆盖、不误改。
+ * 把插件设置写入 ~/.dsh/prompt-library/settings.json 的 `prompt-library` 命名空间：
+ * 读取整个插件配置文件 → 仅追加/替换自己的命名空间 → 整体写回。
+ * 文件不存在或无法解析时按空配置处理，不覆盖、不误改。
  */
 async function writeSettingsRaw(settings: PluginSettings): Promise<void> {
   let root: Record<string, unknown> = {};
   try {
-    const text = await readFile(systemSettingsPath(), "utf8");
-    const parsed: unknown = load(stripBom(text));
+    const text = await readFile(pluginSettingsPath(), "utf8");
+    const parsed: unknown = JSON.parse(stripBom(text));
     if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
       root = parsed as Record<string, unknown>;
     }
   } catch {
-    // 系统配置缺失或不可读：从空配置开始，仅写入自己的命名空间
+    // 插件配置缺失或不可读：从空配置开始，仅写入自己的命名空间
   }
   root[SETTINGS_NAMESPACE] = stripPersistExcluded(settings) as unknown as Record<string, unknown>;
-  await writeFile(systemSettingsPath(), dump(root, { indent: 2 }), "utf8");
+  // 确保插件目录存在（首次写入时 ~/.dsh/prompt-library/ 可能尚未创建）
+  mkdirSync(dirname(pluginSettingsPath()), { recursive: true });
+  await writeFile(pluginSettingsPath(), JSON.stringify(root, null, 2), "utf8");
 }
 
 /**
- * 读取设置：优先从系统 settings.yaml 的 `prompt-library` 命名空间读取；
- * 命名空间缺失时用默认值并写入系统配置。任何写入失败都不影响本次读取。
+ * 旧版迁移（一次性）：把系统 `~/.dsh/settings.yaml` 里本插件的 `prompt-library`
+ * 命名空间搬到新的 `~/.dsh/prompt-library/settings.json`，并从旧文件移除该命名空间，
+ * 避免重复/陈旧配置。满足以下任一条件即视为已迁移，跳过：
+ *   1. 新插件配置文件已存在且含 `prompt-library` 命名空间；
+ *   2. 旧系统配置文件不存在、无法解析，或其不含 `prompt-library` 命名空间。
+ * 任何步骤失败都不向上抛错，保证主流程不被迁移逻辑阻断。
+ */
+async function migrateLegacySettingsIfNeeded(): Promise<void> {
+  // 1) 新文件已有命名空间 → 已迁移，跳过
+  try {
+    const text = await readFile(pluginSettingsPath(), "utf8");
+    const root = JSON.parse(stripBom(text));
+    if (
+      root && typeof root === "object" && !Array.isArray(root) &&
+      (root as Record<string, unknown>)[SETTINGS_NAMESPACE]
+    ) {
+      return;
+    }
+  } catch {
+    // 新文件不存在或解析失败：继续尝试迁移
+  }
+
+  // 2) 读取旧系统 settings.yaml 的 prompt-library 命名空间
+  let legacy: Partial<PluginSettings> | undefined;
+  try {
+    const text = await readFile(systemSettingsPath(), "utf8");
+    const root = load(stripBom(text));
+    if (root && typeof root === "object" && !Array.isArray(root)) {
+      const ns = (root as Record<string, unknown>)[SETTINGS_NAMESPACE];
+      if (ns && typeof ns === "object" && !Array.isArray(ns)) {
+        legacy = ns as Partial<PluginSettings>;
+      }
+    }
+  } catch {
+    return; // 旧文件不存在/不可读：无需迁移
+  }
+  if (!legacy) return; // 旧文件无本插件命名空间：无需迁移
+
+  // 3) 写入新插件配置文件（合并已有内容，剔除不落盘项）
+  let nextRoot: Record<string, unknown> = {};
+  try {
+    const text = await readFile(pluginSettingsPath(), "utf8");
+    const parsed = JSON.parse(stripBom(text));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      nextRoot = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // 新文件不存在：从空开始
+  }
+  nextRoot[SETTINGS_NAMESPACE] = stripPersistExcluded(legacy) as unknown as Record<string, unknown>;
+  mkdirSync(dirname(pluginSettingsPath()), { recursive: true });
+  await writeFile(pluginSettingsPath(), JSON.stringify(nextRoot, null, 2), "utf8");
+
+  // 4) 从旧系统 settings.yaml 移除 prompt-library 命名空间，完成「搬移」
+  try {
+    const text = await readFile(systemSettingsPath(), "utf8");
+    const sysRoot = load(stripBom(text));
+    if (
+      sysRoot && typeof sysRoot === "object" && !Array.isArray(sysRoot) &&
+      (sysRoot as Record<string, unknown>)[SETTINGS_NAMESPACE] !== undefined
+    ) {
+      delete (sysRoot as Record<string, unknown>)[SETTINGS_NAMESPACE];
+      await writeFile(systemSettingsPath(), dump(sysRoot, { indent: 2 }), "utf8");
+    }
+  } catch {
+    // 清理旧键失败不阻断：新位置已写入，旧键仅作为冗余存在，不影响功能
+  }
+}
+
+/**
+ * 读取设置：优先从 ~/.dsh/prompt-library/settings.json 的 `prompt-library` 命名空间读取；
+ * 首次读取时若新文件尚无配置，则尝试从旧系统 settings.yaml 迁移（见 migrateLegacySettingsIfNeeded）。
+ * 命名空间缺失时用默认值并写入插件配置文件。任何写入失败都不影响本次读取。
  */
 async function readSettingsRaw(): Promise<PluginSettings> {
+  await migrateLegacySettingsIfNeeded().catch(() => undefined);
   const ns = await readSystemSettingsNamespace().catch(() => undefined);
   if (ns !== undefined) {
     const settings: PluginSettings = stripPersistExcluded({ ...DEFAULT_SETTINGS, ...ns });
     return settings;
   }
-  // 命名空间缺失：用默认值初始化并写入系统配置
+  // 命名空间缺失：用默认值初始化并写入插件配置文件
   const settings: PluginSettings = stripPersistExcluded({ ...DEFAULT_SETTINGS });
   try {
     await writeSettingsRaw(settings);

@@ -56,10 +56,10 @@ The library uses **SQLite** (`node:sqlite`); all other configs and logs are stor
 ```
 ~/.dsh/prompt-library/
 ├── db/prompts.db      # prompt library, personas & bindings (SQLite)
+├── settings.json      # plugin settings (prompt-library namespace)
 ├── log/
 │   └── ai-YYYY-MM-DD.log   # AI diagnostic logs (per-day files)
 └── character/         # (legacy, migration read-only; personas now live in the database)
-~/.dsh/settings.yaml   # plugin settings (prompt-library namespace)
 ```
 
 ## Installation

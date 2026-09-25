@@ -8,7 +8,8 @@
  *       └── ai-YYYY-MM-DD.log
  *   HARNESS 会话上下文来自插件包外置文件 doc/harness.default.md（不再写用户目录）。
  *
- * 插件设置写入系统配置 ~/.dsh/settings.yaml 的 `prompt-library` 命名空间。
+ * 插件设置写入 ~/.dsh/prompt-library/settings.json 的 `prompt-library` 命名空间，
+ * 不再写入系统配置 ~/.dsh/settings.yaml（仅读取其中的 `locale.preference`）。
  * 首次访问数据时一次性把旧 prompts.json 导入 SQLite 并删除，避免历史数据丢失。
  */
 import { homedir } from "node:os";
@@ -49,12 +50,20 @@ export function workspaceStorePath(): string {
   return join(dshHome(), "storages", "workspace.json");
 }
 
-/** 系统设置文件：~/.dsh/settings.yaml（插件设置写入其 `prompt-library` 命名空间）。 */
+/**
+ * 系统设置文件：~/.dsh/settings.yaml（宿主全局配置，如 `locale.preference` 语言偏好）。
+ * 本插件自身的设置已不再写入此处，见 `pluginSettingsPath()`。
+ */
 export function systemSettingsPath(): string {
   return join(dshHome(), "settings.yaml");
 }
 
-/** 插件设置命名空间（写入系统 settings.yaml 时使用的顶层 key）。 */
+/** 插件设置文件：~/.dsh/prompt-library/settings.json（仅保存本插件的 `prompt-library` 命名空间）。 */
+export function pluginSettingsPath(): string {
+  return join(dataDir(), "settings.json");
+}
+
+/** 插件设置命名空间（写入插件 settings.yaml 时使用的顶层 key）。 */
 export const SETTINGS_NAMESPACE = "prompt-library";
 
 /** AI 诊断日志目录：~/.dsh/prompt-library/log/ */

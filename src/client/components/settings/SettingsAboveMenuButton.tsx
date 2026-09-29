@@ -2,9 +2,9 @@
  * 设置按钮上方词库菜单按钮 — 纯 DOM 操作，无 React 依赖。
  *
  * 通过 MutationObserver 找到原生「设置」按钮，在其上方插入按钮，
- * 点击后弹出居中、随屏幕自适应的「左侧导航 + 右侧内容」面板
+ * 点击后弹出居中、随屏幕自适应的「顶部横向 Tab + 下方内容」面板
  * （无蒙层、无标题栏/关闭按钮，再次点击词库按钮可切换关闭）。
- * 面板本身不出现滚动条，右侧内容区由 PromptAssistant 通过 `pl:show-panel-content`
+ * 面板本身不出现滚动条，下方内容区由 PromptAssistant 通过 `pl:show-panel-content`
  * 事件将对应功能 Modal 以 container 方式内嵌渲染并自行滚动（嵌入内容不显示关闭按钮）；
  * 词库助手右键菜单打开功能则始终以独立居中蒙层弹窗呈现。
  * 显隐独立于词库助手开关，始终可用。
@@ -18,8 +18,8 @@ export const SETTINGS_ABOVE_CSS = `
 .pl-sa-panel-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;flex-shrink:0}
 .pl-sa-close-btn{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border:none;border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary,#1f2937);cursor:pointer;transition:background .12s ease}
 .pl-sa-close-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.08))}
-.pl-sa-sidebar{width:115px;flex-shrink:0;overflow-y:auto;padding:8px 6px}
-.pl-sa-nav-item{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;cursor:pointer;user-select:none;color:var(--dsw-alias-label-primary,#1f2937);transition:background .12s ease}
+.pl-sa-tabbar{display:flex;align-items:center;gap:4px;flex-shrink:0;padding:2px 12px 10px;border-bottom:1px solid var(--dsw-alias-border-l2,rgba(196,211,232,.16));overflow-x:auto}
+.pl-sa-nav-item{display:flex;align-items:center;justify-content:center;gap:8px;padding:7px 12px;border-radius:8px;cursor:pointer;user-select:none;color:var(--dsw-alias-label-primary,#1f2937);transition:background .12s ease;flex:1 0 auto}
 .pl-sa-nav-item:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.08))}
 .pl-sa-nav-item.active{background:var(--dsw-alias-interactive-bg-active,rgba(127,127,127,.14))}
 .pl-sa-nav-icon{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;flex-shrink:0}
@@ -75,28 +75,12 @@ const NAV_ITEMS: NavItem[] = [
     iconColor: "var(--dsw-alias-state-error-primary,#dc2626)",
     iconBody: '<path d="M5 6.5h14M9 6.5V4.8A.8.8 0 0 1 9.8 4h4.4a.8.8 0 0 1 .8.8v1.7M6.5 6.5l.7 12a1 1 0 0 0 1 .9h7.6a1 1 0 0 0 1-.9l.7-12M9.5 10v5M14.5 10v5"/>',
   },
-  {
-    id: "persona",
-    labelKey: "pl.ctx.personas",
-    iconBg: "rgba(139, 92, 246, .12)",
-    iconColor: "#8b5cf6",
-    iconBody: '<path d="M4 5.5C4 4.7 4.7 4 5.5 4H11v15H5.5C4.7 19 4 18.3 4 17.5v-12Z"/><path d="M20 5.5C20 4.7 19.3 4 18.5 4H13v15h5.5c.8 0 1.5-.7 1.5-1.5v-12Z"/>',
-  },
-  {
-    id: "workspaceInstructions",
-    labelKey: "pl.ctx.workspaceInstructions",
-    iconBg: "rgba(139, 92, 246, .12)",
-    iconColor: "#8b5cf6",
-    iconBody: '<path d="M4 5.5h9M4 8.5h5.5M4 11.5h9"/>',
-  },
 ];
 
 /** 各导航项对应的功能类型（与 PromptAssistant panelNavKey 值一致）。 */
 const PANEL_TYPE_MAP: Record<string, string> = {
   lexicon: "lexicon",
   importExport: "importExport",
-  persona: "persona",
-  workspaceInstructions: "workspaceInstructions",
   tags: "tags",
   trash: "trash",
 };
@@ -268,14 +252,9 @@ export function registerSettingsAboveMenu(
     header.appendChild(headerActions);
     panel.appendChild(header);
 
-    // 主体区域（侧边栏 + 内容）
-    const body = document.createElement("div");
-    body.style.cssText = "display:flex;flex:1;min-height:0;overflow:hidden;";
-    panel.appendChild(body);
-
-    // 左侧导航栏
-    const sidebar = document.createElement("div");
-    sidebar.className = "pl-sa-sidebar";
+    // 顶部横向 Tab 导航栏
+    const tabbar = document.createElement("div");
+    tabbar.className = "pl-sa-tabbar";
     NAV_ITEMS.forEach((item) => {
       const el = document.createElement("div");
       el.className = "pl-sa-nav-item";
@@ -290,16 +269,20 @@ export function registerSettingsAboveMenu(
 
       const label = document.createElement("span");
       label.textContent = getTranslation(item.labelKey);
-      label.style.cssText = "font-size:13px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+      label.style.cssText = "font-size:13px;white-space:nowrap;";
 
       el.appendChild(iconWrap);
       el.appendChild(label);
       el.addEventListener("click", () => selectNav(item.id));
-      sidebar.appendChild(el);
+      tabbar.appendChild(el);
     });
-    body.appendChild(sidebar);
+    panel.appendChild(tabbar);
 
-    // 右侧内容区：PromptAssistant 将对应 Modal 内嵌渲染到这里，内容自己滚动
+    // 主体内容区：PromptAssistant 将对应 Modal 内嵌渲染到这里，内容自己滚动
+    const body = document.createElement("div");
+    body.style.cssText = "display:flex;flex:1;min-height:0;overflow:hidden;";
+    panel.appendChild(body);
+
     const contentArea = document.createElement("div");
     contentArea.className = "pl-sa-content-area";
     body.appendChild(contentArea);

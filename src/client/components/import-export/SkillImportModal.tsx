@@ -354,7 +354,7 @@ export function SkillImportModal(props: {
   // 浮动反馈气泡开关与定时器（如聊天气泡，一段时间后自动消失）
   const [toastOpen, setToastOpen] = useState(false);
   const toastTimer = useRef<number | null>(null);
-  // 导出模式：导出范围（通用 / 项目 / 私有），决定技能写盘位置与注入方式
+  // 导出模式：导出范围（通用 / 项目），决定技能写盘位置与注入方式
   const [exportScope, setExportScope] = useState<SkillExportScope>("global");
   // 导出模式：当前项目路径（「项目技能」范围展示保存位置用）；未自动解析到时可让用户手动填写
   const [projectCwd, setProjectCwd] = useState<string | null>(null);
@@ -1287,7 +1287,7 @@ export function SkillImportModal(props: {
               <div style={{ fontSize: 12, fontWeight: 560, color: TONE.muted }}>
                 {T("pl.skillModal.exportScope")}
               </div>
-              {/* 三个导出范围选项横排：通用 / 项目 / 私有 */}
+              {/* 两个导出范围选项横排：通用 / 项目 */}
               <div style={{ display: "flex", gap: 8, flexDirection: "row" }}>
                 {(
                   [
@@ -1304,12 +1304,6 @@ export function SkillImportModal(props: {
                       path: projectCwd
                         ? `${projectCwd}`
                         : T("pl.skillModal.projectNoPath"),
-                    },
-                    {
-                      value: "private",
-                      label: T("pl.skillModal.scopePrivate"),
-                      desc: T("pl.skillModal.scopePrivateDesc"),
-                      path: T("pl.skillModal.scopePrivatePath"),
                     },
                   ] as Array<{
                     value: SkillExportScope;
@@ -1415,7 +1409,7 @@ export function SkillImportModal(props: {
                   overflow: "hidden",
                 }}
               >
-                {/* 非项目范围：通用/私有 展示功能说明（路径、使用方式），保持恒定区域高度 */}
+                {/* 非项目范围：通用 展示功能说明（路径、使用方式），保持恒定区域高度 */}
                 {exportScope === "project" ? (
                   <>
                     <div
@@ -1475,9 +1469,7 @@ export function SkillImportModal(props: {
                       overflow: "hidden",
                     }}
                   >
-                    {exportScope === "global"
-                      ? T("pl.skillModal.scopeGlobalHint")
-                      : T("pl.skillModal.scopePrivateHint")}
+                    {T("pl.skillModal.scopeGlobalHint")}
                   </div>
                 )}
               </div>

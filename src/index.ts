@@ -21,7 +21,6 @@ import { logAiInjected, registerLlm } from "./host/ai.js";
 import { disabledHarnessSkillsInstruction } from "./host/skills.js";
 import { soulSystemSync, ensureSoulFile } from "./host/character.js";
 import { resolvePersonaForSession } from "./host/persona-service.js";
-import { harnessSystemSync } from "./host/harness.js";
 import {
   registerSessionListProvider,
   recordActiveSessionCwd,
@@ -173,14 +172,12 @@ export function apply(ctx: Context) {
     return soulSystemSync(personaId);
   };
   // 其余会话约束 section（order 800，位于工具指引 100-199 之后，贴近 prompt 末尾以增强遵守）：
-  // - HARNESS：恒注入当前会话（内部上下文，不要向用户回显）；
   // - 技能注入：当前会话「临时注入」优先，其次会话 id 持久绑定，再次工作目录路径绑定；
   // - 禁用技能指令：把用户禁用的 ~/.dsh/skills / 项目技能清单注入为软控制；
   // - 欢迎：只对第一个新会话注入一次简短问候。
   const workspaceSectionText = (context: unknown): string => {
     const { sessionId, cwd } = resolveAssemblySession(context);
     const parts: string[] = [];
-    parts.push(harnessSystemSync());
     const injected = buildSessionPromptInjection(sessionId, cwd);
     if (injected) parts.push(injected);
     const disabledSkills = disabledHarnessSkillsInstruction(cwd || null);

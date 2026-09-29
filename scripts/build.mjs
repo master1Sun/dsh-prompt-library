@@ -7,7 +7,7 @@
 //                    react + react/jsx-runtime + @deepseek-ai/* 在运行时通过
 //                    factory 的 `require` 解析（即不打入 bundle）。
 import { build as esbuildBuild } from "esbuild";
-import { cp, rm, mkdir, readFile, writeFile } from "node:fs/promises";
+import { rm, mkdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -112,15 +112,6 @@ await esbuildBuild({
   sourcemap: true,
   logLevel: "info",
 });
-
-// 复制外置文档资源（HARNESS 默认模板等随包文案）到 lib/doc，
-// host 侧运行时用 import.meta.url 相对产物读取（见 src/host/bundle-doc.ts）。
-const srcDoc = join(root, "doc");
-try {
-  await cp(srcDoc, join(libDir, "doc"), { recursive: true });
-} catch {
-  /* 无 doc 目录时忽略 */
-}
 
 // 一个小标记，让 `dsh --dump-config` 的消费者知道这是构建过的。
 await writeFile(

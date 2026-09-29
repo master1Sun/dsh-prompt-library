@@ -591,9 +591,17 @@ async function enrichLearnedPromptInner(
   logAI(aiLogCopy().enrichDone(result.title || prompt.title, changed));
 }
 
-/** 命中即视为「AI 套话」整行的开场行（中文 + 英文；整行匹配，避免误删正文）。 */
+/**
+ * 命中即视为「AI 套话」整行的开场行（中文 + 英文；整行匹配，避免误删正文）。
+ *
+ * 注意：这里的分支都是「行首前缀匹配」，因此每个分支都必须带足够的限定
+ * （中文分句需紧跟标点、英文动词需带 \b 词边界），否则会把以该字/词开头的
+ * 正常内容整行误判为套话。历史教训：英文 `i(?:'ve| have| am)?(?: ...)?` 各段
+ * 全可选，等价于 `^i`，任何以 i 开头的行都被剥掉；中文 `为你?`/`可以`/`如下`
+ * 等裸前缀同理。收窄后仍保留必要的寒暄识别。
+ */
 const AI_OPEN_RE =
-  /^(好的?|好的呢|没问题|收到|可以|想到了|毕竟是|这是我的|这是我(为[你您])?(优化|润色|完善|整理|改写)?(后|好的?|的|成的|版)?|以下为?(你|您)?(的)?(优化|润色|完善|整理|改写)?(后|好的?|的|成的|版|结果|建议)?|下面是?(的)?|以下是?[你您]?(的)?|这会?是|为你?|为您?|已(经)?为[你您]|已为你|结果如下|如下|示例如下|请[你您]查收|我给[你您]|回答完毕|帮你|现在为[你您]|给你(的)?)|^(hello|hi\b|hey\b|sure|of\s+course|no\s+problem|here(?:\s|'s| is)|below\b|this\s+is|the\s+(polished|optimized|improved|revised|updated|cleaned|final|better)\s+version|i(?:'ve| have| am)?(?: prepared| optimized| provided| polished| revised| improved| updated)?|please\s+find|glad\s+to\s+help|conforme?d)/i;
+  /^(好的?[，、。！!：:]|好的呢|没问题|收到|可以的?[，、。！!：:]|想到了|毕竟是|这是我的|这是我(为[你您])?(优化|润色|完善|整理|改写)(后|好的?|的|成的|版)?|以下为?(你|您)?(的)?(优化|润色|完善|整理|改写)(后|好的?|的|成的|版|结果|建议)?|下面是(的)?|以下是[你您]?(的)?|为[你您](优化|润色|完善|整理|改写|准备|生成)|已(经)?为[你您]|已为你|结果如下|如下[：:]|示例如下|请[你您]查收|我给[你您]|回答完毕|帮你(优化|润色|完善|整理|改写|准备|生成)|现在为[你您]|给[你您]的?[，、。！!：:])|^(hello\b|hi\b|hey\b|sure\b|of\s+course|no\s+problem|here(?:\s|'s|\s+is)|below\b|this\s+is|the\s+(polished|optimized|improved|revised|updated|cleaned|final|better)\s+version|i(?:'ve|\s+have|\s+am)?\s+(?:prepared|optimized|provided|polished|revised|improved|updated)\b|please\s+find|glad\s+to\s+help)/i;
 
 /** 命中即视为「AI 套话」整行的收尾行（中文 + 英文；整行匹配）。 */
 const AI_CLOSE_RE =
@@ -619,7 +627,9 @@ function stripAiFiller(text: string): string {
   // 从最后剥离收尾套话（最多 6 行）
   let end = lines.length;
   while (end - 1 > start && end - start <= 6 && AI_CLOSE_RE.test(lines[end - 1]!.trim())) end--;
-  return lines.slice(start, end).join("\n").trim();
+  const result = lines.slice(start, end).join("\n").trim();
+  // 兜底：若剥离后为空（整段都被误判为套话），回退到去代码块后的文本或原始文本，绝不返回空串
+  return result || out || text;
 }
 
 /**

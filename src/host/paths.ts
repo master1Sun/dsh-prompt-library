@@ -6,7 +6,6 @@
  *   ├── db/prompts.db                  # 词库主存储（SQLite），含人格 / 技能绑定 / meta
  *   └── log/                           # AI 调用诊断日志（按系统时区日期分文件）
  *       └── ai-YYYY-MM-DD.log
- *   HARNESS 会话上下文来自插件包外置文件 doc/harness.default.md（不再写用户目录）。
  *
  * 插件设置写入 ~/.dsh/prompt-library/settings.json 的 `prompt-library` 命名空间，
  * 不再写入系统配置 ~/.dsh/settings.yaml（仅读取其中的 `locale.preference`）。

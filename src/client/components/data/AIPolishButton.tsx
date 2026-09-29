@@ -148,6 +148,12 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
     // 聊天框按钮润色不启用「{{}} 模板变量保留/新增」能力（与词库内润色区分）
     polishPrompt(draft, { keepVariables: false })
       .then(({ polished }) => {
+        // 空结果按失败处理：避免渲染空白面板（issue #8：stripAiFiller 可能把整段清成空串）
+        if (!polished || !polished.trim()) {
+          setError(T("pl.polishFail"));
+          setStatus("error");
+          return;
+        }
         setResult(polished);
         setStatus("done");
       })
@@ -312,6 +318,26 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
             </div>
           </section>
         </>
+      )}
+
+      {/* 失败常驻面板：模型失败 / 空结果时展示可重试的错误态，而非 2.2s 即消失的瞬时 toast */}
+      {status === "error" && (
+        <section role="alert" aria-label={T("pl.polishFailedTitle")} style={panelStyle}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
+            <strong style={{ fontSize: 13, fontWeight: 470, color: TONE.red }}>{T("pl.polishFailedTitle")}</strong>
+          </div>
+          <div style={{ color: TONE.text, fontSize: 12, lineHeight: 1.6 }}>
+            {error || T("pl.polishFail")}
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={closeResult}>
+              {T("pl.close")}
+            </Button>
+            <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={handlePolish}>
+              {T("pl.polish")}
+            </Button>
+          </div>
+        </section>
       )}
     </span>
   );

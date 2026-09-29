@@ -8,7 +8,8 @@
  * AI 能力完全复用 host 侧 ai.ts（polishPromptBody），
  * 本组件只做浏览器端编排，不重复实现 AI 调用逻辑。
  */
-import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useLayoutEffect, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { PL_BUTTON_CSS, plBtn } from "../../utils/button-style.js";
 import { getSettings as apiGetSettings, polishPrompt } from "../../utils/api.js";
@@ -101,6 +102,12 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
   const T = usePLT(t);
   const draft = useInput((s) => s.draft);
 
+  // 润色面板/提示需脱离 composer 的层叠上下文渲染（挂到 document.body 的 fixed 浮层），
+  // 否则会被 DSH 侧边栏遮挡。containerRef 用于测量按钮视口位置，据此锚定浮层。
+  const containerRef = useRef<HTMLSpanElement | null>(null);
+  // 浮层锚点（视口右侧/底部偏移）：面板右缘对齐按钮右缘、底边位于按钮上方 4px。
+  const [anchor, setAnchor] = useState({ right: 0, bottom: 0 });
+
   const settings = useSettings();
 
   // 兜底监听 host 推送的 fill-draft（AI 润色/完善结果）：
@@ -125,6 +132,25 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
   }, [toast]);
 
   const showToast = useCallback((msg: string) => setToast(msg), []);
+
+  // 面板/提示展示期间：测量按钮位置并跟随滚动/缩放实时更新锚点。
+  // useLayoutEffect 在绘制前完成定位，首帧不会出现锚点归零闪烁。
+  useLayoutEffect(() => {
+    if (status !== "done" && status !== "error" && !toast) return;
+    const update = () => {
+      const el = containerRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setAnchor({ right: window.innerWidth - r.right, bottom: window.innerHeight - r.top + 4 });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [status, toast]);
 
   const closeResult = useCallback(() => {
     setStatus("idle");
@@ -183,11 +209,13 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
     fontFamily: MONO,
   };
 
+  // 浮层经 portal 挂到 body：fixed 定位脱离 composer 层叠上下文，用视口锚点摆到按钮上方，
+  // 层级取全项目统一的最大值（与 # 浮层/菜单/提示同级），确保盖在 DSH 侧边栏之上。
   const panelStyle: CSSProperties = {
-    position: "absolute",
-    right: 0,
-    bottom: "calc(100% + 4px)",
-    zIndex: 1000,
+    position: "fixed",
+    right: anchor.right,
+    bottom: anchor.bottom,
+    zIndex: 2147483647,
     width: 380,
     maxWidth: "calc(100vw - 24px)",
     display: "flex",
@@ -205,7 +233,7 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
   if (!settings.showAIPolishButton) return null;
 
   return (
-    <span data-prompt-library-ai-polish style={containerStyle}>
+    <span ref={containerRef} data-prompt-library-ai-polish style={containerStyle}>
       <style>{PL_BUTTON_CSS}</style>
       {/* 聊天栏按钮无边框（与词库按钮一致）：去掉 .pl-btn--sm 的边框，保留投影取消 */}
       <style>{`.pl-btn.pl-cbn-btn{border:none;box-shadow:none}`}</style>
@@ -225,35 +253,37 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
         {!settings.aiPolishButtonIconOnly && (status === "polishing" ? T("pl.polishing") : T("pl.polish"))}
       </Button>
 
-      {/* 状态提示 */}
-      {toast && (
-        <span
-          role="status" aria-live="polite"
-          style={{
-            position: "absolute",
-            bottom: "calc(100% + 4px)",
-            right: 0,
-            padding: "4px 10px",
-            color: TONE.panel,
-            background: status === "error" ? TONE.red : TONE.mint,
-            borderRadius: 6,
-            fontSize: 11,
-            fontFamily: MONO,
-            whiteSpace: "nowrap",
-            pointerEvents: "none",
-            opacity: 0.92,
-            zIndex: 1001,
-          }}
-        >
-          {status === "error" ? "\u26A0 " : "\u2713 "}
-          {toast}
-        </span>
-      )}
+      {/* 状态提示（portal 到 body，fixed 锁到按钮上方，避免被侧边栏遮挡） */}
+      {toast &&
+        createPortal(
+          <span
+            role="status" aria-live="polite"
+            style={{
+              position: "fixed",
+              bottom: anchor.bottom,
+              right: anchor.right,
+              padding: "4px 10px",
+              color: TONE.panel,
+              background: status === "error" ? TONE.red : TONE.mint,
+              borderRadius: 6,
+              fontSize: 11,
+              fontFamily: MONO,
+              whiteSpace: "nowrap",
+              pointerEvents: "none",
+              opacity: 0.92,
+              zIndex: 2147483647,
+            }}
+          >
+            {status === "error" ? "\u26A0 " : "\u2713 "}
+            {toast}
+          </span>,
+          document.body,
+        )}
 
-      {/* 润色结果面板：可编辑，支持覆盖输入框。
+      {/* 润色结果面板（portal 到 body，避开侧边栏）：可编辑，支持覆盖输入框。
           不设置点击遮罩关闭——点击其他位置不会关闭面板，只能通过显式按钮操作。 */}
-      {status === "done" && (
-        <>
+      {status === "done" &&
+        createPortal(
           <section role="dialog" aria-label={T("pl.polishResult")} style={panelStyle}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
               <strong style={{ fontSize: 13, fontWeight: 470 }}>{T("pl.polishResult")}</strong>
@@ -316,13 +346,14 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
                 {T("pl.replaceContent")}
               </Button>
             </div>
-          </section>
-        </>
-      )}
+          </section>,
+          document.body,
+        )}
 
-      {/* 失败常驻面板：模型失败 / 空结果时展示可重试的错误态，而非 2.2s 即消失的瞬时 toast */}
-      {status === "error" && (
-        <section role="alert" aria-label={T("pl.polishFailedTitle")} style={panelStyle}>
+      {/* 失败常驻面板（portal 到 body）：模型失败 / 空结果时展示可重试的错误态，而非 2.2s 即消失的瞬时 toast */}
+      {status === "error" &&
+        createPortal(
+          <section role="alert" aria-label={T("pl.polishFailedTitle")} style={panelStyle}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
             <strong style={{ fontSize: 13, fontWeight: 470, color: TONE.red }}>{T("pl.polishFailedTitle")}</strong>
           </div>
@@ -337,8 +368,9 @@ export function AIPolishButton(props: ButtonProps): ReactNode {
               {T("pl.polish")}
             </Button>
           </div>
-        </section>
-      )}
+          </section>,
+          document.body,
+        )}
     </span>
   );
 }

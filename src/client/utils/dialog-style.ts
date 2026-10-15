@@ -67,6 +67,10 @@ body[data-dsh-desktop-mode="extended"] .pl-dialog--max{width:100%!important;heig
 @keyframes plLvFillGrow{0%{transform:scaleX(0)}100%{transform:scaleX(1)}}
 /* 弹窗内滚动条稳定占位：滚动条出现/隐藏不改变内容宽度，消除重排闪烁 */
 .pl-dialog,.pl-dialog *{scrollbar-gutter:stable}
+/* 修正：上面的通配符会把 scrollbar-gutter 也作用到 svg 上，而 Chrome 会因此把 svg 的
+   计算宽度变成 0px（视口宽 0 + UA 的 overflow:hidden ⇒ 图标被整块裁掉，只剩一个背景色块）。
+   图标不是滚动容器，这里显式还原；.pl-dialog svg（特异性 0,1,1）高于 .pl-dialog *（0,1,0）。 */
+.pl-dialog svg{scrollbar-gutter:auto}
 /* 弹窗内滚动条统一细窄圆角半透明，减少突兀、与占位宽度一致 */
 .pl-dialog ::-webkit-scrollbar{width:8px;height:8px}
 .pl-dialog ::-webkit-scrollbar-thumb{background:rgba(128,134,148,.30);border-radius:4px;border:2px solid transparent;background-clip:padding-box}

@@ -7,7 +7,8 @@
  *
  * 同时将设置面板注册到 `settings.section` 插槽，在 harness 原生设置界面中
  * 显示插件的配置项。
- * 将词库助手注册到页面浮动助手位（见 PromptAssistant）。
+ * 词库四项功能（数据管理 / 导入导出 / 标签 / 回收站）由「设置 → 词库设置」页内的
+ * 「词库」折叠项直接承载（见 LibraryPanelSection）。
  *
  * 此模块以 DSH 客户端模块格式构建到 `lib/client.js`：
  *   window.__ModuleLoader__.load({ id, factory: (require) => {...} })
@@ -20,14 +21,11 @@ import "../components/common/Tooltip.js";
 import { PromptLibraryButton } from "../components/data/PromptLibraryButton.js";
 import { AIPolishButton } from "../components/data/AIPolishButton.js";
 import { ContextRecommendations } from "../components/data/ContextRecommendations.js";
-import { PromptAssistant } from "../components/data/PromptAssistant.js";
 import { SettingsSection } from "../components/settings/SettingsSection.js";
-import { registerSettingsAboveMenu, SETTINGS_ABOVE_CSS } from "../components/settings/SettingsAboveMenuButton.js";
 import { en, LOCALE_CHANGED_EVENT, NS, setBoundT, zh } from "./i18n.js";
 import { setUiConversation } from "./conversation-targets.js";
 import { startDataChangedSubscription } from "./data-sync.js";
 import { registerWorkspaces } from "./workspace-picker.js";
-import { getSettings } from "./api.js";
 import { registerSettingsNavIcon,
   SETTINGS_NAV_CSS,
   SETTINGS_NAV_MARKER_PROMPT,
@@ -179,21 +177,6 @@ export function apply(ctx: ClientCtx): void {
     ),
   );
 
-  // 词库功能弹窗宿主：常驻挂载（不渲染任何可见 UI），
-  // 监听 pl:show-panel-content / pl:hide-panel-content 窗口事件，
-  // 把左侧词库菜单选中的功能 Modal 内嵌渲染到面板内容区。
-  ctx.slots.inject("conversation.input.dock", () =>
-    ctx.slots.register(
-      {
-        name: "conversation.input.dock",
-        id: "prompt-library-modal-host",
-        order: 11,
-        locale: NS,
-      },
-      PromptAssistant as (props: unknown) => ReactNode,
-    ),
-  );
-
   // 设置导航图标：与聊天栏提示词按钮保持一致
   ctx.effect(
     () => {
@@ -232,43 +215,4 @@ export function apply(ctx: ClientCtx): void {
     ),
   );
 
-  // 设置按钮上方词库菜单按钮：通过 MutationObserver 找到原生「设置」按钮，在其上方注入同样样式的按钮
-  ctx.effect(
-    () => {
-      // 注入样式
-      let style = document.getElementById("pl-settings-above-style") as HTMLStyleElement | null;
-      if (!style) {
-        style = document.createElement("style");
-        style.id = "pl-settings-above-style";
-        style.textContent = SETTINGS_ABOVE_CSS;
-        document.head.appendChild(style);
-      }
-
-      // 注册菜单按钮（纯 DOM 操作，无需 React）
-      const dispose = registerSettingsAboveMenu(
-        (key) => t(key),
-        async () => {
-          try {
-            const settings = await getSettings();
-            return { dataManagement: settings.dataManagementEnabled ?? true };
-          } catch {
-            return { dataManagement: true };
-          }
-        },
-        async () => {
-          try {
-            const settings = await getSettings();
-            return settings.settingsAboveMenuEnabled ?? true;
-          } catch {
-            return true;
-          }
-        },
-      );
-      return () => {
-        dispose();
-        style?.remove();
-      };
-    },
-    "prompt-library: settings-above menu button",
-  );
 }

@@ -30,6 +30,7 @@ import {
   type ClientAiSelectable,
 } from "../../utils/api.js";
 import { type PLTranslate, usePLT } from "../../utils/i18n.js";
+import { LibraryPanelModal } from "./LibraryPanelSection.js";
 
 const MONO =
   '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "SimHei", "黑体", sans-serif';
@@ -350,6 +351,65 @@ function SelectRow({
   );
 }
 
+/**
+ * 可点击的入口卡片：与分类卡片同款式、同位置，但点击是「打开面板」而非「展开内容」，
+ * 因此右侧用指向右的箭头（↗ 语义）与折叠卡片的向下箭头区分。
+ */
+function ModuleAction(props: {
+  title: ReactNode;
+  desc?: ReactNode;
+  onClick: () => void;
+  /** 无障碍标签（读屏时报出这个入口会打开面板）。 */
+  ariaLabel?: string;
+}): ReactNode {
+  const { title, desc, onClick, ariaLabel } = props;
+  return (
+    <section style={moduleStyle}>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-haspopup="dialog"
+        aria-label={ariaLabel}
+        onClick={onClick}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onClick();
+          }
+        }}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          cursor: "pointer",
+          userSelect: "none",
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={moduleTitleStyle}>{title}</div>
+          {desc && <div style={moduleDescStyle}>{desc}</div>}
+        </div>
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 16 16"
+          style={{ flexShrink: 0, color: TONE.muted }}
+          aria-hidden="true"
+        >
+          <path
+            d="M6 4l4 4-4 4"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </div>
+    </section>
+  );
+}
+
 /** 设置面板组件，修改后立即生效。 */
 export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
   const { t } = props ?? {};
@@ -362,6 +422,8 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
   const [openPanel, setOpenPanel] = useState(false);
   const [openDisplay, setOpenDisplay] = useState(false);
   const [openAbout, setOpenAbout] = useState(false);
+  // 「词库」入口折叠状态（原注入式按钮移入本页；默认折叠，与其它分类一致）
+  const [openLibrary, setOpenLibrary] = useState(false);
   // 系统中可用的 AI provider 及模型列表（来自 harness LLM 服务，设置界面下拉选择用）
   const [aiSelectables, setAiSelectables] = useState<ClientAiSelectable[]>([]);
   // 当前已安装版本号（从 /version 轻量读取，用于「关于」信息行展示，如 v0.9.5）
@@ -573,12 +635,6 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
         onToggle={() => setOpenDisplay((v) => !v)}
       >
         <ToggleRow
-          label={T("pl.set.settingsAboveMenu")}
-          desc={T("pl.set.settingsAboveMenuDesc")}
-          checked={draft.settingsAboveMenuEnabled}
-          onChange={(v) => updateAndSave({ settingsAboveMenuEnabled: v })}
-        />
-        <ToggleRow
           label={T("pl.set.showComposerBtn")}
           desc={T("pl.set.showComposerBtnDesc")}
           checked={draft.showComposerButton}
@@ -754,6 +810,15 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
           </div>
         </div>
       </ModuleCard>
+
+      {/* 入口六：词库 —— 入口从宿主「设置」按钮上方移入本页；点击弹出独立面板 */}
+      <ModuleAction
+        title={T("pl.setModuleLibrary")}
+        desc={T("pl.setModuleLibraryDesc")}
+        ariaLabel={T("pl.setModuleLibraryOpen")}
+        onClick={() => setOpenLibrary(true)}
+      />
+      <LibraryPanelModal open={openLibrary} onClose={() => setOpenLibrary(false)} t={t} />
     </div>
   );
 }

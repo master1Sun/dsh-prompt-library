@@ -168,7 +168,10 @@ export interface PluginSettings {
   panelWidth: number;
   /** 面板高度（px）。 */
   panelHeight: number;
-  /** 是否显示左侧设置按钮上方的词库按钮。 */
+  /**
+   * @deprecated 入口已移入「设置 → 词库设置」页内的折叠项，注入式按钮已移除。
+   * 字段保留仅为兼容既有 settings.json（不再有 UI 开关，也不再被读取）。
+   */
   settingsAboveMenuEnabled: boolean;
   /** 是否在聊天框工具栏显示词库按钮。 */
   showComposerButton: boolean;

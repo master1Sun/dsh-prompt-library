@@ -3,26 +3,29 @@
  *
  * 注册一个小型语言字典，并将词库按钮放置到
  * `conversation.input.left` 插槽（composer 工具栏行，紧邻已有 chrome）。
- * 注册通过 `ctx.slots.inject` 延迟，直到插槽被 conversation 包声明。
+ * 另在左下角账户菜单「设置」下方注入词库入口（宿主无菜单插槽，故 DOM 注入），
+ * 点击广播 OPEN_LIBRARY_EVENT，由全局挂载的 LibraryModal 以**浮层弹窗**形式打开
+ * （遮罩 + 标题栏 + 最大化/还原 + 关闭 + 左侧导航 + 右侧内容），而非占据中心主面板。
+ * 注册通过 `ctx.slots.inject` 延迟，直到插槽被对应宿主包声明。
  *
  * 同时将设置面板注册到 `settings.section` 插槽，在 harness 原生设置界面中
  * 显示插件的配置项。
- * 将词库助手注册到页面浮动助手位（见 PromptAssistant）。
  *
  * 此模块以 DSH 客户端模块格式构建到 `lib/client.js`：
  *   window.__ModuleLoader__.load({ id, factory: (require) => {...} })
  * factory 的 `require` 解析注入的运行时包
- *（@deepseek-ai/dsh-client-runtime/client 等）和 react——它们不会被打包。
+ *（@deepseek-ai/dsh-client-runtime/client 等）和 react / react-dom ——它们不会被打包。
  */
-import { type ReactNode } from "react";
+import { createElement, type ReactNode } from "react";
+import { createRoot } from "react-dom/client";
 // 副作用引入：注册全局 data-tip 主题自适应提示的监听（取代原生 title，适配黑夜/白天模式）
 import "../components/common/Tooltip.js";
 import { PromptLibraryButton } from "../components/data/PromptLibraryButton.js";
 import { AIPolishButton } from "../components/data/AIPolishButton.js";
 import { ContextRecommendations } from "../components/data/ContextRecommendations.js";
-import { PromptAssistant } from "../components/data/PromptAssistant.js";
 import { SettingsSection } from "../components/settings/SettingsSection.js";
-import { registerSettingsAboveMenu, SETTINGS_ABOVE_CSS } from "../components/settings/SettingsAboveMenuButton.js";
+import { LibraryModal } from "../components/data/LibraryModal.js";
+import { registerSettingsMenuLibraryItem } from "../components/settings/SettingsMenuLibraryItem.js";
 import { en, LOCALE_CHANGED_EVENT, NS, setBoundT, zh } from "./i18n.js";
 import { setUiConversation } from "./conversation-targets.js";
 import { startDataChangedSubscription } from "./data-sync.js";
@@ -36,6 +39,7 @@ import { registerSettingsNavIcon,
 /** 此插件的 apply 依赖的客户端服务。 */
 export const inject = [
   "slots",
+  "layout",
   "locale",
   "workspaces",
   "uiConversation",
@@ -54,6 +58,8 @@ interface UiConversationLike {
 /** 我们使用的两个服务的最小 ctx 类型。 */
 interface ClientCtx {
   effect(fn: () => unknown, label: string): unknown;
+  /** 宿主布局服务：选中主面板（菜单入口据此打开中心面板）。 */
+  layout: { selectPanel(id: string): void };
   locale: {
     register(namespace: string, dicts: Record<string, Record<string, string>>): unknown;
     bind(namespace: string): (key: string, params?: Record<string, unknown>) => string;
@@ -179,21 +185,6 @@ export function apply(ctx: ClientCtx): void {
     ),
   );
 
-  // 词库功能弹窗宿主：常驻挂载（不渲染任何可见 UI），
-  // 监听 pl:show-panel-content / pl:hide-panel-content 窗口事件，
-  // 把左侧词库菜单选中的功能 Modal 内嵌渲染到面板内容区。
-  ctx.slots.inject("conversation.input.dock", () =>
-    ctx.slots.register(
-      {
-        name: "conversation.input.dock",
-        id: "prompt-library-modal-host",
-        order: 11,
-        locale: NS,
-      },
-      PromptAssistant as (props: unknown) => ReactNode,
-    ),
-  );
-
   // 设置导航图标：与聊天栏提示词按钮保持一致
   ctx.effect(
     () => {
@@ -232,43 +223,37 @@ export function apply(ctx: ClientCtx): void {
     ),
   );
 
-  // 设置按钮上方词库菜单按钮：通过 MutationObserver 找到原生「设置」按钮，在其上方注入同样样式的按钮
+  // 左下角「账户菜单」词库入口：宿主未提供菜单扩展插槽，改为 DOM 注入到
+  // 「设置」下方（样式克隆原生菜单项）。点击广播 OPEN_LIBRARY_EVENT，
+  // 由全局挂载的 LibraryModal 以浮层弹窗形式打开。
+  // 入口显隐跟随设置 `settingsAboveMenuEnabled`。
   ctx.effect(
-    () => {
-      // 注入样式
-      let style = document.getElementById("pl-settings-above-style") as HTMLStyleElement | null;
-      if (!style) {
-        style = document.createElement("style");
-        style.id = "pl-settings-above-style";
-        style.textContent = SETTINGS_ABOVE_CSS;
-        document.head.appendChild(style);
-      }
-
-      // 注册菜单按钮（纯 DOM 操作，无需 React）
-      const dispose = registerSettingsAboveMenu(
-        (key) => t(key),
-        async () => {
-          try {
-            const settings = await getSettings();
-            return { dataManagement: settings.dataManagementEnabled ?? true };
-          } catch {
-            return { dataManagement: true };
-          }
-        },
-        async () => {
-          try {
-            const settings = await getSettings();
-            return settings.settingsAboveMenuEnabled ?? true;
-          } catch {
-            return true;
-          }
-        },
-      );
-      return () => {
-        dispose();
-        style?.remove();
-      };
-    },
-    "prompt-library: settings-above menu button",
+    () =>
+      registerSettingsMenuLibraryItem(
+        () => t("pl.title"),
+        () =>
+          getSettings()
+            .then((s) => s.settingsAboveMenuEnabled ?? true)
+            .catch(() => true),
+      ),
+    "prompt-library: settings menu item",
   );
+
+  // 全局挂载词库弹窗宿主（createRoot + document.body）：
+  // 监听 OPEN_LIBRARY_EVENT 显隐，从任意视图（含设置菜单）点击都能弹出浮层，
+  // 不再占据中心主面板。组件内部自渲染内容，不依赖对话插槽的监听器。
+  {
+    const host = document.createElement("div");
+    host.id = "pl-library-modal-host";
+    document.body.appendChild(host);
+    const reactRoot = createRoot(host);
+    reactRoot.render(createElement(LibraryModal));
+    ctx.effect(
+      () => () => {
+        reactRoot.unmount();
+        host.remove();
+      },
+      "prompt-library: library modal host",
+    );
+  }
 }

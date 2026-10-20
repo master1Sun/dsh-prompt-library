@@ -44,6 +44,7 @@ import { ConfirmDialog } from "../common/ConfirmDialog.js";
 import { DialogCloseButton } from "../common/DialogCloseButton.js";
 import { WindowToggleButton } from "../common/WindowToggleButton.js";
 import { BookIcon } from "../common/BookIcon.js";
+import { PanelHeader } from "../common/PanelHeader.js";
 import { insertVariableAt } from "./TemplateVariables.js";
 import { TagManagePanel } from "./TagManagePanel.js";
 import { RecycleManagePanel } from "./RecycleManagePanel.js";
@@ -1984,43 +1985,33 @@ export function LexiconManagerModal(props: {
                   boxSizing: "border-box",
                 }}
               >
-                {/* 覆盖面板头部：标题 + X 关闭 */}
+                {/* 覆盖面板头部：与数据管理主头部 / 弹窗标签 tab 头部逐像素一致 */}
                 <div
                   style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
                     flexShrink: 0,
-                    padding: "8px 0 9px 8px",
                     borderBottom: `1px solid ${TONE.border}`,
+                    padding: "0 12px 10px",
                   }}
                 >
-                  <span
-                    style={{
-                      width: 3,
-                      height: 13,
-                      borderRadius: 2,
-                      background: TONE.accent,
-                      flexShrink: 0,
-                    }}
-                  />
-                  <span
-                    style={{
-                      flex: 1,
-                      minWidth: 0,
-                      fontSize: 13,
-                      fontWeight: 600,
-                      color: TONE.text,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {dataSub === "tags" ? T("pl.moduleTags") : T("pl.moduleTrash")}
-                  </span>
-                  <DialogCloseButton
-                    onClick={() => setDataSub(null)}
-                    label={T("pl.close")}
+                  <PanelHeader
+                    title={dataSub === "tags" ? T("pl.moduleTags") : T("pl.moduleTrash")}
+                    desc={dataSub === "tags" ? T("pl.moduleTagsDesc") : T("pl.moduleTrashDesc")}
+                    icon={
+                      <span
+                        aria-hidden="true"
+                        style={{ display: "inline-flex", flexShrink: 0, color: TONE.accent }}
+                        dangerouslySetInnerHTML={{
+                          __html: `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">${
+                            dataSub === "tags"
+                              ? '<path d="M3 5.5A2.5 2.5 0 0 1 5.5 3h4.6c.4 0 .8.15 1.1.44l7 6.1a1.6 1.6 0 0 1 0 2.34l-5.7 5.7a1.6 1.6 0 0 1-2.34 0l-6.1-7A2.5 2.5 0 0 1 3 9.1V5.5Z"/><circle cx="7.4" cy="7.4" r="1.2"/>'
+                              : '<path d="M2.8 4.4h10.4"/><path d="M6.2 4.4V2.9c0-.4.3-.7.7-.7h2.2c.4 0 .7.3.7.7v1.5"/><path d="M4.2 4.4l.5 9.3c0 .5.4.9.9.9h4.8c.5 0 .9-.4.9-.9l.5-9.3"/><path d="M6.6 7v4.2M9.4 7v4.2"/>'
+                          }</svg>`,
+                        }}
+                      />
+                    }
+                    extra={
+                      <DialogCloseButton onClick={() => setDataSub(null)} label={T("pl.close")} />
+                    }
                   />
                 </div>
                 {/* 覆盖面板内容：子面板自含滚动 */}

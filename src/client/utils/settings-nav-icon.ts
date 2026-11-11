@@ -27,9 +27,9 @@ const NAV_ICON_MASK_DATA =
 
 /** 注入到 document.head 的样式：隐藏默认齿轮，按标记替换为对应图标。 */
 export const SETTINGS_NAV_CSS = `
-[${SETTINGS_NAV_MARKER_PROMPT}] > svg:first-child,
-[${SETTINGS_NAV_MARKER_DATA}] > svg:first-child {
-  display: none;
+[${SETTINGS_NAV_MARKER_PROMPT}] svg,
+[${SETTINGS_NAV_MARKER_DATA}] svg {
+  display: none !important;
 }
 [${SETTINGS_NAV_MARKER_PROMPT}]::before,
 [${SETTINGS_NAV_MARKER_DATA}]::before {

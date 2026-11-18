@@ -17,6 +17,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import type { DirListing } from "../../utils/api.js";
 import { plBtn } from "../../utils/button-style.js";
@@ -145,7 +146,9 @@ export function DirectoryPickerModal(props: {
   const crumbs = listing?.crumbs ?? [];
   const lastCrumbIndex = crumbs.length - 1;
 
-  return (
+  // portal 到 body：本弹窗常嵌在 LibraryModal / SkillImportModal 内，面板的
+  // transform 祖先会劫持 position:fixed 的包含块，导致遮罩错位并被裁切。
+  return createPortal(
     <div
       role="dialog"
       aria-modal="true"
@@ -424,6 +427,7 @@ export function DirectoryPickerModal(props: {
           </Button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

@@ -12,6 +12,7 @@ const MONO =
 const TONE = {
   text: "var(--dsw-alias-label-primary, #f2f6fc)",
   quiet: "var(--dsw-alias-label-tertiary, #718096)",
+  panel: "var(--dsw-alias-bg-layer-1, #171f2b)",
   row: "var(--dsw-alias-bg-layer-3, #1d2735)",
   border: "var(--dsw-alias-border-l2, rgba(196, 211, 232, 0.16))",
   accent: "var(--dsw-alias-brand-primary, #8ec5ff)",
@@ -75,31 +76,10 @@ const barStyle: CSSProperties = {
   paddingBottom: 2,
 };
 
-/** 图钉图标：用于「被钉选」的标签。 */
-function PinIcon(): ReactNode {
-  return (
-    <svg
-      width="11"
-      height="11"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      style={{ marginRight: 4, flexShrink: 0 }}
-      aria-hidden="true"
-    >
-      <path d="M12 17v5" />
-      <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z" />
-    </svg>
-  );
-}
-
 /**
  * 标签过滤条：一组可点击的标签粒子，单选过滤。
  * 「全部」表示不过滤；点击已选中的标签可取消选择。
- * 选中的标签呈「图钉钉住」效果：带图钉图标、轻微上浮与投影。
+ * 选中态用实心品牌色，一眼可辨，不依赖附加图标。
  */
 export function TagFilterBar(props: {
   tags: string[];
@@ -110,18 +90,14 @@ export function TagFilterBar(props: {
   const { tags, active, onChange, allLabel } = props;
   const chip = (selected: boolean): CSSProperties => ({
     ...chipStyle,
-    background: selected ? TONE.accentSoft : TONE.row,
-    color: selected ? TONE.accent : TONE.text,
+    background: selected ? TONE.accent : TONE.row,
+    color: selected ? TONE.panel : TONE.text,
     borderColor: selected ? TONE.accent : TONE.border,
-    // pin 效果：选中标签轻微上浮、带投影，像被图钉钉在过滤条上
-    transform: selected ? "translateY(-1px)" : "none",
-    boxShadow: selected ? "0 2px 6px rgba(15, 23, 42, 0.18)" : "none",
-    padding: selected ? "0 7px 0 6px" : "0 8px",
+    fontWeight: selected ? 500 : 400,
   });
   return (
     <div style={barStyle}>
       <button type="button" onClick={() => onChange("")} style={chip(active === "")}>
-        {active === "" && <PinIcon />}
         <span style={chipTextStyle}>{allLabel ?? "全部"}</span>
       </button>
       {tags.map((tag) => (
@@ -132,10 +108,71 @@ export function TagFilterBar(props: {
           data-tip={tag}
           style={chip(active === tag)}
         >
-          {active === tag && <PinIcon />}
           <span style={chipTextStyle}>{tag}</span>
         </button>
       ))}
+    </div>
+  );
+}
+
+/**
+ * 标签过滤下拉：与搜索框同一行的单选下拉。
+ * 「全部」（value 为空串）表示不过滤；选中标签后回传该标签。
+ * 复用搜索框的行高/圆角/配色，保证二者视觉一致。
+ */
+export function TagFilterSelect(props: {
+  tags: string[];
+  active: string;
+  onChange: (tag: string) => void;
+  allLabel?: string;
+}): ReactNode {
+  const { tags, active, onChange, allLabel } = props;
+  const chevron = (
+    <svg
+      width="10"
+      height="10"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: TONE.quiet }}
+    >
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+  return (
+    <div style={{ position: "relative", width: 112, flexShrink: 0 }}>
+      <select
+        value={active}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label={allLabel ?? "标签筛选"}
+        style={{
+          width: "100%",
+          height: 27,
+          boxSizing: "border-box",
+          padding: "0 22px 0 9px",
+          color: active ? TONE.accent : TONE.text,
+          background: TONE.row,
+          border: `1px solid ${TONE.border}`,
+          borderRadius: 7,
+          fontFamily: MONO,
+          fontSize: 12,
+          outline: "none",
+          appearance: "none",
+          cursor: "pointer",
+        }}
+      >
+        <option value="">{allLabel ?? "全部"}</option>
+        {tags.map((tag) => (
+          <option key={tag} value={tag} style={{ color: TONE.text, background: TONE.panel }}>
+            {tag}
+          </option>
+        ))}
+      </select>
+      {chevron}
     </div>
   );
 }
@@ -236,11 +273,12 @@ export function SearchBox({
         style={{
           width: "100%",
           boxSizing: "border-box",
-          padding: "8px 30px 8px 28px",
+          height: 27,
+          padding: "0 30px 0 28px",
           color: TONE.text,
           background: TONE.row,
           border: `1px solid ${TONE.border}`,
-          borderRadius: 9,
+          borderRadius: 7,
           fontFamily: MONO,
           fontSize: 13,
           outline: "none",

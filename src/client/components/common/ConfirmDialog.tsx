@@ -9,6 +9,7 @@
  * 圆角 14、hover 官方交互背景）。
  */
 import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../../utils/dialog-style.js";
 import { getTone, useThemeSync } from "../../utils/theme.js";
 
@@ -59,7 +60,10 @@ export function ConfirmDialog({
     background: "transparent",
     transition: "background-color .24s cubic-bezier(.22,1,.36,1), color .24s cubic-bezier(.22,1,.36,1)",
   };
-  return (
+  // 必须 portal 到 document.body：本弹窗常被挂在 composer 词库按钮等组件树内，
+  // 聊天区的 transform/filter 祖先会劫持 position:fixed 的包含块，导致遮罩/居中卡片
+  // 退化到输入框附近并被裁切（只剩半截文案）。挂到 body 才能稳定全屏居中。
+  return createPortal(
     <>
       <style>{PL_DIALOG_CSS}</style>
       <div className={PL_DIALOG_OVERLAY}>
@@ -106,6 +110,7 @@ export function ConfirmDialog({
           </div>
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   );
 }

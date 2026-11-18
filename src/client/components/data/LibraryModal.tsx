@@ -32,11 +32,11 @@ const LIBRARY_MODAL_CSS = `
 .pl-sa-panel-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;flex-shrink:0}
 .pl-sa-close-btn{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border:none;border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary,#1f2937);cursor:pointer;transition:background .12s ease}
 .pl-sa-close-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.08))}
-.pl-sa-tabs{display:flex;align-items:stretch;gap:6px;padding:0 16px 12px;flex-shrink:0}
-.pl-sa-tab{display:flex;align-items:center;justify-content:center;gap:7px;flex:1;padding:7px 11px;border-radius:9px;cursor:pointer;user-select:none;color:var(--dsw-alias-label-primary,#1f2937);transition:background .12s ease;white-space:nowrap}
-.pl-sa-tab:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.08))}
-.pl-sa-tab.active{background:var(--dsw-alias-interactive-bg-active,rgba(127,127,127,.14))}
-.pl-sa-tab-icon{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:7px;flex-shrink:0}
+.pl-sa-tabs{display:flex;align-items:stretch;gap:4px;padding:0 16px 12px;flex-shrink:0}
+.pl-sa-tab{display:flex;align-items:center;justify-content:center;gap:7px;flex:1;padding:8px 11px;border-radius:9px;cursor:pointer;user-select:none;color:var(--dsw-alias-label-secondary,var(--dsw-alias-label-tertiary,#718096));transition:background .12s ease,color .12s ease;white-space:nowrap}
+.pl-sa-tab:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.08));color:var(--dsw-alias-label-primary,#1f2937)}
+.pl-sa-tab.active{background:var(--dsw-alias-interactive-bg-active,rgba(127,127,127,.14));color:var(--dsw-alias-brand-primary,#2563eb);font-weight:500}
+.pl-sa-tab-icon{display:inline-flex;align-items:center;justify-content:center;width:auto;height:auto;flex-shrink:0}
 .pl-sa-tab-label{font-size:13px}
 .pl-sa-content-area{flex:1;overflow:hidden;padding:5px;min-width:0;position:relative;display:flex;flex-direction:column}
 .pl-sa-content-area > [role="dialog"]{flex:1;min-height:0;display:flex;flex-direction:column}
@@ -282,9 +282,9 @@ export function LibraryModal(_props: unknown): ReactNode {
             >
               <span
                 className="pl-sa-tab-icon"
-                style={{ background: item.iconBg, color: item.iconColor }}
+                style={{ color: "currentColor" }}
                 dangerouslySetInnerHTML={{
-                  __html: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">${item.iconBody}</svg>`,
+                  __html: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">${item.iconBody}</svg>`,
                 }}
               />
               <span className="pl-sa-tab-label">{T(item.labelKey)}</span>

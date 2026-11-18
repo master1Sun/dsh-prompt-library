@@ -45,17 +45,13 @@ export function PanelHeader({
         </strong>
         {extra}
       </div>
-      {/* 模块说明（与词库管理弹窗说明框一致） */}
+      {/* 模块说明：轻量单行小字，与数据管理视图统一 */}
       <div
         style={{
-          marginTop: 10,
+          marginTop: 5,
           fontSize: 11.5,
-          lineHeight: 1.6,
+          lineHeight: 1.5,
           color: TONE.quiet,
-          background: TONE.accentSoft,
-          border: `1px solid ${TONE.border}`,
-          borderRadius: 7,
-          padding: "7px 10px",
           flexShrink: 0,
         }}
       >

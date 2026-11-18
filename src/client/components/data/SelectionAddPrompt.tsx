@@ -2,6 +2,7 @@
 // 不依赖右侧面板：开启开关后，在聊天区高亮选中文本会浮出「+ 添加提示词」按钮，
 // 点击弹出独立居中弹窗，选中文本预填到正文，保存即入库。
 import { useEffect, useCallback, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import type { Prompt } from "../../../types.js";
 import { clampTitle } from "../../../types.js";
 import { createPrompt as apiCreate, listPrompts as apiList, listTags as apiListTags, usePrompt as apiUse } from "../../utils/api.js";
@@ -110,8 +111,8 @@ const floatingBtnStyle: CSSProperties = {
 };
 
 /** 浮层可选动作：默认只显示一个（可切换），其余收进「更多」二级面板。 */
-type SelectionActionId = "copy" | "add" | "tpl";
-const SELECTION_ACTIONS: SelectionActionId[] = ["copy", "add", "tpl"];
+type SelectionActionId = "copy" | "quote" | "add" | "tpl";
+const SELECTION_ACTIONS: SelectionActionId[] = ["copy", "quote", "add", "tpl"];
 const DEFAULT_ACTION_KEY = "pl-selection-default-action";
 /** 非默认动作的入口收纳在「更多」面板里，避免和批注等其他插件的选区浮层拥挤冲突。 */
 
@@ -121,6 +122,11 @@ const ACTION_ICON: Record<SelectionActionId, ReactNode> = {
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
       <path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  ),
+  quote: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M9.5 6C6.5 7.5 5 10 5 13.5V18h5.5v-5.5H8c0-2.2.8-3.8 2.5-4.7L9.5 6Zm9 0c-3 1.5-4.5 4-4.5 7.5V18h5.5v-5.5H17c0-2.2.8-3.8 2.5-4.7L18.5 6Z" fill="currentColor" />
     </svg>
   ),
   add: (
@@ -140,7 +146,7 @@ const ACTION_ICON: Record<SelectionActionId, ReactNode> = {
 function loadDefaultAction(): SelectionActionId {
   try {
     const v = localStorage.getItem(DEFAULT_ACTION_KEY);
-    if (v === "add" || v === "tpl") return v;
+    if (v === "quote" || v === "add" || v === "tpl") return v;
   } catch {
     /* 隐私模式等 localStorage 不可用时静默回退 */
   }
@@ -152,9 +158,26 @@ interface Props {
   /** 是否启用该功能（由设置面板开关控制）。 */
   enabled: boolean;
   /** 聊天框输入动作：套模板结果插入到输入框。 */
-  inputActions?: { setDraft: (text: string) => void };
+  inputActions?: {
+    setDraft: (text: string) => void;
+    /** 宿主原生引用插入（把文本作为引用块插入输入框）；不存在时降级到 setDraft。 */
+    insertQuote?: (text: string) => boolean | void;
+  };
   /** 当前输入框草稿：非空时套模板结果追加在草稿之后。 */
   draft?: string;
+}
+
+/**
+ * 把选中文字按 DSH 原生引用格式（每行前缀 `> `）插入输入框。
+ * 优先调用宿主的 insertQuote（真正的原生引用块），不可用则降级用 setDraft 拼引用文本。
+ * 与 DSH 前端 quoteMarkdown() 完全一致：\\r\\n → \\n，逐行加 `> `。
+ */
+function quoteMarkdown(text: string): string {
+  return text
+    .replace(/\r\n?/gu, "\n")
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
 }
 
 /** 选中文本 → 模板变量预填：优先命中语义为「内容/正文」的变量，否则预填第一个变量。 */
@@ -267,9 +290,11 @@ export function SelectionAddPrompt(props: Props): ReactNode {
         ? copied
           ? T("pl.copiedSelected")
           : T("pl.copySelected")
-        : id === "add"
-          ? T("pl.addToLibrary")
-          : T("pl.applyTemplate"),
+        : id === "quote"
+          ? T("pl.quoteSelected")
+          : id === "add"
+            ? T("pl.addToLibrary")
+            : T("pl.applyTemplate"),
     [copied, T],
   );
 
@@ -468,6 +493,19 @@ export function SelectionAddPrompt(props: Props): ReactNode {
     });
   };
 
+  // 引用选中文字：把文本以 DSH 原生引用格式（每行 `> `）插入聊天输入框。
+  // 优先用宿主 inputActions.insertQuote（真正的引用块）；不可用则降级 setDraft 拼引用文本。
+  const quoteSelected = (text: string) => {
+    setSelection(null); // 收起浮层（点击引用会清空选区）
+    if (typeof inputActions?.insertQuote === "function") {
+      const ok = inputActions.insertQuote(text);
+      if (ok !== false) return; // 宿主已处理
+    }
+    // 降级：拼 `> ` 引用格式追加到草稿
+    const quoted = quoteMarkdown(text);
+    inputActions?.setDraft(draft && draft.trim() ? `${draft}\n\n${quoted}` : quoted);
+  };
+
   const closeModal = () => {
     setOpen(false);
     setTitle("");
@@ -499,7 +537,11 @@ export function SelectionAddPrompt(props: Props): ReactNode {
     );
   };
 
-  return (
+  // 浮层工具栏与所有弹窗必须 portal 到 document.body：
+  // 本组件挂在 conversation.input.left（聊天输入框附近），该容器带 transform/filter，
+  // 会把后代 position:fixed 的包含块从视口劫持为容器本身 —— 浮层按视口 rect 定位却相对
+  // 聊天容器渲染，结果「出不来 / 跑偏」。portal 到 body 才能恢复真正的视口定位。
+  return createPortal(
     <>
       {/* 按钮悬停/按压反馈：与宿主主题 token 一致，无阴影 */}
       <style>{`
@@ -537,6 +579,7 @@ export function SelectionAddPrompt(props: Props): ReactNode {
             aria-label={actionLabel(defaultAction)}
             onClick={() => {
               if (defaultAction === "copy") copySelected(selection.text);
+              else if (defaultAction === "quote") quoteSelected(selection.text);
               else if (defaultAction === "add") openModal(selection.text);
               else openTplPicker(selection.text);
             }}
@@ -604,7 +647,8 @@ export function SelectionAddPrompt(props: Props): ReactNode {
                       if (id === "copy") copySelected(selection.text);
                       else {
                         setMoreOpen(false);
-                        if (id === "add") openModal(selection.text);
+                        if (id === "quote") quoteSelected(selection.text);
+                        else if (id === "add") openModal(selection.text);
                         else openTplPicker(selection.text);
                       }
                     }}
@@ -908,6 +952,7 @@ export function SelectionAddPrompt(props: Props): ReactNode {
         draftEmpty={!draft.trim()}
         t={T}
       />
-    </>
+    </>,
+    document.body,
   );
 }

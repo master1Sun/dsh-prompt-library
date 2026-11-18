@@ -17,6 +17,10 @@ export const NS = "prompt-library";
 export const zh = {
   // 通用按钮 / 提示
   "pl.title": "词库",
+  "pl.itemCount": "{n} 条提示词",
+  "pl.groupAll": "全部提示词",
+  "pl.showing": "显示 {from}–{to} / {total}",
+  "pl.recentFirst": "最近的在前",
   "pl.search": "搜索…",
   "pl.searchEmpty": "未找到匹配的提示词",
   "pl.clearSearch": "清除搜索",
@@ -441,6 +445,7 @@ export const zh = {
   // 选中添加提示词
   "pl.copySelected": "复制选中文字",
   "pl.copiedSelected": "已复制",
+  "pl.quoteSelected": "引用文本",
   "pl.applyTemplate": "套模板",
   "pl.applyTemplateDesc": "已选中 {length} 个字符，请选择要套用的模板（含 {{变量}} 的提示词）",
   "pl.applyTemplateEmpty": "词库中还没有含变量的模板，可先在词库中创建",
@@ -502,6 +507,10 @@ export const zh = {
 export const en: Record<keyof typeof zh, string> = {
   // Common buttons / hints
   "pl.title": "Library",
+  "pl.itemCount": "{n} prompts",
+  "pl.groupAll": "All prompts",
+  "pl.showing": "Showing {from}–{to} / {total}",
+  "pl.recentFirst": "Most recent first",
   "pl.search": "Search…",
   "pl.searchEmpty": "No matching prompts",
   "pl.clearSearch": "Clear search",
@@ -925,6 +934,7 @@ export const en: Record<keyof typeof zh, string> = {
   // Add from selection
   "pl.copySelected": "Copy selected text",
   "pl.copiedSelected": "Copied",
+  "pl.quoteSelected": "Quote text",
   "pl.applyTemplate": "Apply template",
   "pl.applyTemplateDesc": "Selected {length} characters. Pick a template (prompt with {{variables}})",
   "pl.applyTemplateEmpty": "No variable templates in the library yet. Create one first.",

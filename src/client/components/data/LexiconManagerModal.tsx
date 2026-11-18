@@ -1328,9 +1328,9 @@ export function LexiconManagerModal(props: {
       {/* AI 优化进度条动画（与 PromptLibraryButton 查看详情一致的不确定进度） */}
       <style>{`@keyframes pl-progress { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }`}</style>
       <style>{`
-.pl-lex-row{display:flex;flex-direction:column;gap:4;padding:8px 10px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2,rgba(196,211,232,.16));background:var(--dsw-alias-bg-layer-3,#1d2735);cursor:pointer;user-select:none;transition:border-color .24s cubic-bezier(.22,1,.36,1),background-color .24s cubic-bezier(.22,1,.36,1),transform .24s cubic-bezier(.22,1,.36,1)}
-.pl-lex-row:hover{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l3,rgba(196,211,232,.31))}
-.pl-lex-row--active{background:rgba(142,197,255,.10);border-color:rgba(142,197,255,.5)}
+.pl-lex-row{display:flex;flex-direction:column;gap:5px;padding:10px 11px;border-radius:11px;border:1px solid transparent;background:transparent;cursor:pointer;user-select:none;transition:border-color .18s ease,background-color .18s ease}
+.pl-lex-row:hover{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l2,rgba(196,211,232,.16))}
+.pl-lex-row--active{background:color-mix(in srgb,var(--dsw-alias-brand-primary,#8ec5ff) 12%,transparent);border-color:color-mix(in srgb,var(--dsw-alias-brand-primary,#8ec5ff) 45%,transparent)}
 `}</style>
       <div
         className={maximized ? `${PL_DIALOG} ${PL_DIALOG_MAX}` : PL_DIALOG}
@@ -1374,17 +1374,13 @@ export function LexiconManagerModal(props: {
             </>
           )}
         </div>
-        {/* 模块说明（与人格管理 / 技能管理说明框一致） */}
+        {/* 模块说明：轻量单行小字，去掉灰底说明框以压缩顶部空间 */}
         <div
           style={{
-            marginTop: 10,
+            marginTop: 5,
             fontSize: 11.5,
-            lineHeight: 1.6,
+            lineHeight: 1.5,
             color: TONE.quiet,
-            background: TONE.accentSoft,
-            border: `1px solid ${TONE.border}`,
-            borderRadius: 7,
-            padding: "7px 10px",
             flexShrink: 0,
           }}
         >
@@ -1456,7 +1452,7 @@ export function LexiconManagerModal(props: {
               flexDirection: "column",
               background: TONE.row,
               border: `1px solid ${TONE.border}`,
-              borderRadius: 10,
+              borderRadius: 12,
               overflow: "hidden",
             }}
           >
@@ -1933,7 +1929,7 @@ export function LexiconManagerModal(props: {
               minHeight: 0,
               background: TONE.row,
               border: `1px solid ${TONE.border}`,
-              borderRadius: 10,
+              borderRadius: 12,
               display: "flex",
               flexDirection: "column",
               overflow: "hidden",
@@ -1956,17 +1952,31 @@ export function LexiconManagerModal(props: {
                 <div
                   style={{
                     display: "flex",
+                    flexDirection: "column",
                     alignItems: "center",
                     justifyContent: "center",
+                    gap: 12,
                     height: "100%",
                     boxSizing: "border-box",
-                    fontSize: 12.5,
                     color: TONE.quiet,
                     padding: 20,
                     textAlign: "center",
                   }}
                 >
-                  {T("pl.lexicon.previewEmpty")}
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      width: 52, height: 52, borderRadius: 15, flexShrink: 0,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      background: TONE.accentSoft, color: TONE.accent,
+                    }}
+                  >
+                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M4 5h11a3 3 0 0 1 3 3v11l-3-2-3 2V8a3 3 0 0 0-3-3H4Z" />
+                      <path d="M8 9h3M8 12h3" />
+                    </svg>
+                  </span>
+                  <span style={{ fontSize: 12.5, lineHeight: 1.6 }}>{T("pl.lexicon.previewEmpty")}</span>
                 </div>
               )}
             </div>

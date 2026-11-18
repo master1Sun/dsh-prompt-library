@@ -8,6 +8,7 @@
  * 弹窗表面直接继承官方浮层（`.pl-dialog`），样式与 ConfirmDialog 一致，仅确认/取消按钮差异。
  */
 import { type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../../utils/dialog-style.js";
 import { getTone, useThemeSync } from "../../utils/theme.js";
 
@@ -75,7 +76,8 @@ export function ImportConfirmModal({
     fontFamily: BLOCK,
     transition: "background-color .24s cubic-bezier(.22,1,.36,1), color .24s cubic-bezier(.22,1,.36,1)",
   };
-  return (
+  // portal 到 body：避免被宿主面板的 transform/filter 祖先劫持 position:fixed 包含块。
+  return createPortal(
     <>
       <style>{PL_DIALOG_CSS}</style>
       <div className={PL_DIALOG_OVERLAY}>
@@ -197,6 +199,7 @@ export function ImportConfirmModal({
           </div>
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   );
 }

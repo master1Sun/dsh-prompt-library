@@ -538,17 +538,13 @@ export function ImportExportModal(props: {
             </>
           )}
         </div>
-        {/* 模块说明（与人格管理 / 技能管理说明框一致） */}
+        {/* 模块说明：轻量单行小字，与其他视图统一 */}
         <div
           style={{
-            marginTop: 10,
+            marginTop: 5,
             fontSize: 11.5,
-            lineHeight: 1.6,
+            lineHeight: 1.5,
             color: TONE.quiet,
-            background: TONE.accentSoft,
-            border: `1px solid ${TONE.border}`,
-            borderRadius: 7,
-            padding: "7px 10px",
             flexShrink: 0,
           }}
         >

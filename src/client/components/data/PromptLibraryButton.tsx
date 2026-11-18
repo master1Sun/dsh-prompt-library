@@ -38,7 +38,7 @@ import { isRecent, markRecent } from "../../utils/recent-created.js";
 import { rowBackground } from "../../utils/theme.js";
 import { notifyDataChanged, useDataChanged, useExportDownloaded, useFillDraft } from "../../utils/data-sync.js";
 import { type PLT, type PLTranslate, usePLT } from "../../utils/i18n.js";
-import { SearchBox, TagFilterBar } from "../common/SearchBox.js";
+import { SearchBox, TagFilterSelect } from "../common/SearchBox.js";
 import {
   applyVariables,
   extractVariables,
@@ -56,6 +56,8 @@ interface ButtonProps {
   inputActions: {
     setDraft: (text: string) => void;
     submit?: () => void;
+    /** 宿主原生引用插入（把文本作为引用块插入输入框）；部分宿主版本提供。 */
+    insertQuote?: (text: string) => boolean | void;
   };
   t?: PLTranslate;
 }
@@ -76,6 +78,32 @@ const TONE = {
   mint: "var(--dsw-alias-state-success-primary, #78dda0)",
   red: "var(--dsw-alias-state-error-primary, #ff8592)",
 } as const;
+
+/** 卡片操作按钮的图标（14px、currentColor，悬停由 data-tip 显示文字）。 */
+const ROW_ACTION_ICONS = {
+  insert: '<path d="M3 12h12m-4-4 4 4-4 4"/><path d="M20 5v14"/>',
+  overwrite: '<path d="M20 7a8 8 0 0 0-13.7-2.7L4 7"/><path d="M4 3v4h4"/><path d="M4 17a8 8 0 0 0 13.7 2.7L20 17"/><path d="M20 21v-4h-4"/>',
+  view: '<path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6Z"/><circle cx="12" cy="12" r="2.4"/>',
+  edit: '<path d="M4 20h4L20 8l-4-4L4 16v4Z"/><path d="M14 6l4 4"/>',
+  delete: '<path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v5M14 11v5"/>',
+} as const;
+
+function RowActionIcon({ name }: { name: keyof typeof ROW_ACTION_ICONS }): ReactNode {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      dangerouslySetInnerHTML={{ __html: ROW_ACTION_ICONS[name] }}
+    />
+  );
+}
 
 // ── # 键触发 ────────────────────────────────────────────────────────────────
 
@@ -991,7 +1019,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
     color: TONE.text,
     background: TONE.panel,
     border: `1px solid ${TONE.borderStrong}`,
-    borderRadius: 12,
+    borderRadius: 16,
     fontFamily: MONO,
   };
 
@@ -1007,6 +1035,8 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
       {/* 词库聊天栏按钮：底色走层2以在工具栏上清晰可读，悬停/按下沿用官方交互高亮，
           与 AI 优化按钮一致的 hover 效果（放在 PL_BUTTON_CSS 之后，确保等同优先级时覆盖） */}
       <style>{`.pl-btn.pl-cbn-btn{border:none;background:var(--dsw-alias-bg-layer-2,#ffffff);box-shadow:none}.pl-btn.pl-cbn-btn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.pl-btn.pl-cbn-btn:active:not(:disabled){background:var(--dsw-alias-interactive-bg-active)}`}</style>
+      {/* 卡片操作按钮为紧凑图标按钮：固定尺寸、居中图标，避免被拉伸 */}
+      <style>{`.pl-btn.pl-row-act{width:28px!important;min-width:28px!important;height:28px!important;padding:0!important;border-radius:8px!important}`}</style>
       {showComposerButton && (
         <>
       <Button
@@ -1077,22 +1107,33 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
               style={{
                 display: "flex",
                 alignItems: "center",
-                justifyContent: "space-between",
-                gap: 10,
-                padding: "14px 16px 10px",
+                gap: 8,
+                padding: "9px 14px 8px",
                 borderBottom: `1px solid ${TONE.border}`,
                 flexShrink: 0,
               }}
             >
-              {/* 面板头部队列对齐：同款书本图标 + 词库名；图标与聊天栏按钮一致 */}
-              <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true" style={{ flexShrink: 0 }}>
-                  <path d="M4 5h11a3 3 0 0 1 3 3v11l-3-2-3 2V8a3 3 0 0 0-3-3H4Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
-                  <path d="M8 9h3M8 12h3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              {/* 标题区收窄：小图标瓦片 + 标题（条数内联），单行更紧凑 */}
+              <span
+                aria-hidden="true"
+                style={{
+                  width: 25, height: 25, borderRadius: 7, flexShrink: 0,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  background: TONE.accentSoft, color: TONE.accent,
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 5h11a3 3 0 0 1 3 3v11l-3-2-3 2V8a3 3 0 0 0-3-3H4Z" />
+                  <path d="M8 9h3M8 12h3" />
                 </svg>
-                <strong style={{ fontSize: 14, fontWeight: 470, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{T("pl.title")}</strong>
               </span>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <span style={{ display: "flex", alignItems: "baseline", gap: 6, minWidth: 0 }}>
+                <strong style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>{T("pl.title")}</strong>
+                <span style={{ fontSize: 11, color: TONE.muted, whiteSpace: "nowrap" }}>{T("pl.itemCount", { n: filtered.length })}</span>
+              </span>
+              <span style={{ flex: 1 }} />
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                {/* 刷新：保留文字与图标 */}
                 <Button
                   type="button"
                   variant="ghost"
@@ -1104,17 +1145,20 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                   icon={
                     <svg
                       width="13" height="13" viewBox="0 0 24 24" fill="none"
-                      stroke="currentColor" strokeWidth="2"
+                      stroke="currentColor" strokeWidth="1.8"
                       strokeLinecap="round" strokeLinejoin="round"
                       style={{ animation: phase === "loading" ? "pl-refresh-spin 0.9s linear infinite" : "none" }}
                     >
-                      <path d="M23 4v6h-6M1 20v-6h6" />
-                      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                      <path d="M20 7a8 8 0 0 0-13.7-2.7L4 7" />
+                      <path d="M4 3v4h4" />
+                      <path d="M4 17a8 8 0 0 0 13.7 2.7L20 17" />
+                      <path d="M20 21v-4h-4" />
                     </svg>
                   }
                 >
                   {phase === "loading" ? T("pl.refreshing") : T("pl.refresh")}
                 </Button>
+                {/* 新建：普通描边按钮（文案已含 + 号） */}
                 <Button
                   type="button"
                   variant="ghost"
@@ -1122,7 +1166,6 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                   className={plBtn("ghost", "sm")}
                   onClick={startCreate}
                   disabled={editing}
-                  style={{ color: "var(--dsw-alias-brand-primary, #8ec5ff)" }}
                 >
                   {T("pl.new")}
                 </Button>
@@ -1138,31 +1181,35 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                   icon={
                     <svg
                       width="13" height="13" viewBox="0 0 24 24" fill="none"
-                      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                      stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
                     >
-                      <path d="M18 6L6 18M6 6l12 12" />
+                      <path d="M6 6l12 12M18 6L6 18" />
                     </svg>
                   }
                 />
               </div>
             </header>
 
-            {/* 搜索框 + 标签过滤：输入即时生效（实时过滤） */}
+            {/* 搜索框 + 标签下拉：同一行，输入即时生效（实时过滤） */}
             {!editing && (
-              <div style={{ padding: "10px 16px 4px", flexShrink: 0 }}>
-                <SearchBox
-                  value={query}
-                  onChange={setQuery}
-                  onSearch={() => setQuery(query)}
-                  onClear={clearSearch}
-                  placeholder={T("pl.search")}
-                />
-                <TagFilterBar
-                  tags={allTags}
-                  active={tagFilter}
-                  onChange={setTagFilter}
-                  allLabel={T("pl.tagFilterAll")}
-                />
+              <div style={{ padding: "10px 14px 8px", flexShrink: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <SearchBox
+                      value={query}
+                      onChange={setQuery}
+                      onSearch={() => setQuery(query)}
+                      onClear={clearSearch}
+                      placeholder={T("pl.search")}
+                    />
+                  </div>
+                  <TagFilterSelect
+                    tags={allTags}
+                    active={tagFilter}
+                    onChange={setTagFilter}
+                    allLabel={T("pl.tagFilterAll")}
+                  />
+                </div>
               </div>
             )}
 
@@ -1224,7 +1271,7 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                   {error && <div style={{ color: TONE.red, fontSize: 12 }}>{error}</div>}
                 </div>
               ) : (
-                <ul style={{ listStyle: "none", margin: 0, padding: "4px 8px 8px" }}>
+                <ul style={{ listStyle: "none", margin: 0, padding: "6px 8px 16px" }}>
                   {phase === "ready" && filtered.length === 0 && (
                     <li style={{ padding: "18px 12px", color: TONE.muted, fontSize: 13, textAlign: "center" }}>
                       {T("pl.empty")}
@@ -1236,30 +1283,24 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                       style={{
                         display: "flex",
                         flexDirection: "column",
-                        gap: 3,
-                        padding: "7px 10px",
-                        marginBottom: 4,
-                        borderRadius: 8,
-                        background: TONE.row,
-                        border: `1px solid ${TONE.border}`,
+                        gap: 6,
+                        padding: "10px 11px 11px",
+                        marginBottom: 2,
+                        borderRadius: 11,
+                        background: "transparent",
+                        border: `1px dashed ${TONE.border}`,
                         transition: "background-color .18s ease, border-color .18s ease",
                       }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.background = "var(--dsw-alias-interactive-bg-hover)";
-                        e.currentTarget.style.borderColor = TONE.borderStrong;
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.background = TONE.row;
-                        e.currentTarget.style.borderColor = TONE.border;
-                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = TONE.row; e.currentTarget.style.borderColor = TONE.borderStrong; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = TONE.border; }}
                     >
-                      {/* 标题行：标题 + 最近标记（单行省略） */}
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", minWidth: 0 }}>
+                      {/* 标题行：标题 + 最近标记 + 标签胶囊（同行，标签完整显示） */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flexWrap: "wrap" }}>
                         <strong
                           style={{
-                            fontSize: 12.5,
+                            fontSize: 13,
                             fontWeight: 500,
-                            flex: "1 1 auto",
+                            flex: "0 1 auto",
                             minWidth: 0,
                             whiteSpace: "nowrap",
                             overflow: "hidden",
@@ -1275,8 +1316,27 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                             style={{ width: 7, height: 7, borderRadius: "50%", background: TONE.mint, display: "inline-block", flexShrink: 0 }}
                           />
                         )}
+                        {(p.tags ?? []).slice(0, 3).map((tag) => (
+                          <span
+                            key={tag}
+                            data-tip={tag}
+                            style={{
+                              flexShrink: 0,
+                              fontSize: 11,
+                              lineHeight: "18px",
+                              padding: "0 8px",
+                              borderRadius: 9,
+                              color: TONE.muted,
+                              background: TONE.row,
+                              border: `1px solid ${TONE.border}`,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {tag}
+                          </span>
+                        ))}
                       </div>
-                      {/* 正文预览：单行省略，节省垂直空间展示更多条目（完整内容用「查看」按钮打开） */}
+                      {/* 正文预览：单行省略 */}
                       <div
                         style={{
                           color: TONE.muted,
@@ -1289,39 +1349,14 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                       >
                         {p.body.replace(/\s+/g, " ").trim()}
                       </div>
-                      {/* 底行：标签胶囊（左侧，过长省略、悬停显示完整）+ 操作按钮（右侧） */}
-                      <div style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 0 }}>
-                        <span style={{ display: "flex", gap: 4, alignItems: "center", flex: "1 1 auto", minWidth: 0, overflow: "hidden" }}>
-                          {(p.tags ?? []).slice(0, 3).map((tag) => (
-                            <span
-                              key={tag}
-                              data-tip={tag}
-                              style={{
-                                flexShrink: 0,
-                                fontSize: 10,
-                                lineHeight: 1,
-                                padding: "2px 6px",
-                                borderRadius: 8,
-                                color: TONE.quiet,
-                                border: `1px solid ${TONE.border}`,
-                                whiteSpace: "nowrap",
-                                maxWidth: 96,
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                              }}
-                            >
-                              {tag}
-                            </span>
-                          ))}
-                        </span>
-                        <span style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                          <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} onClick={() => insert(p)}>{T("pl.insert")}</Button>
-                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => overwrite(p)}>{T("pl.overwrite")}</Button>
-                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => setViewing(p)}>{T("pl.view")}</Button>
-                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => startEdit(p)}>{T("pl.edit")}</Button>
-                          <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => remove(p)}>{T("pl.delete")}</Button>
-                        </span>
-                      </div>
+                        {/* 操作行：5 个图标按钮全部保留，悬停显示文字；删除红色醒目 */}
+                        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
+                          <Button type="button" variant="ghost" size="sm" className={`${plBtn("ghost", "sm")} pl-row-act`} onClick={() => insert(p)} data-tip={T("pl.insert")} aria-label={T("pl.insert")} icon={<RowActionIcon name="insert" />} />
+                          <Button type="button" variant="ghost" size="sm" className={`${plBtn("ghost", "sm")} pl-row-act`} onClick={() => overwrite(p)} data-tip={T("pl.overwrite")} aria-label={T("pl.overwrite")} icon={<RowActionIcon name="overwrite" />} />
+                          <Button type="button" variant="ghost" size="sm" className={`${plBtn("ghost", "sm")} pl-row-act`} onClick={() => setViewing(p)} data-tip={T("pl.view")} aria-label={T("pl.view")} icon={<RowActionIcon name="view" />} />
+                          <Button type="button" variant="ghost" size="sm" className={`${plBtn("ghost", "sm")} pl-row-act`} onClick={() => startEdit(p)} data-tip={T("pl.edit")} aria-label={T("pl.edit")} icon={<RowActionIcon name="edit" />} />
+                          <Button type="button" variant="ghost" size="sm" className={`${plBtn("ghost", "sm")} pl-row-act`} onClick={() => remove(p)} data-tip={T("pl.delete")} aria-label={T("pl.delete")} icon={<RowActionIcon name="delete" />} style={{ color: TONE.red, borderColor: TONE.red }} />
+                        </div>
                     </li>
                   ))}
                 </ul>

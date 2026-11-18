@@ -15,6 +15,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import type { TrashItem } from "../../../types.js";
 import {
   deleteTrash as apiDeleteTrash,
@@ -520,8 +521,8 @@ export function RecycleManagePanel(props: { t?: PLTranslate }): ReactNode {
         </div>
       </div>
 
-      {/* 自定义确认弹窗（替代系统 confirm） */}
-      {pendingConfirm && (
+      {/* 自定义确认弹窗（替代系统 confirm）：portal 到 body，避免被 LibraryModal 面板的 transform 劫持 fixed 包含块 */}
+      {pendingConfirm && createPortal(
         <div className={PL_DIALOG_OVERLAY}>
           <style>{PL_DIALOG_CSS}</style>
           <div
@@ -560,7 +561,8 @@ export function RecycleManagePanel(props: { t?: PLTranslate }): ReactNode {
               </Button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );

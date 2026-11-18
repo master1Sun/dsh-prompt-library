@@ -452,6 +452,11 @@ export const zh = {
   "pl.selectionMore": "更多操作",
   "pl.selectionSetDefault": "设为默认",
   "pl.selectionIsDefault": "默认",
+  "pl.annotate": "批注",
+  "pl.writeAnnotation": "写下批注...",
+  "pl.addAnnotation": "添加",
+  "pl.sendAnnotation": "发送",
+  "pl.annotationEmpty": "请先写下批注内容",
 
   // 上下文提示词推荐
   "pl.recommend": "推荐",
@@ -941,6 +946,11 @@ export const en: Record<keyof typeof zh, string> = {
   "pl.selectionMore": "More actions",
   "pl.selectionSetDefault": "Set as default",
   "pl.selectionIsDefault": "Default",
+  "pl.annotate": "Annotate",
+  "pl.writeAnnotation": "Write an annotation...",
+  "pl.addAnnotation": "Add",
+  "pl.sendAnnotation": "Send",
+  "pl.annotationEmpty": "Please write an annotation first.",
 
   // Context-based prompt recommendations
   "pl.recommend": "Recommended",

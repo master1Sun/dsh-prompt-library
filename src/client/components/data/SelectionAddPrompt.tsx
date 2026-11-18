@@ -111,8 +111,8 @@ const floatingBtnStyle: CSSProperties = {
 };
 
 /** 浮层可选动作：默认只显示一个（可切换），其余收进「更多」二级面板。 */
-type SelectionActionId = "copy" | "quote" | "add" | "tpl";
-const SELECTION_ACTIONS: SelectionActionId[] = ["copy", "quote", "add", "tpl"];
+type SelectionActionId = "copy" | "quote" | "add" | "tpl" | "note";
+const SELECTION_ACTIONS: SelectionActionId[] = ["copy", "quote", "add", "tpl", "note"];
 const DEFAULT_ACTION_KEY = "pl-selection-default-action";
 /** 非默认动作的入口收纳在「更多」面板里，避免和批注等其他插件的选区浮层拥挤冲突。 */
 
@@ -140,13 +140,19 @@ const ACTION_ICON: Record<SelectionActionId, ReactNode> = {
       <path d="M4 14h9v4H4v-4ZM17 6h3M17 12h3M17 18h3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
     </svg>
   ),
+  note: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5H12l-4.5 4v-4h-2A1.5 1.5 0 0 1 4 14.5v-9Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="M8 8.5h8M8 11.5h5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  ),
 };
 
 /** 读取本地持久化的默认动作（异常/非法值回退到「复制」）。 */
 function loadDefaultAction(): SelectionActionId {
   try {
     const v = localStorage.getItem(DEFAULT_ACTION_KEY);
-    if (v === "quote" || v === "add" || v === "tpl") return v;
+    if (v === "quote" || v === "add" || v === "tpl" || v === "note") return v;
   } catch {
     /* 隐私模式等 localStorage 不可用时静默回退 */
   }
@@ -160,6 +166,8 @@ interface Props {
   /** 聊天框输入动作：套模板结果插入到输入框。 */
   inputActions?: {
     setDraft: (text: string) => void;
+    /** 宿主直接发送（把当前草稿作为消息发出）；模板「插入并发送」同款能力。 */
+    submit?: () => void;
     /** 宿主原生引用插入（把文本作为引用块插入输入框）；不存在时降级到 setDraft。 */
     insertQuote?: (text: string) => boolean | void;
   };
@@ -231,6 +239,12 @@ export function SelectionAddPrompt(props: Props): ReactNode {
   const [tplQuery, setTplQuery] = useState("");
   // 模板选择弹窗内的标签分类过滤（空 = 全部）
   const [tplTag, setTplTag] = useState("");
+  // 批注：弹窗是否打开 / 引用文本 / 批注内容 / 错误
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [noteQuote, setNoteQuote] = useState("");
+  const [noteText, setNoteText] = useState("");
+  const [noteError, setNoteError] = useState<string | null>(null);
+  const noteRef = useRef<HTMLTextAreaElement>(null);
 
   // 加载已有标签作为下拉候选；功能启用时拉取一次，并在词库/标签数据变化时刷新
   //（保证「设置里新增的标签」能立即出现在候选里）。
@@ -266,6 +280,46 @@ export function SelectionAddPrompt(props: Props): ReactNode {
     setTplPickerOpen(true);
   };
 
+  // 批注：打开批注弹窗（暂存选中文本作为引用，关闭浮层避免干扰）
+  const openNotePicker = (text: string) => {
+    setSelection(null);
+    setNoteQuote(text);
+    setNoteText("");
+    setNoteError(null);
+    setNoteOpen(true);
+  };
+
+  // 把「引用文本 + 批注」整体插入聊天输入框：
+  // 优先用宿主 insertQuote（原生引用块，引用与批注都在引用气泡内），降级 setDraft 拼 `> ` 引用格式。
+  // 返回 false 表示批注为空（已提示），调用方据此中断。
+  const insertNote = (): boolean => {
+    const note = noteText.trim();
+    if (!note) {
+      setNoteError(T("pl.annotationEmpty"));
+      return false;
+    }
+    if (typeof inputActions?.insertQuote === "function") {
+      const ok = inputActions.insertQuote(`${noteQuote}\n\n${note}`);
+      if (ok !== false) return true; // 宿主已处理引用块插入
+    }
+    const combined = `${quoteMarkdown(noteQuote)}\n\n${note}`;
+    inputActions?.setDraft(draft && draft.trim() ? `${draft}\n\n${combined}` : combined);
+    return true;
+  };
+
+  // 批注「添加」：引用块插入聊天输入框，由用户确认后自行发送。
+  const addNote = () => {
+    if (insertNote()) setNoteOpen(false);
+  };
+
+  // 批注「发送」：引用块插入后直接调用宿主 submit 发送对话。
+  const sendNote = () => {
+    if (insertNote()) {
+      setNoteOpen(false);
+      inputActions?.submit?.();
+    }
+  };
+
   // 套模板：选中模板后关闭选择弹窗，以选中文本预填变量并弹出填充窗口
   const pickTemplate = (p: Prompt) => {
     setTplPickerOpen(false);
@@ -294,7 +348,9 @@ export function SelectionAddPrompt(props: Props): ReactNode {
           ? T("pl.quoteSelected")
           : id === "add"
             ? T("pl.addToLibrary")
-            : T("pl.applyTemplate"),
+            : id === "note"
+              ? T("pl.annotate")
+              : T("pl.applyTemplate"),
     [copied, T],
   );
 
@@ -581,6 +637,7 @@ export function SelectionAddPrompt(props: Props): ReactNode {
               if (defaultAction === "copy") copySelected(selection.text);
               else if (defaultAction === "quote") quoteSelected(selection.text);
               else if (defaultAction === "add") openModal(selection.text);
+              else if (defaultAction === "note") openNotePicker(selection.text);
               else openTplPicker(selection.text);
             }}
             data-tip={actionLabel(defaultAction)}
@@ -649,6 +706,7 @@ export function SelectionAddPrompt(props: Props): ReactNode {
                         setMoreOpen(false);
                         if (id === "quote") quoteSelected(selection.text);
                         else if (id === "add") openModal(selection.text);
+                        else if (id === "note") openNotePicker(selection.text);
                         else openTplPicker(selection.text);
                       }
                     }}
@@ -929,6 +987,89 @@ export function SelectionAddPrompt(props: Props): ReactNode {
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingTop: 4, flexShrink: 0 }}>
               <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => setTplPickerOpen(false)}>
                 {T("pl.cancel")}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 批注弹窗：引用选中文本 + 批注输入框；「添加」存入词库，「发送」插入输入框发给 AI */}
+      {enabled && noteOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={T("pl.annotate")}
+          className={PL_DIALOG_OVERLAY}
+        >
+          <style>{PL_DIALOG_CSS}</style>
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className={PL_DIALOG}
+            style={{
+              width: 480,
+              maxWidth: "calc(100vw - 40px)",
+              maxHeight: "min(560px, calc(100vh - 40px))",
+              gap: 9,
+            }}
+          >
+            <strong style={{ fontSize: 15, fontWeight: 520, paddingBottom: 4, flexShrink: 0 }}>{T("pl.annotate")}</strong>
+            {/* 引用文本：只读展示选中的内容（超出时内部滚动） */}
+            <div
+              style={{
+                boxSizing: "border-box",
+                maxHeight: 140,
+                overflow: "auto",
+                padding: "9px 11px",
+                fontSize: 13,
+                lineHeight: 1.6,
+                color: TONE.text,
+                background: "var(--dsw-alias-bg-layer-2, #ffffff)",
+                border: `1px solid color-mix(in srgb, var(--dsw-alias-brand-primary, #4f9df5) 55%, ${TONE.border})`,
+                borderRadius: 8,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                flexShrink: 0,
+              }}
+            >
+              {noteQuote || " "}
+            </div>
+            {/* 批注输入：写下批注后「添加」存词库 /「发送」插入输入框 */}
+            <textarea
+              ref={noteRef}
+              autoFocus
+              value={noteText}
+              onChange={(e) => {
+                setNoteText(e.target.value);
+                if (noteError) setNoteError(null);
+              }}
+              placeholder={T("pl.writeAnnotation")}
+              rows={5}
+              style={{
+                ...inputStyle,
+                resize: "vertical",
+                flex: 1,
+                minHeight: 0,
+              }}
+            />
+            {noteError && <div style={{ color: TONE.red, fontSize: 12, flexShrink: 0 }}>{noteError}</div>}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingTop: 2, flexShrink: 0 }}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className={plBtn("ghost", "sm")}
+                onClick={addNote}
+              >
+                {T("pl.addAnnotation")}
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                className={plBtn("primary", "sm")}
+                onClick={sendNote}
+              >
+                {T("pl.sendAnnotation")}
               </Button>
             </div>
           </div>

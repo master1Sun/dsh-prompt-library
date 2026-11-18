@@ -6,6 +6,7 @@
  * 由侧边栏 / 聊天面板两个插入入口共享使用。
  */
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "@deepseek-ai/dsh-client-ui-primitives";
 import { plBtn } from "../../utils/button-style.js";
 import { PL_DIALOG, PL_DIALOG_CSS, PL_DIALOG_OVERLAY } from "../../utils/dialog-style.js";
@@ -336,7 +337,9 @@ export function TemplateFillModal({
   // 插入并发送：仅显示且回调存在且草稿为空时可用；否则置灰并提示
   const canSend = Boolean(onInsertAndSend) && showInsertAndSend && draftEmpty === true;
 
-  return (
+  // 必须 portal 到 document.body：否则弹窗留在聊天面板组件树内，会被聊天区的
+  // transform/filter 祖先劫持 position:fixed 的包含块，「视口居中」退化为「聊天框附近」。
+  return createPortal(
     <div
       role="dialog"
       aria-modal="true"
@@ -508,7 +511,8 @@ export function TemplateFillModal({
           </Button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

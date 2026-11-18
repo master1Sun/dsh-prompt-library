@@ -93,7 +93,11 @@ export function registerSettingsMenuLibraryItem(
     // 已注入（菜单仍打开）则只刷新文字（相等则跳过，避免 childList 变更引发观察器自循环）
     const existing = document.querySelector<HTMLElement>(`[${MARKER}]`);
     if (existing) {
-      const exBtn = existing.querySelector<HTMLElement>('button[role="menuitem"]');
+      // 注入项可能是 wrapper（原生菜单有 per-item wrapper），也可能就是 button 本身
+      // （如 DS Bot 的账户菜单把 menuitem 直接挂在菜单容器下），两种都要能找到 label。
+      const exBtn = existing.matches('button[role="menuitem"]')
+        ? existing
+        : existing.querySelector<HTMLElement>('button[role="menuitem"]');
       const label = exBtn ? findLabelSpan(exBtn) : null;
       const next = getLabel();
       if (label && label.textContent !== next) label.textContent = next;
@@ -102,13 +106,22 @@ export function registerSettingsMenuLibraryItem(
 
     const settingsBtn = findSettingsItem();
     if (!settingsBtn) return;
-    // 菜单项外层（div.itemWrap）；克隆它以保证分隔线/间距与原生一致
     const settingsWrap = settingsBtn.parentElement;
-    if (!settingsWrap || !settingsWrap.parentElement) return;
+    if (!settingsWrap) return;
 
-    const wrap = settingsWrap.cloneNode(true) as HTMLElement;
+    // 有些宿主（如 DS Bot 的 AccountLauncher）把 menuitem 直接挂在菜单卡片下，
+    // 没有 per-item wrapper。此时 cloneNode(parentElement) 会把「整个菜单」复制成
+    // 一份没有事件监听、也无人回收的死副本，且定位与真菜单相同、永久盖在真菜单上。
+    // 只有外层确实只装了这一项时才克隆外层（以继承分隔线/间距），否则退化为克隆按钮本身。
+    const wrapsOneItem =
+      settingsWrap.querySelectorAll('button[role="menuitem"]').length === 1;
+    const source: HTMLElement = wrapsOneItem ? settingsWrap : settingsBtn;
+
+    const wrap = source.cloneNode(true) as HTMLElement;
     wrap.setAttribute(MARKER, "");
-    const btn = wrap.querySelector<HTMLButtonElement>('button[role="menuitem"]');
+    const btn = wrap.matches('button[role="menuitem"]')
+      ? (wrap as HTMLButtonElement)
+      : wrap.querySelector<HTMLButtonElement>('button[role="menuitem"]');
     if (!btn) return;
     btn.removeAttribute("disabled");
     btn.removeAttribute("aria-keyshortcuts");
@@ -130,8 +143,12 @@ export function registerSettingsMenuLibraryItem(
       window.dispatchEvent(new CustomEvent(OPEN_LIBRARY_EVENT));
     });
 
-    // 插到「设置」下方（menu 列表内）
-    settingsWrap.insertAdjacentElement("afterend", wrap);
+    // 插到「设置」下方（menu 列表内）。两种来源都放到「设置」之后，保持与
+    // i18n 文案（在设置下方显示词库）及原生 per-item wrapper 场景行为一致：
+    // - 克隆了 wrapper：插到该 wrapper 之后
+    // - 克隆了按钮本身（DS Bot 这类无 wrapper 场景）：插到「设置」按钮之后
+    if (wrapsOneItem) settingsWrap.insertAdjacentElement("afterend", wrap);
+    else settingsBtn.insertAdjacentElement("afterend", wrap);
   };
 
   const scheduleInject = (): void => {

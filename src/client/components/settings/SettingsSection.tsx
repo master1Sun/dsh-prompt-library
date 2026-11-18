@@ -442,7 +442,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
       style={{
         color: TONE.text,
         fontFamily: MONO,
-        maxWidth: 520,
+        width: "100%",
       }}
     >
       {/* 面板顶部标题（与「词库管理」一致） */}

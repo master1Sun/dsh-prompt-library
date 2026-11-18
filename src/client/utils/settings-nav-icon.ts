@@ -1,11 +1,15 @@
 /**
- * 设置导航图标 — 让 DSH 原生设置界面中「词库」「词库管理」两行的图标
+ * 设置导航图标 — 让 DSH 原生设置界面中「词库设置」「词库管理」两行的图标
  * 与插件功能语义保持一致（提示词 / 数据库）。
  *
- * DSH 0.1.x 的 settings.section 契约只透传 id / order / label，对每个外部插件
- * 都会在设置导航里渲染同一个通用齿轮图标。这里通过 MutationObserver 找到
- * 文本匹配的导航按钮并打上标记，再由注入的 CSS 隐藏默认齿轮、用 mask 方式
- * 渲染对应 SVG 图标（跟随原生 hover/active 变色）。
+ * DSH 的 settings.section 契约只透传 id / order / label，对每个外部插件
+ * 都在设置导航里渲染同一个通用齿轮图标。这里通过 MutationObserver 找到
+ * 文本匹配的导航按钮并打上标记，再用 CSS 把该齿轮 svg **就地改造成**
+ * 目标图标：隐藏 svg 内部的 path、给 svg 本身套 mask。
+ *
+ * 关键：不新增/替换 DOM 节点，而是在原生 svg 上做样式替换。这样图标的
+ * 位置、尺寸、与文字的间距全部继承原生按钮布局，不会像注入新 span 那样
+ * 破坏「图标—文字」间距。
  */
 
 /** 词库导航行标记。 */
@@ -25,27 +29,34 @@ const NAV_ICON_MASK_PROMPT =
 const NAV_ICON_MASK_DATA =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linejoin='round'%3E%3Cellipse cx='12' cy='5' rx='9' ry='3'/%3E%3Cpath d='M3 5v14a9 3 0 0 0 18 0V5'/%3E%3Cpath d='M3 12a9 3 0 0 0 18 0'/%3E%3C/svg%3E";
 
-/** 注入到 document.head 的样式：隐藏默认齿轮，按标记替换为对应图标。 */
+/**
+ * 注入到 document.head 的样式：
+ * - 隐藏被标记按钮内 svg 的原始图形（齿轮的 path 等子元素）
+ * - 给该 svg 本身套上目标图标的 mask，用 currentColor 上色（跟随 hover/active）
+ *
+ * 注意这里保留 svg 元素本身（不 display:none、不新增节点），因此图标的位置、
+ * 尺寸、与文字的间距完全沿用原生按钮布局。
+ */
 export const SETTINGS_NAV_CSS = `
-[${SETTINGS_NAV_MARKER_PROMPT}] svg,
-[${SETTINGS_NAV_MARKER_DATA}] svg {
+[${SETTINGS_NAV_MARKER_PROMPT}] svg > *,
+[${SETTINGS_NAV_MARKER_DATA}] svg > * {
   display: none !important;
 }
-[${SETTINGS_NAV_MARKER_PROMPT}]::before,
-[${SETTINGS_NAV_MARKER_DATA}]::before {
-  content: '';
-  flex: none;
-  width: 16px;
-  height: 16px;
-  background: currentColor;
-  -webkit-mask: center / contain no-repeat;
-  mask: center / contain no-repeat;
+[${SETTINGS_NAV_MARKER_PROMPT}] svg,
+[${SETTINGS_NAV_MARKER_DATA}] svg {
+  background-color: currentColor;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  mask-repeat: no-repeat;
 }
-[${SETTINGS_NAV_MARKER_PROMPT}]::before {
+[${SETTINGS_NAV_MARKER_PROMPT}] svg {
   -webkit-mask-image: url("${NAV_ICON_MASK_PROMPT}");
   mask-image: url("${NAV_ICON_MASK_PROMPT}");
 }
-[${SETTINGS_NAV_MARKER_DATA}]::before {
+[${SETTINGS_NAV_MARKER_DATA}] svg {
   -webkit-mask-image: url("${NAV_ICON_MASK_DATA}");
   mask-image: url("${NAV_ICON_MASK_DATA}");
 }

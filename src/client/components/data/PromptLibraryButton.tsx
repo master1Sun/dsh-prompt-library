@@ -1113,13 +1113,13 @@ export function PromptLibraryButton(props: ButtonProps): ReactNode {
                 flexShrink: 0,
               }}
             >
-              {/* 标题区收窄：小图标瓦片 + 标题（条数内联），单行更紧凑 */}
+              {/* 标题区收窄：小图标（无背景）+ 标题（条数内联），单行更紧凑 */}
               <span
                 aria-hidden="true"
                 style={{
-                  width: 25, height: 25, borderRadius: 7, flexShrink: 0,
+                  flexShrink: 0,
                   display: "flex", alignItems: "center", justifyContent: "center",
-                  background: TONE.accentSoft, color: TONE.accent,
+                  color: TONE.text,
                 }}
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">

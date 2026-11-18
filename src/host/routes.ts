@@ -233,20 +233,49 @@ function extractIds(body: unknown): string[] {
   return list.filter((x): x is string => typeof x === "string");
 }
 
+/** listSessionRecords 的兜底超时：sessionQuery 服务偶发挂起时避免前端「解析中」卡死。 */
+const SESSION_QUERY_TIMEOUT_MS = 3000;
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolveP, rejectP) => {
+    const timer = setTimeout(() => rejectP(new Error(`timeout after ${ms}ms`)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolveP(v);
+      },
+      (e: unknown) => {
+        clearTimeout(timer);
+        rejectP(e);
+      },
+    );
+  });
+}
+
 /**
  * 解析当前工作目录（会话列表提供器 + 最近活跃会话 scope）。
  * 项目级技能导出据此写盘到 <cwd>/.dsh/skills；尚未有任何会话时为 null。
+ *
+ * 解析顺序：
+ * 1) 当前活跃会话的内存 cwd（agent 组装时记录，零依赖、瞬时返回）；
+ * 2) 会话列表提供器（sessionQuery，偶发挂起 → 3s 超时放弃）。
  */
 async function resolveCurrentProjectCwd(): Promise<string | null> {
+  // 1) 内存优先：scope 会话在组装时记录的真实 cwd，不依赖 sessionQuery
+  const scope = getCurrentSessionScope();
+  if (scope) {
+    const mem = getActiveSessionCwd(scope);
+    if (mem) return mem;
+  }
+  // 2) 会话列表提供器回退：加超时防止 listSessions 挂起导致请求永远不返回
   let records: Array<{ id: string; cwd: string | null }> = [];
   try {
-    records = await listSessionRecords();
+    records = await withTimeout(listSessionRecords(), SESSION_QUERY_TIMEOUT_MS);
   } catch {
     records = [];
   }
-  // 优先取最近活跃会话的 cwd；若其 id 匹配不到或无活跃会话，回退到任一会话的 cwd，
+  // scope 会话在列表里的 cwd 优先；匹配不到再取任一会话的 cwd，
   // 避免返回 null 导致项目技能（<cwd>/.dsh/skills）扫描被跳过。
-  const scope = getCurrentSessionScope();
   if (scope) {
     const byScope = records.find((r) => r.id === scope)?.cwd;
     if (byScope) return byScope;
@@ -1046,7 +1075,13 @@ export function makePromptRoutes(): WebRoute[] {
       if (method === "GET" && segments[0] === "session-prompts" && segments[1] === "diag" && segments.length === 2) {
         const q = new URLSearchParams((req.url ?? "").split("?", 2)[1] ?? "");
         const sessid = (q.get("sessid") ?? "").trim() || getCurrentSessionScope() || "";
-        const records = await listSessionRecords();
+        // 同样加超时：诊断页不能因 sessionQuery 挂起而永远转圈
+        let records: Array<{ id: string; cwd: string | null }> = [];
+        try {
+          records = await withTimeout(listSessionRecords(), SESSION_QUERY_TIMEOUT_MS);
+        } catch {
+          records = [];
+        }
         const rec = records.find((r) => r.id === sessid);
         // 优先用组装端记录的运行时 cwd（与解析同一来源），避免依赖 sessionQuery 未注入导致误判「无 cwd」
         const cwd = getActiveSessionCwd(sessid) || rec?.cwd || "";

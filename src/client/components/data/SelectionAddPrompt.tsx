@@ -1052,25 +1052,36 @@ export function SelectionAddPrompt(props: Props): ReactNode {
               }}
             />
             {noteError && <div style={{ color: TONE.red, fontSize: 12, flexShrink: 0 }}>{noteError}</div>}
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingTop: 2, flexShrink: 0 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 2, flexShrink: 0 }}>
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
                 className={plBtn("ghost", "sm")}
-                onClick={addNote}
+                onClick={() => setNoteOpen(false)}
               >
-                {T("pl.addAnnotation")}
+                {T("pl.cancel")}
               </Button>
-              <Button
-                type="button"
-                variant="primary"
-                size="sm"
-                className={plBtn("primary", "sm")}
-                onClick={sendNote}
-              >
-                {T("pl.sendAnnotation")}
-              </Button>
+              <div style={{ display: "flex", gap: 8 }}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className={plBtn("ghost", "sm")}
+                  onClick={addNote}
+                >
+                  {T("pl.addAnnotation")}
+                </Button>
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  className={plBtn("primary", "sm")}
+                  onClick={sendNote}
+                >
+                  {T("pl.sendAnnotation")}
+                </Button>
+              </div>
             </div>
           </div>
         </div>

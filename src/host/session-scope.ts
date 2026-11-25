@@ -55,13 +55,42 @@ export async function listSessionRecords(): Promise<SessionQueryRecord[]> {
   }
 }
 
+/** 会话查询的兜底超时：宿主 sessionQuery 服务偶发挂起时，避免工作区树接口永久 pending。 */
+const SESSION_QUERY_TIMEOUT_MS = 3000;
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolveP, rejectP) => {
+    const timer = setTimeout(() => rejectP(new Error(`timeout after ${ms}ms`)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolveP(v);
+      },
+      (e: unknown) => {
+        clearTimeout(timer);
+        rejectP(e);
+      },
+    );
+  });
+}
+
 /**
  * 组装「工作区 → 项目 → 会话」树：
  * 在现有工作区/项目树基础上，把全部会话按 cwd 最深的路径前缀匹配挂到节点下，
  * 未命中的归入「其他会话」分组（仅当存在未命中会话时追加）。
+ *
+ * 注意：会话查询依赖宿主 sessionQuery，偶发会永久挂起；这里必须加超时兜底，
+ * 否则接口永远不返回，前端工作区树会一直停在「加载中」（诊断接口已做同样处理）。
+ * 超时后降级为「无会话」：仍返回工作区/项目树，不影响人格/技能绑定展示与操作。
  */
 export async function listSessionScopeTree(): Promise<ScopeNode[]> {
-  const [tree, sessions] = await Promise.all([listPathScopeTree(), listSessionRecords()]);
+  let sessions: SessionQueryRecord[] = [];
+  try {
+    sessions = await withTimeout(listSessionRecords(), SESSION_QUERY_TIMEOUT_MS);
+  } catch {
+    sessions = [];
+  }
+  const tree = await listPathScopeTree();
   attachSessionsToTree(tree, sessions);
   flattenProjects(tree);
   orderTreeBySessionAppearance(tree, sessions);

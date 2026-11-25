@@ -286,6 +286,7 @@ export function PersonaManagerModal({ open, onClose, t, container }: Props): Rea
       await refresh();
       notifyDataChanged();
       setNames((prev) => ({ ...prev, [created.id]: created.name }));
+      setDetailId(null);
       setEditContent(created.content);
       setEditingId(created.id);
       setCreateName("");
@@ -296,11 +297,13 @@ export function PersonaManagerModal({ open, onClose, t, container }: Props): Rea
     }
   };
 
-  // 打开内容编辑器
+  // 打开内容编辑器（与详情查看一样，以浮层覆盖当前内容区展示）
   const openEditor = (p: PersonaView) => {
+    setDetailId(null);
     setEditingId(p.id);
     setEditContent(p.content);
     setError(null);
+    setMsg(null);
   };
 
   // 取消编辑：还原未保存的草稿（正文 + 标题名称都回到最近一次已保存值）
@@ -657,7 +660,7 @@ export function PersonaManagerModal({ open, onClose, t, container }: Props): Rea
         key={p.id}
         style={{
           background: TONE.panel,
-          border: `1px solid ${TONE.border}`,
+          border: `1px solid ${isEditing ? TONE.accent : TONE.border}`,
           borderRadius: 10,
           overflow: "hidden",
           opacity: p.enabled ? 1 : 0.6,
@@ -708,15 +711,6 @@ export function PersonaManagerModal({ open, onClose, t, container }: Props): Rea
                 {t("pl.personas.defaultBadge")}
               </span>
             </>
-          ) : isEditing ? (
-            <input
-              value={names[p.id] ?? p.name}
-              onChange={(e) => setNames((prev) => ({ ...prev, [p.id]: e.target.value }))}
-              disabled={busy}
-              style={{ ...inputStyle, flex: 1, minWidth: 60, background: TONE.panel }}
-              maxLength={25}
-              title={t("pl.personas.namePlaceholder")}
-            />
           ) : (
             <strong
               style={{ flex: 1, fontSize: 13, fontWeight: 600, color: TONE.text, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
@@ -765,16 +759,15 @@ export function PersonaManagerModal({ open, onClose, t, container }: Props): Rea
             size="sm"
             className={plBtn("ghost", "sm")}
             onClick={() => {
-              // 未启用时点击编辑给出提示（编辑中的「取消」仍可用）
-              if (!p.enabled && !isEditing) {
+              // 未启用时点击编辑给出提示；编辑浮层内自带取消/保存
+              if (!p.enabled) {
                 setMsg({ text: t("pl.personas.disabledEditHint"), kind: "error" });
                 return;
               }
-              if (isEditing) cancelEdit(p);
-              else openEditor(p);
+              openEditor(p);
             }}
           >
-            {isEditing ? t("pl.personas.cancel") : t("pl.personas.edit")}
+            {t("pl.personas.edit")}
           </Button>
           {!isDefault && (
             <Button
@@ -796,53 +789,32 @@ export function PersonaManagerModal({ open, onClose, t, container }: Props): Rea
           )}
         </div>
 
-        {/* 卡片正文：预览 或 编辑 */}
+        {/* 卡片正文：仅预览，点击与详情查看一样打开浮层，编辑在浮层内完成 */}
         <div style={{ padding: 10 }}>
-          {isEditing ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <div style={{ fontSize: 11.5, color: TONE.muted }}>{t("pl.personas.contentLabel")}</div>
-              <textarea
-                value={editContent}
-                onChange={(e) => setEditContent(e.target.value)}
-                disabled={busy || isDefault}
-                placeholder="# SOUL"
-                style={{ ...textareaStyle, minHeight: isDefault ? 130 : 120 }}
-              />
-              <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5 }}>{t("pl.personas.contentHint")}</div>
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
-                <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={busy || isDefault} onClick={() => void handleAiGenerate(p)}>
-                  {busy ? t("pl.ai.generating") : t("pl.ai.generate")}
-                </Button>
-                <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} disabled={busy || isDefault} onClick={() => void handleSave(p)}>
-                  {t("pl.personas.save")}
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <div
-              style={{
-                background: TONE.row,
-                borderRadius: 7,
-                padding: "7px 9px",
-                minHeight: 40,
-                maxHeight: 96,
-                overflow: "hidden",
-                fontSize: 11.5,
-                lineHeight: 1.5,
-                color: TONE.quiet,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-                cursor: "pointer",
-              }}
-              onClick={() => {
-                if (!isEditing) setDetailId(p.id);
-              }}
-              title={t("pl.personas.viewDetail")}
-            >
-              {p.content && p.content.trim() ? p.content.trim().slice(0, 300) : t("pl.personas.previewEmpty")}
-              {!isDefault && p.content && p.content.trim().length > 300 ? "…" : ""}
-            </div>
-          )}
+          <div
+            style={{
+              background: TONE.row,
+              borderRadius: 7,
+              padding: "7px 9px",
+              minHeight: 40,
+              maxHeight: 96,
+              overflow: "hidden",
+              fontSize: 11.5,
+              lineHeight: 1.5,
+              color: TONE.quiet,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              cursor: "pointer",
+            }}
+            onClick={() => {
+              setEditingId(null);
+              setDetailId(p.id);
+            }}
+            title={t("pl.personas.viewDetail")}
+          >
+            {p.content && p.content.trim() ? p.content.trim().slice(0, 300) : t("pl.personas.previewEmpty")}
+            {!isDefault && p.content && p.content.trim().length > 300 ? "…" : ""}
+          </div>
         </div>
       </div>
     );
@@ -885,17 +857,13 @@ export function PersonaManagerModal({ open, onClose, t, container }: Props): Rea
           )}
         </div>
 
-        {/* 绑定说明 */}
+        {/* 绑定说明：与数据管理顶部说明一致，轻量单行小字、无底色边框 */}
         <div
           style={{
-            marginTop: 10,
+            marginTop: 5,
             fontSize: 11.5,
-            lineHeight: 1.6,
+            lineHeight: 1.5,
             color: TONE.quiet,
-            background: TONE.accentSoft,
-            border: `1px solid ${TONE.border}`,
-            borderRadius: 7,
-            padding: "7px 10px",
             flexShrink: 0,
           }}
         >
@@ -1296,66 +1264,144 @@ export function PersonaManagerModal({ open, onClose, t, container }: Props): Rea
       </div>,
         container || document.body,
       )}
-      {/* 点击内容 → 详情查看弹窗（仅查看，编辑入口在卡片头部「编辑」按钮） */}
-      {detailId
-        ? (() => {
-            const p = personas.find((x) => x.id === detailId);
-            if (!p) return null;
-            const detailName = p.isDefault ? p.name : (names[p.id] ?? p.name);
-            const content = p.content && p.content.trim() ? p.content.trim() : t("pl.personas.detailEmpty");
-            return createPortal(
-              <div
-                role="dialog"
-                aria-modal="true"
-                aria-label={t("pl.personas.detailTitle")}
-                className={container ? undefined : PL_DIALOG_OVERLAY}
-                style={container ? PL_DIALOG_EMBED_OVERLAY : undefined}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <style>{PL_DIALOG_CSS}</style>
-                <div className={PL_DIALOG} style={container ? { width: "100%", height: "100%", gap: 10, borderRadius: 12, background: TONE.panel } : { width: 480, maxWidth: "calc(100vw - 40px)", maxHeight: "min(520px, calc(100vh - 40px))", gap: 10 }}>
-                  {/* 标题行 + 右上角关闭按钮 */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                    <BookIcon color={TONE.accent} />
-                    <strong style={{ flex: 1, fontSize: 14, fontWeight: 600, color: TONE.text, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {detailName}
-                    </strong>
-                    <DialogCloseButton noTip onClick={() => setDetailId(null)} label={t("pl.personas.detailTitle")} />
+      {/* 详情查看 / 编辑共用浮层：编辑与查看采用完全相同的打开与展示方式 */}
+      {(() => {
+        const editP = personas.find((x) => x.id === editingId);
+        if (editP) {
+          const editDisabled = busy || editP.isDefault;
+          const editName = editP.isDefault ? editP.name : (names[editP.id] ?? editP.name);
+          return createPortal(
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label={t("pl.personas.edit")}
+              className={container ? undefined : PL_DIALOG_OVERLAY}
+              style={container ? PL_DIALOG_EMBED_OVERLAY : undefined}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <style>{PL_DIALOG_CSS}</style>
+              <div className={PL_DIALOG} style={container ? { width: "100%", height: "100%", gap: 10, borderRadius: 12, background: TONE.panel } : { width: 560, maxWidth: "calc(100vw - 40px)", maxHeight: "min(620px, calc(100vh - 40px))", gap: 10 }}>
+                {/* 标题行 + 右上角关闭按钮（关闭即取消编辑） */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                  <BookIcon color={TONE.accent} />
+                  <strong style={{ flex: 1, fontSize: 14, fontWeight: 600, color: TONE.text, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {t("pl.personas.edit")} · {editName}
+                  </strong>
+                  {editP.isDefault && (
+                    <span style={{ flexShrink: 0, fontSize: 10.5, color: TONE.accent, background: TONE.accentSoft, border: `1px solid ${TONE.border}`, borderRadius: 999, padding: "1px 8px" }}>
+                      {t("pl.personas.defaultBadge")}
+                    </span>
+                  )}
+                  <DialogCloseButton noTip onClick={() => cancelEdit(editP)} label={t("pl.personas.edit")} />
+                </div>
+                {/* 编辑内容：名称 + SOUL 正文，超出可滚动 */}
+                <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10, padding: "2px 2px 8px" }}>
+                  {error && (
+                    <div style={{ fontSize: 11.5, color: TONE.red, background: TONE.accentSoft, border: `1px solid ${TONE.border}`, borderRadius: 7, padding: "6px 9px" }}>
+                      {error}
+                    </div>
+                  )}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                    <div style={{ fontSize: 11.5, color: TONE.muted }}>{t("pl.personas.namePlaceholder")}</div>
+                    <input
+                      value={names[editP.id] ?? editP.name}
+                      onChange={(e) => setNames((prev) => ({ ...prev, [editP.id]: e.target.value }))}
+                      disabled={editDisabled}
+                      placeholder={t("pl.personas.namePlaceholder")}
+                      maxLength={25}
+                      style={inputStyle}
+                    />
                   </div>
-                  {/* 正文：只读展示，超出可滚动；右侧预留与滚动条的 10px 间距 */}
-                  <div
-                    style={{
-                      flex: 1,
-                      minHeight: 0,
-                      overflowY: "auto",
-                      overflowX: "hidden",
-                      padding: "10px 11px",
-                      paddingRight: 10,
-                      background: TONE.row,
-                      border: `1px solid ${TONE.border}`,
-                      borderRadius: 8,
-                    }}
-                  >
-                    <pre
-                      style={{
-                        margin: 0,
-                        fontFamily: MONO,
-                        fontSize: 12,
-                        lineHeight: 1.6,
-                        color: TONE.text,
-                        whiteSpace: "pre-wrap",
-                        wordBreak: "break-word",
-                      }}
-                    >
-                      {content}
-                    </pre>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                    <div style={{ fontSize: 11.5, color: TONE.muted }}>{t("pl.personas.contentLabel")}</div>
+                    <textarea
+                      value={editContent}
+                      onChange={(e) => setEditContent(e.target.value)}
+                      disabled={editDisabled}
+                      placeholder="# SOUL"
+                      style={{ ...textareaStyle, minHeight: 220 }}
+                    />
+                    <div style={{ fontSize: 11, color: TONE.quiet, lineHeight: 1.5 }}>{t("pl.personas.contentHint")}</div>
                   </div>
                 </div>
-              </div>,
-              container || document.body,
-            );
-          })()
-        : null}
+                {/* 底部操作：取消 / AI 生成 / 保存 */}
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexShrink: 0, paddingTop: 8, borderTop: `1px solid ${TONE.border}` }}>
+                  <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => cancelEdit(editP)}>
+                    {t("pl.personas.cancel")}
+                  </Button>
+                  <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} disabled={editDisabled} onClick={() => void handleAiGenerate(editP)}>
+                    {busy ? t("pl.ai.generating") : t("pl.ai.generate")}
+                  </Button>
+                  <Button type="button" variant="primary" size="sm" className={plBtn("primary", "sm")} disabled={editDisabled} onClick={() => void handleSave(editP)}>
+                    {t("pl.personas.save")}
+                  </Button>
+                </div>
+              </div>
+            </div>,
+            container || document.body,
+          );
+        }
+        const detailP = personas.find((x) => x.id === detailId);
+        if (!detailP) return null;
+        const detailName = detailP.isDefault ? detailP.name : (names[detailP.id] ?? detailP.name);
+        const content = detailP.content && detailP.content.trim() ? detailP.content.trim() : t("pl.personas.detailEmpty");
+        return createPortal(
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("pl.personas.detailTitle")}
+            className={container ? undefined : PL_DIALOG_OVERLAY}
+            style={container ? PL_DIALOG_EMBED_OVERLAY : undefined}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <style>{PL_DIALOG_CSS}</style>
+            <div className={PL_DIALOG} style={container ? { width: "100%", height: "100%", gap: 10, borderRadius: 12, background: TONE.panel } : { width: 480, maxWidth: "calc(100vw - 40px)", maxHeight: "min(520px, calc(100vh - 40px))", gap: 10 }}>
+              {/* 标题行 + 编辑 + 右上角关闭按钮 */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                <BookIcon color={TONE.accent} />
+                <strong style={{ flex: 1, fontSize: 14, fontWeight: 600, color: TONE.text, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {detailName}
+                </strong>
+                {!detailP.isDefault && (
+                  <Button type="button" variant="ghost" size="sm" className={plBtn("ghost", "sm")} onClick={() => openEditor(detailP)}>
+                    {t("pl.personas.edit")}
+                  </Button>
+                )}
+                <DialogCloseButton noTip onClick={() => setDetailId(null)} label={t("pl.personas.detailTitle")} />
+              </div>
+              {/* 正文：只读展示，超出可滚动；右侧预留与滚动条的 10px 间距 */}
+              <div
+                style={{
+                  flex: 1,
+                  minHeight: 0,
+                  overflowY: "auto",
+                  overflowX: "hidden",
+                  padding: "10px 11px",
+                  paddingRight: 10,
+                  background: TONE.row,
+                  border: `1px solid ${TONE.border}`,
+                  borderRadius: 8,
+                }}
+              >
+                <pre
+                  style={{
+                    margin: 0,
+                    fontFamily: MONO,
+                    fontSize: 12,
+                    lineHeight: 1.6,
+                    color: TONE.text,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                  }}
+                >
+                  {content}
+                </pre>
+              </div>
+            </div>
+          </div>,
+          container || document.body,
+        );
+      })()}
     </>
   );
 }

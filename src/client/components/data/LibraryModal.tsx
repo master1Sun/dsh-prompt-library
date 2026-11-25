@@ -5,6 +5,8 @@ import { ImportExportModal } from "../import-export/ImportExportModal.js";
 import { TagManagePanel } from "./TagManagePanel.js";
 import { RecycleManagePanel } from "./RecycleManagePanel.js";
 import { PanelHeader } from "../common/PanelHeader.js";
+import { PersonaManagerModal } from "../persona-skill/PersonaManagerModal.js";
+import { PromptInjectPanel } from "../persona-skill/PromptInjectPanel.js";
 import { OPEN_LIBRARY_EVENT } from "../settings/SettingsMenuLibraryItem.js";
 import { PL_DIALOG_CSS } from "../../utils/dialog-style.js";
 
@@ -82,6 +84,20 @@ const NAV_ITEMS: NavItem[] = [
     iconBg: "rgba(220, 38, 38, .1)",
     iconColor: "var(--dsw-alias-state-error-primary,#dc2626)",
     iconBody: '<path d="M2.8 4.4h10.4"/><path d="M6.2 4.4V2.9c0-.4.3-.7.7-.7h2.2c.4 0 .7.3.7.7v1.5"/><path d="M4.2 4.4l.5 9.3c0 .5.4.9.9.9h4.8c.5 0 .9-.4.9-.9l.5-9.3"/><path d="M6.6 7v4.2M9.4 7v4.2"/>',
+  },
+  {
+    id: "persona",
+    labelKey: "pl.ctx.personas",
+    iconBg: "rgba(139, 92, 246, .12)",
+    iconColor: "#8b5cf6",
+    iconBody: '<path d="M4 5.5C4 4.7 4.7 4 5.5 4H11v15H5.5C4.7 19 4 18.3 4 17.5v-12Z"/><path d="M20 5.5C20 4.7 19.3 4 18.5 4H13v15h5.5c.8 0 1.5-.7 1.5-1.5v-12Z"/>',
+  },
+  {
+    id: "workspaceInstructions",
+    labelKey: "pl.ctx.workspaceInstructions",
+    iconBg: "rgba(139, 92, 246, .12)",
+    iconColor: "#8b5cf6",
+    iconBody: '<path d="M4 5.5h9M4 8.5h5.5M4 11.5h9"/>',
   },
 ];
 
@@ -233,6 +249,24 @@ export function LibraryModal(_props: unknown): ReactNode {
               <RecycleManagePanel t={T} />
             </div>
           </div>
+        );
+      case "persona":
+        return (
+          <PersonaManagerModal
+            open
+            onClose={() => setOpen(false)}
+            t={T}
+            container={contentEl ?? undefined}
+          />
+        );
+      case "workspaceInstructions":
+        return (
+          <PromptInjectPanel
+            open
+            onClose={() => setOpen(false)}
+            t={T}
+            container={contentEl ?? undefined}
+          />
         );
       default:
         return null;

@@ -84,7 +84,7 @@ import {
 } from "./persona-service.js";
 import { clearAllPersonaBindings } from "./session-prompts.js";
 import { getActiveSessionCwd, listSessionRecords, listSessionScopeTree } from "./session-scope.js";
-import { getVersionInfo } from "./update.js";
+import { checkLatestVersion, getVersionInfo } from "./update.js";
 import { downloadDir } from "./paths.js";
 
 const PREFIX = "/api/prompt-library";
@@ -884,6 +884,11 @@ export function makePromptRoutes(): WebRoute[] {
       // GET /version — 服务端/客户端版本比对信息（运行版本 + 磁盘已安装版本）
       if (method === "GET" && tail === "/version") {
         return json(res, 200, { ok: true, data: getVersionInfo() });
+      }
+
+      // GET /version/check — 检查远端最新版本（优先 GitHub Release/tag，失败回退 npm）
+      if (method === "GET" && tail === "/version/check") {
+        return json(res, 200, { ok: true, data: await checkLatestVersion() });
       }
 
       // PUT /settings — 更新设置

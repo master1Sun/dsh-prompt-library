@@ -500,6 +500,15 @@ export const zh = {
   "pl.about.license": "许可证",
   "pl.about.repo": "开源地址",
   "pl.about.copyright": "版权所有 © {year} {author} 保留一切权利。",
+  "pl.about.checkUpdate": "检查更新",
+  "pl.about.checking": "检查中…",
+  "pl.about.upToDate": "已是最新版本",
+  "pl.about.newVersion": "发现新版本 v{version}",
+  "pl.about.updateSource": "来源：{source}",
+  "pl.about.updateFailed": "检查失败，请稍后重试",
+  "pl.about.sourceGit": "GitHub",
+  "pl.about.sourceNpm": "npm",
+  "pl.about.viewRelease": "查看更新",
 
   // 统计可视化
   // 全文搜索
@@ -994,6 +1003,15 @@ export const en: Record<keyof typeof zh, string> = {
   "pl.about.license": "License",
   "pl.about.repo": "Repository",
   "pl.about.copyright": "Copyright © {year} {author}. All rights reserved.",
+  "pl.about.checkUpdate": "Check for updates",
+  "pl.about.checking": "Checking…",
+  "pl.about.upToDate": "Up to date",
+  "pl.about.newVersion": "New version v{version} available",
+  "pl.about.updateSource": "Source: {source}",
+  "pl.about.updateFailed": "Check failed, please try again later",
+  "pl.about.sourceGit": "GitHub",
+  "pl.about.sourceNpm": "npm",
+  "pl.about.viewRelease": "View release",
   "pl.tagFilterAll": "All",
 
   // Statistics visualization

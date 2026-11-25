@@ -23,11 +23,13 @@ import {
 import type { PluginSettings } from "../../../types.js";
 import { DEFAULT_SETTINGS } from "../../../types.js";
 import {
+  checkVersion,
   getAiSelectables,
   getSettings,
   getVersion,
   updateSettings as apiUpdateSettings,
   type ClientAiSelectable,
+  type UpdateCheckResult,
 } from "../../utils/api.js";
 import { type PLTranslate, usePLT } from "../../utils/i18n.js";
 
@@ -366,6 +368,10 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
   const [aiSelectables, setAiSelectables] = useState<ClientAiSelectable[]>([]);
   // 当前已安装版本号（从 /version 轻量读取，用于「关于」信息行展示，如 v0.9.5）
   const [installedVer, setInstalledVer] = useState("");
+  // 「检查更新」：checking 中 / 检查结果（含来源 git|npm）/ 失败标记
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null);
+  const [updateFailed, setUpdateFailed] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -394,6 +400,34 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
         /* 忽略 */
       });
   }, []);
+
+  // 「检查更新」：后端优先查 GitHub Release/tag，失败回退 npm
+  const handleCheckUpdate = useCallback(() => {
+    if (updateChecking) return;
+    setUpdateChecking(true);
+    setUpdateFailed(false);
+    setUpdateResult(null);
+    checkVersion()
+      .then((r) => {
+        setUpdateResult(r);
+        if (!r.latest) setUpdateFailed(true);
+      })
+      .catch(() => setUpdateFailed(true))
+      .finally(() => setUpdateChecking(false));
+  }, [updateChecking]);
+
+  // 比较版本号：有新版本返回 true（按数值段比较，忽略预发布后缀）
+  const hasNewerVersion = (() => {
+    if (!updateResult?.latest || !installedVer) return false;
+    const parse = (s: string) =>
+      s.split(".").map((n) => parseInt(n, 10) || 0);
+    const [a, b] = [parse(installedVer), parse(updateResult.latest)];
+    for (let i = 0; i < 3; i++) {
+      if ((b[i] ?? 0) > (a[i] ?? 0)) return true;
+      if ((b[i] ?? 0) < (a[i] ?? 0)) return false;
+    }
+    return false;
+  })();
 
   // 保存设置到后台并通知其他组件
   const saveSettings = useCallback((next: PluginSettings) => {
@@ -658,6 +692,208 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
             paddingTop: 2,
           }}
         >
+          {/* 检查更新：独立卡片（左侧状态徽章 + 中间文案 + 右侧刷新按钮） */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              margin: "4px 0 2px",
+              padding: "10px 11px",
+              background: TONE.row,
+              border: `1px solid ${TONE.border}`,
+              borderRadius: 9,
+            }}
+          >
+            {/* 状态徽章 */}
+            <div
+              style={{
+                width: 30,
+                height: 30,
+                flexShrink: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                borderRadius: 8,
+                background: updateFailed
+                  ? "rgba(255,107,107,.12)"
+                  : hasNewerVersion
+                    ? "rgba(142,197,255,.13)"
+                    : "rgba(120,221,160,.12)",
+                color: updateFailed
+                  ? TONE.red
+                  : hasNewerVersion
+                    ? TONE.accent
+                    : TONE.success,
+              }}
+            >
+              {updateChecking ? (
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  style={{ animation: "pl-spin .9s linear infinite" }}
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M8 2.2a5.8 5.8 0 1 0 5.55 7.4"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.7"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              ) : hasNewerVersion ? (
+                <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+                  <path
+                    d="M8 2.4l5.6 9.8a.8.8 0 0 1-.7 1.2H3.1a.8.8 0 0 1-.7-1.2L8 2.4z"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinejoin="round"
+                  />
+                  <path d="M8 6.2v3.1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                  <circle cx="8" cy="11.2" r=".8" fill="currentColor" />
+                </svg>
+              ) : updateFailed ? (
+                <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+                  <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                  <path d="M8 4.6v4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                  <circle cx="8" cy="11" r=".8" fill="currentColor" />
+                </svg>
+              ) : (
+                <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+                  <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                  <path
+                    d="M5.2 8.2l1.9 1.9 3.7-4"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              )}
+            </div>
+
+            {/* 文案区：状态 + 副信息 */}
+            <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+              <span
+                style={{
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  color: updateFailed
+                    ? TONE.red
+                    : hasNewerVersion
+                      ? TONE.accent
+                      : TONE.text,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {updateChecking
+                  ? T("pl.about.checking")
+                  : updateFailed
+                    ? T("pl.about.updateFailed")
+                    : hasNewerVersion
+                      ? T("pl.about.newVersion", { version: updateResult!.latest })
+                      : T("pl.about.upToDate")}
+              </span>
+              <span
+                style={{
+                  fontSize: 11,
+                  color: TONE.quiet,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {updateResult && !updateChecking ? (
+                  <>
+                    {T("pl.about.updateSource", {
+                      source:
+                        updateResult.source === "git"
+                          ? T("pl.about.sourceGit")
+                          : updateResult.source === "npm"
+                            ? T("pl.about.sourceNpm")
+                            : "-",
+                    })}
+                    {hasNewerVersion ? (
+                      <>
+                        {" · "}
+                        <a
+                          href={
+                            updateResult.source === "npm"
+                              ? "https://www.npmjs.com/package/@sunjuntao/dsh-prompt-library"
+                              : "https://github.com/master1Sun/dsh-prompt-library/releases"
+                          }
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ color: TONE.accent, textDecoration: "none" }}
+                        >
+                          {T("pl.about.viewRelease")}
+                        </a>
+                      </>
+                    ) : null}
+                  </>
+                ) : null}
+              </span>
+            </div>
+
+            {/* 刷新按钮 */}
+            <button
+              type="button"
+              onClick={handleCheckUpdate}
+              disabled={updateChecking}
+              title={T("pl.about.checkUpdate")}
+              aria-label={T("pl.about.checkUpdate")}
+              style={{
+                flexShrink: 0,
+                width: 28,
+                height: 28,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                border: `1px solid ${TONE.border}`,
+                background: TONE.panel,
+                color: TONE.muted,
+                borderRadius: 7,
+                cursor: updateChecking ? "default" : "pointer",
+                opacity: updateChecking ? 0.5 : 1,
+                transition: "color .15s ease, border-color .15s ease",
+              }}
+              onMouseEnter={(e) => {
+                if (!updateChecking) {
+                  e.currentTarget.style.color = TONE.accent;
+                  e.currentTarget.style.borderColor = TONE.accent;
+                }
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = TONE.muted;
+                e.currentTarget.style.borderColor = TONE.border;
+              }}
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 16 16"
+                style={{ animation: updateChecking ? "pl-spin .9s linear infinite" : undefined }}
+                aria-hidden="true"
+              >
+                <path
+                  d="M13.4 6.6A5.6 5.6 0 0 0 3.3 4.9M2.6 9.4a5.6 5.6 0 0 0 10.1 1.7"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                />
+                <path d="M3 2.6v2.6h2.6M13 13.4v-2.6h-2.6" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          </div>
+          <style>{`@keyframes pl-spin{to{transform:rotate(360deg)}}`}</style>
+
           {/* 信息行（标签: 值，分隔布局） */}
           {(
             [
@@ -684,6 +920,7 @@ export function SettingsSection(props?: { t?: PLTranslate }): ReactNode {
               <span style={{ fontSize: 12.5, color: TONE.text }}>{value}</span>
             </div>
           ))}
+
           {/* 开源地址行：右侧为可点击链接 */}
           <div
             style={{

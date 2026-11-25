@@ -388,6 +388,17 @@ export function getVersion(): Promise<VersionInfo> {
   return send<VersionInfo>("GET", "/api/prompt-library/version");
 }
 
+/** 检查更新结果：远端最新版本号与来源（git / npm / 无）。 */
+export interface UpdateCheckResult {
+  latest: string;
+  source: "git" | "npm" | "";
+}
+
+/** 检查远端最新版本（后端优先查 GitHub Release/tag，失败回退 npm）。 */
+export function checkVersion(): Promise<UpdateCheckResult> {
+  return send<UpdateCheckResult>("GET", "/api/prompt-library/version/check");
+}
+
 const SETTINGS_BASE = "/api/prompt-library/settings";
 
 /** 获取插件设置。 */
